@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+
+import { useT } from "@/lib/i18n";
 import { Button } from "@/ui/shadcn/button";
 
 // index.html reads the same key to set the theme before the first paint
@@ -44,6 +46,9 @@ function ThemeIcon() {
 }
 
 export function ThemeToggle() {
+  const t = useT();
+  const label = t("theme.toggle");
+
   useEffect(() => {
     syncWindowTheme(document.documentElement.classList.contains("dark"));
   }, []);
@@ -52,8 +57,8 @@ export function ThemeToggle() {
     <Button
       variant="ghost"
       size="icon-sm"
-      aria-label="Toggle theme"
-      title="Toggle theme"
+      aria-label={label}
+      title={label}
       onClick={toggleTheme}
     >
       <ThemeIcon />

@@ -20,6 +20,8 @@
 - Фронтенд: React 19, TypeScript 6, Vite 8
 - UI: shadcn/ui (база Base UI, стиль `base-nova`), Tailwind CSS 4
 - Данные и навигация: TanStack Query 5, React Router 8
+- Язык интерфейса: i18next + react-i18next (en, ru)
+- Настройки: `@tauri-apps/plugin-store` (в браузере — `localStorage`)
 - Проверки: ESLint 10 (`eslint-plugin-boundaries` держит границы слоёв)
 - Пакетный менеджер: pnpm
 
@@ -27,22 +29,22 @@
 
 ```
 src/
-  app/                     запуск: index.tsx, AppProvider, AppRouter, styles/index.css (Tailwind и тема shadcn)
-  shell/                   оболочка окна: layout/Layout.tsx, navbar/ (шапка и переключатель темы)
-  pages/                   экраны, по папке на экран, файл экрана — index.tsx; greet/ — пример вызова команды Rust
+  app/                     запуск: index.tsx (initSettings -> initI18n -> render), AppProvider, AppRouter, styles/index.css
+  shell/                   оболочка окна: layout/, navbar/ (шапка, язык, тема), sidebar/ (меню разделов)
+  pages/                   экраны, по папке на экран, файл экрана — index.tsx: home, network, changelog, settings
   api/                     связь с Rust: client.ts (call), <область>.ts (хуки команд), index.ts (объект api)
-  ui/shadcn/               компоненты shadcn
-  lib/utils.ts             реэкспорт cn() из пакета cn; компоненты shadcn импортируют cn напрямую
+  ui/                      shadcn/ и общие компоненты: PageHeader.tsx
+  lib/                     utils.ts (cn), settings.ts (настройки), i18n/ (переводы и useT)
 index.html                 контейнер #root для React
 components.json            настройки shadcn CLI
 eslint.config.js           границы слоёв и правила линтера
 vite.config.ts             порт 1420 (strictPort), должен совпадать с devUrl; плагины, алиас @
 src-tauri/
-  src/lib.rs               команды Tauri и run() — настройка приложения
+  src/lib.rs               run() — настройка приложения; команды Tauri, когда появятся
   src/main.rs              точка входа, только вызывает run()
   Cargo.toml               зависимости Rust
   tauri.conf.json          имя, окна, сборка, безопасность
-  capabilities/default.json  разрешения для окна main
+  capabilities/default.json  разрешения для окна main: ядро, тема окна, store
   gen/schemas/             генерируется, в git не попадает
 ```
 
@@ -92,7 +94,9 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 - Цвета бери из токенов темы (`bg-primary`, `text-muted-foreground`), а не задавай вручную: так работает смена темы.
 - Алиас `@/` задан в трёх местах: `paths` в `tsconfig.json`, `resolve.alias` в `vite.config.ts` и `aliases` в `components.json`. Меняй их вместе, иначе `shadcn add` без ошибки создаст файлы не в той папке.
 - `tsconfig.json` один, `baseUrl` не нужен: в TypeScript 6 он устарел. Документация shadcn для Vite описывает другую схему (`tsconfig.app.json`, `baseUrl`), её не применяй.
-- Вызов команды может завершиться ошибкой, всегда показывай её. Хуки `api.*` отдают `Error`, поэтому текст берётся из `error.message` (пример в `src/pages/greet/index.tsx`).
+- Вызов команды может завершиться ошибкой, всегда показывай её. Хуки `api.*` отдают `Error`, поэтому текст берётся из `error.message`.
+- Строки интерфейса не пиши в компонентах: добавляй ключи в `lib/i18n/locales/en.ts` и `ru.ts` и бери их через `useT()`. Настройки читай через `useSetting()`, пиши через `settings.set()`.
+- Пункты меню и маршруты задаются одной таблицей `shell/sidebar/sections.ts`; новый экран без записи в ней в роутер не попадёт.
 - `Button` из Base UI без `type` рендерится как `type="button"` и форму не отправляет: кнопке отправки нужен явный `type="submit"`.
 - У `Button` вместо `asChild` проп `render`. Если он рендерит не `<button>`, добавь `nativeButton={false}`. Ссылку так не делай: она получит `role="button"`. Стилизуй её напрямую: `<a className={buttonVariants()} href="...">`.
 
@@ -116,10 +120,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 | `src-tauri/src/main.rs` | вызов `cc_tweaks_lib::run()` — имя из `[lib] name` |
 | `src-tauri/tauri.conf.json` | `productName`, `identifier`, заголовок окна `title` |
 | `index.html` | `<title>` |
-| `src/pages/greet/` и маршрут в `src/app/AppRouter.tsx` | демо-экран: замени своими |
-| `src/api/greeting.ts` и его строка в `src/api/index.ts` | демо-область: замени командами приложения |
-| `src-tauri/src/lib.rs` | демо-команда `greet` и её регистрация в `generate_handler!` |
-| `README.md`, этот файл, `docs/architecture.md` | название, описание и примеры с `greet` |
+| `src/pages/` и маршруты в `src/app/AppRouter.tsx` | экраны и их адреса: замените на свои |
+| `src/shell/sidebar/sections.ts` | пункты меню: пути, ключи переводов, иконки |
+| `src/api/` | области команд: пустой каталог под команды приложения |
+| `src-tauri/src/lib.rs` | команды Rust и регистрация в `generate_handler!` |
+| `src/lib/i18n/locales/` | переводы языков |
+| `src/lib/settings.ts` | ключи настроек и их значения по умолчанию |
+| `README.md`, этот файл, `docs/architecture.md` | название, описание и примеры |
 | `docs/versions/release.md` | удали файл: это лог шаблона, новый создаст `/notes` |
 | `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` | `version`, если новое приложение начинает не с 0.1.0 |
 

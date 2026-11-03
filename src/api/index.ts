@@ -1,3 +1,2 @@
-import { greeting } from "./greeting";
-
-export const api = { greeting };
+// По мере появления команд их области собираются здесь.
+export const api = {};
