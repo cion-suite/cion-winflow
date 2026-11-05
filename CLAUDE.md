@@ -31,7 +31,7 @@
 src/
   app/                     запуск: index.tsx (initSettings -> initI18n -> render), AppProvider, AppRouter, styles/index.css
   shell/                   оболочка окна: layout/, navbar/ (шапка, язык, тема), sidebar/ (меню разделов)
-  pages/                   экраны, по папке на экран, файл экрана — index.tsx: home, network, changelog, settings
+  pages/                   экраны, по папке на экран, файл экрана — index.tsx: home, network, apps, utils, system, changelog, settings
   api/                     связь с Rust: client.ts (call), <область>.ts (хуки команд), index.ts (объект api)
   ui/                      shadcn/ и общие компоненты: PageHeader.tsx
   lib/                     utils.ts (cn), settings.ts (настройки), i18n/ (переводы и useT)

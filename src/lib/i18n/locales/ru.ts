@@ -3,6 +3,13 @@ export const ru = {
     nav: {
       home: "Главная",
       network: "Сеть",
+      apps: "Приложения",
+      utils: "Утилиты",
+      system: "Система",
+      groups: {
+        overview: "Обзор",
+        workshop: "Мастерская",
+      },
       changelog: "Что нового",
       settings: "Настройки",
       unknown: "Неизвестно",

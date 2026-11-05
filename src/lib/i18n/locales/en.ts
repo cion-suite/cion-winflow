@@ -3,6 +3,13 @@ export const en = {
     nav: {
       home: "Home",
       network: "Network",
+      apps: "Apps",
+      utils: "Utilities",
+      system: "System",
+      groups: {
+        overview: "Overview",
+        workshop: "Workshop",
+      },
       changelog: "What's new",
       settings: "Settings",
       unknown: "Unknown",
