@@ -1,4 +1,4 @@
-# cc-tweaks
+# cion-winflow
 
 Десктопное приложение на Rust + Tauri 2. У проекта две цели:
 
@@ -42,6 +42,7 @@ vite.config.ts             порт 1420 (strictPort), должен совпад
 src-tauri/
   src/lib.rs               run() — настройка приложения; команды Tauri, когда появятся
   src/main.rs              точка входа, только вызывает run()
+  build.rs                 иконка exe: icons/cat.ico для dev, icons/cat_w.ico для release
   Cargo.toml               зависимости Rust
   tauri.conf.json          имя, окна, сборка, безопасность
   capabilities/default.json  разрешения для окна main: ядро, тема окна, store
@@ -117,7 +118,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 |------|------------|
 | `package.json` | `name` |
 | `src-tauri/Cargo.toml` | `name`, `[lib] name`, а также заглушки `description` и `authors` |
-| `src-tauri/src/main.rs` | вызов `cc_tweaks_lib::run()` — имя из `[lib] name` |
+| `src-tauri/src/main.rs` | вызов `cion_winflow_lib::run()` — имя из `[lib] name` |
 | `src-tauri/tauri.conf.json` | `productName`, `identifier`, заголовок окна `title` |
 | `index.html` | `<title>` |
 | `src/pages/` и маршруты в `src/app/AppRouter.tsx` | экраны и их адреса: замените на свои |
@@ -131,6 +132,8 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 | `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` | `version`, если новое приложение начинает не с 0.1.0 |
 
 `identifier` должен быть уникальным для каждого приложения. Иконки лежат в `src-tauri/icons/`, новые генерируются командой `pnpm tauri icon <файл>`. Она также создаёт `icons/android/` и `icons/ios/`; для десктопа их можно удалить.
+
+`build.rs` вшивает в exe иконку по профилю сборки: `icons/cat.ico` для dev, `icons/cat_w.ico` для release (Windows берёт иконку окна из ресурсов exe). При смене иконок замени оба файла.
 
 ## Документация для ИИ
 

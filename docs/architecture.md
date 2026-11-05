@@ -43,7 +43,7 @@
 
 ## Настройки
 
-`lib/settings.ts` хранит пары ключ-значение. Ключи: `locale` и `sidebarOpen`. В приложении Tauri они лежат в файле `settings.json` в данных приложения (`@tauri-apps/plugin-store`, разрешение `store:default`), в обычном браузере — в `localStorage` под ключом `cc-tweaks:settings`.
+`lib/settings.ts` хранит пары ключ-значение. Ключи: `locale` и `sidebarOpen`. В приложении Tauri они лежат в файле `settings.json` в данных приложения (`@tauri-apps/plugin-store`, разрешение `store:default`), в обычном браузере — в `localStorage` под ключом `cion-winflow:settings`.
 
 Порядок запуска в `app/index.tsx` важен: `initSettings()` читает сохранённые значения, `initI18n()` берёт из них язык, и только потом приложение рендерится — иначе интерфейс мигал бы языком по умолчанию. Компоненты читают настройку через `useSetting(key)` и пишут через `settings.set(key, value)`.
 
