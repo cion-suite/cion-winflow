@@ -1,16 +1,8 @@
-import { useLocale, useT } from "@/lib/i18n";
+import { useT } from "@/lib/i18n";
 import { Badge } from "@/ui/shadcn/badge";
-import { ChecksTable } from "./ChecksTable";
-import { formatTime } from "./format";
-import { IpSection } from "./IpSection";
+import { IpTile } from "./IpTile";
 import type { NetworkSnapshot } from "./mock";
-import { getNetworkStatus } from "./status";
-
-const VPN_KEYS = {
-  tun: "network.vpn.tun",
-  proxy: "network.vpn.proxy",
-  off: "network.vpn.off",
-} as const;
+import { StatusDot } from "./StatusDot";
 
 type NetworkPanelProps = {
   snapshot: NetworkSnapshot;
@@ -19,9 +11,8 @@ type NetworkPanelProps = {
 
 export function NetworkPanel({ snapshot, autoRefreshMs }: NetworkPanelProps) {
   const t = useT();
-  const locale = useLocale();
-  const status = getNetworkStatus(snapshot);
-  const proxyServer = snapshot.systemProxy.enabled ? snapshot.systemProxy.server : null;
+  const showTunnelBadge = snapshot.tunnel.tone !== "muted";
+  const showProxyBadge = snapshot.proxy.tone !== "muted";
 
   return (
     <section aria-labelledby="network-title" className="rounded-xl border bg-card text-sm">
@@ -30,35 +21,38 @@ export function NetworkPanel({ snapshot, autoRefreshMs }: NetworkPanelProps) {
           <h1 id="network-title" className="text-base font-semibold tracking-tight">
             {t("nav.network")}
           </h1>
-          <Badge
-            variant="secondary"
-            title={proxyServer ? t("network.proxyLine", { server: proxyServer }) : undefined}
-          >
-            {t(VPN_KEYS[snapshot.vpnMode])}
-          </Badge>
+          {showTunnelBadge && (
+            <Badge variant="secondary">
+              <StatusDot
+                tone={snapshot.tunnel.tone}
+                label={t(`network.tone.${snapshot.tunnel.tone}`)}
+              />
+              {t("network.badges.tunnel")}
+            </Badge>
+          )}
+          {showProxyBadge && (
+            <Badge variant="secondary">
+              <StatusDot
+                tone={snapshot.proxy.tone}
+                label={t(`network.tone.${snapshot.proxy.tone}`)}
+              />
+              {t("network.badges.proxy")}
+            </Badge>
+          )}
         </div>
         <span className="text-xs text-muted-foreground">
           {t("network.autoRefresh", { seconds: autoRefreshMs / 1000 })}
         </span>
       </header>
 
-      <IpSection snapshot={snapshot} status={status} />
-
-      <section aria-labelledby="network-checks-title" className="px-4">
-        <header className="mb-1.5 flex items-center justify-between gap-2">
-          <h2 id="network-checks-title" className="text-sm font-semibold">
-            {t("network.checks.title")}
-          </h2>
-          <span className="text-xs text-muted-foreground">{t("network.mock.label")}</span>
-        </header>
-        <ChecksTable snapshot={snapshot} />
+      <section
+        aria-label={t("network.ip.title")}
+        className="mx-4 mb-4 grid grid-cols-3 gap-3 max-[520px]:grid-cols-1"
+      >
+        <IpTile label={t("network.ip.browser")} entry={snapshot.browserIp} />
+        <IpTile label={t("network.ip.system")} entry={snapshot.systemIp} />
+        <IpTile label={t("network.ip.local")} entry={snapshot.localIp} />
       </section>
-
-      <footer className="mx-4 mt-1.5 flex items-center justify-end border-t border-border/70 pb-4 pt-2">
-        <span className="text-xs text-muted-foreground">
-          {t("network.checks.updated", { time: formatTime(snapshot.checkedAt, locale) })}
-        </span>
-      </footer>
     </section>
   );
 }

@@ -1,19 +1,15 @@
 import { useT } from "@/lib/i18n";
 import { ToggleGroup, ToggleGroupItem } from "@/ui/shadcn/toggle-group";
-import type { MockScenario } from "./mock";
-
-const SCENARIOS: readonly MockScenario[] = ["proxy", "tun", "vpn-off", "offline"];
+import { isMockScenario, MOCK_SCENARIOS, type MockScenario } from "./mock";
 
 const MOCK_KEYS = {
   proxy: "network.mock.states.proxy",
   tun: "network.mock.states.tun",
+  "proxy-dead": "network.mock.states.proxyDead",
+  "tun-no-exit": "network.mock.states.tunNoExit",
   "vpn-off": "network.mock.states.vpnOff",
   offline: "network.mock.states.offline",
 } as const;
-
-function isScenario(value: string): value is MockScenario {
-  return (SCENARIOS as readonly string[]).includes(value);
-}
 
 type MockScenarioPickerProps = {
   value: MockScenario;
@@ -34,13 +30,14 @@ export function MockScenarioPicker({ value, onChange }: MockScenarioPickerProps)
         value={[value]}
         onValueChange={(next) => {
           const [picked] = next;
-          if (picked !== undefined && isScenario(picked)) onChange(picked);
+          if (picked !== undefined && isMockScenario(picked)) onChange(picked);
         }}
         variant="outline"
         size="sm"
         spacing={0}
+        className="max-w-full flex-wrap"
       >
-        {SCENARIOS.map((scenario) => (
+        {MOCK_SCENARIOS.map((scenario) => (
           <ToggleGroupItem
             key={scenario}
             value={scenario}
