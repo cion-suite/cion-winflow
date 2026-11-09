@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { Tone } from "./mock";
+import type { Tone } from "@/api";
 
 const TONE_CLASSES: Record<Tone, string> = {
   ok: "bg-success",

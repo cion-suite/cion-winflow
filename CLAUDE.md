@@ -32,7 +32,7 @@ src/
   app/                     запуск: index.tsx (initSettings -> initI18n -> render), AppProvider, AppRouter, styles/index.css
   shell/                   оболочка окна: layout/, navbar/ (шапка, язык, тема), sidebar/ (меню разделов)
   pages/                   экраны, по папке на экран, файл экрана — index.tsx: home, network, apps, utils, system, changelog, settings
-  api/                     связь с Rust: client.ts (call), <область>.ts (хуки команд), index.ts (объект api)
+  api/                     связь с Rust: client.ts (call), network.ts (типы и useNetworkSnapshot), index.ts (объект api)
   ui/                      shadcn/ и общие компоненты: PageHeader.tsx
   lib/                     utils.ts (cn), settings.ts (настройки), i18n/ (переводы и useT)
 index.html                 контейнер #root для React
@@ -40,7 +40,8 @@ components.json            настройки shadcn CLI
 eslint.config.js           границы слоёв и правила линтера
 vite.config.ts             порт 1420 (strictPort), должен совпадать с devUrl; плагины, алиас @
 src-tauri/
-  src/lib.rs               run() — настройка приложения; команды Tauri, когда появятся
+  src/lib.rs               run() — настройка приложения и регистрация команд
+  src/network/             network_snapshot: mod.rs (DTO, сборка), system.rs (Win32), probes.rs (сеть)
   src/main.rs              точка входа, только вызывает run()
   build.rs                 иконка exe: icons/cat.ico для dev, icons/cat_w.ico для release
   Cargo.toml               зависимости Rust
@@ -107,6 +108,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 - `src-tauri/tauri.conf.json` содержит `"csp": null`, то есть Content Security Policy отключена. Это настройка генератора, её нужно задать до реального использования приложения.
 - `bundle.targets: "all"` включает MSI, а для него в Windows нужен компонент VBSCRIPT.
 - `pnpm tauri dev` перезаписывает `src-tauri/target/debug/*.exe` dev-версией, которой нужен запущенный Vite. Чтобы проверить собранное приложение, сначала выполни `pnpm tauri build --debug --no-bundle`.
+- `network_snapshot` вычисляет системный прокси как WinINet: активные режимы (`PROXY_TYPE_*`) и строки `PROXY_SERVER`/`AUTOCONFIG_URL` читаются через `InternetQueryOption(INTERNET_OPTION_PER_CONNECTION_OPTION)`, реестр — только fallback; PAC/WPAD разрешаются через WinHTTP. IP проверяются по нескольким сервисам с общим бюджетом времени. TUN определяется по default-маршруту и признакам виртуального адаптера, IPv4-only, шлюз проверяется через ARP.
 - `typescript-eslint` требует TypeScript ниже 6.1: не обновляй `typescript` до 7, пока этот диапазон не расширят.
 - `Cargo.lock` и `pnpm-lock.yaml` коммитятся. `node_modules`, `dist`, `src-tauri/target` и `src-tauri/gen/schemas` игнорируются.
 

@@ -1,6 +1,6 @@
 import { useT } from "@/lib/i18n";
 import { CheckCard } from "./CheckCard";
-import type { NetworkSnapshot } from "./mock";
+import type { NetworkSnapshot } from "@/api";
 
 export function TunnelCard({ snapshot }: { snapshot: NetworkSnapshot }) {
   const t = useT();
@@ -14,7 +14,7 @@ export function TunnelCard({ snapshot }: { snapshot: NetworkSnapshot }) {
 
   const route = tunnel.routeViaTun
     ? t("network.tunnel.viaTun")
-    : t("network.tunnel.viaAdapter", { adapter: access.adapter });
+    : t("network.tunnel.viaAdapter", { adapter: access.adapter ?? "—" });
 
   return (
     <CheckCard

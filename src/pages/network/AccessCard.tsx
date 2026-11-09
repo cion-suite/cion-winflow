@@ -1,15 +1,17 @@
 import { useT } from "@/lib/i18n";
 import { CheckCard } from "./CheckCard";
-import type { NetworkSnapshot } from "./mock";
+import type { NetworkSnapshot } from "@/api";
 
 export function AccessCard({ snapshot }: { snapshot: NetworkSnapshot }) {
   const t = useT();
   const { access } = snapshot;
 
   const localIp = snapshot.localIp.value ?? "—";
-  const adapter = `${access.adapter} · ${
-    access.up ? t("network.access.up") : t("network.access.down")
-  } · ${localIp}`;
+  const adapter = access.adapter
+    ? `${access.adapter} · ${
+        access.up ? t("network.access.up") : t("network.access.down")
+      } · ${localIp}`
+    : "—";
 
   const gateway = access.gateway
     ? `${access.gateway} · ${

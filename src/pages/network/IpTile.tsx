@@ -1,7 +1,7 @@
 import { useLocale, useT } from "@/lib/i18n";
 import { CopyButton } from "./CopyButton";
 import { countryName } from "./format";
-import type { IpEntry } from "./mock";
+import type { IpEntry } from "@/api";
 import { StatusDot } from "./StatusDot";
 
 type IpTileProps = {

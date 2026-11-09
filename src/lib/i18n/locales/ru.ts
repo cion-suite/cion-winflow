@@ -31,6 +31,7 @@ export const ru = {
     },
     network: {
       autoRefresh: "Авто · {{seconds}} с",
+      loading: "Загружаем состояние сети…",
       badges: {
         tunnel: "TUN",
         proxy: "Прокси (системный)",
@@ -80,18 +81,6 @@ export const ru = {
         unreachable: "не отвечает",
         noAnswer: "нет ответа",
         timeout: "таймаут",
-      },
-      mock: {
-        label: "Демо",
-        note: "Демо-данные: сетевые проверки пока не выполняются.",
-        states: {
-          proxy: "прокси",
-          tun: "TUN",
-          proxyDead: "прокси мёртв",
-          tunNoExit: "TUN без выхода",
-          vpnOff: "без VPN",
-          offline: "офлайн",
-        },
       },
     },
     changelog: {
