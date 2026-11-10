@@ -1,6 +1,6 @@
 import { useT } from "@/lib/i18n";
 import { CheckCard } from "./CheckCard";
-import type { NetworkSnapshot } from "@/api";
+import type { NetworkSnapshot } from "./mock";
 
 export function ProxyCard({ snapshot }: { snapshot: NetworkSnapshot }) {
   const t = useT();

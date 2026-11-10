@@ -31,7 +31,6 @@ export const en = {
     },
     network: {
       autoRefresh: "Auto · {{seconds}} s",
-      loading: "Loading network state…",
       badges: {
         tunnel: "TUN",
         proxy: "Proxy (system)",
@@ -81,6 +80,18 @@ export const en = {
         unreachable: "unreachable",
         noAnswer: "no answer",
         timeout: "timeout",
+      },
+      mock: {
+        label: "Demo",
+        note: "Demo data: network checks are not performed yet.",
+        states: {
+          proxy: "proxy",
+          tun: "TUN",
+          proxyDead: "proxy dead",
+          tunNoExit: "TUN no exit",
+          vpnOff: "no VPN",
+          offline: "offline",
+        },
       },
     },
     changelog: {

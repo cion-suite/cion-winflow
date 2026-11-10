@@ -1,7 +1,7 @@
 import { useT } from "@/lib/i18n";
 import { Badge } from "@/ui/shadcn/badge";
 import { IpTile } from "./IpTile";
-import type { NetworkSnapshot } from "@/api";
+import type { NetworkSnapshot } from "./mock";
 import { StatusDot } from "./StatusDot";
 
 type NetworkPanelProps = {
