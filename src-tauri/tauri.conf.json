@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "cion-winflow",
+  "productName": "cion-reader",
   "version": "0.1.0",
-  "identifier": "com.cercony.cionwinflow",
+  "identifier": "com.cercony.cionreader",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "cion-winflow",
+        "title": "cion-reader",
         "width": 880,
         "height": 430
       }

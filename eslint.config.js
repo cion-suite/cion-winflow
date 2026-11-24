@@ -9,7 +9,7 @@ const API_ENTRY = {
 };
 
 export default defineConfig([
-  globalIgnores(["dist", "src-tauri", "src/ui/shadcn"]),
+  globalIgnores(["dist", "src-tauri", "src/ui/shadcn", ".claude/scripts", ".claude/cache"]),
   ...tseslint.configs.recommended,
   {
     files: ["src/**/*.{ts,tsx}", "vite.config.ts"],

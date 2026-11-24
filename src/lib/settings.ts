@@ -18,7 +18,7 @@ type SettingsMap = {
 };
 
 const STORE_FILE = "settings.json";
-const BROWSER_KEY = "cion-winflow:settings";
+const BROWSER_KEY = "cion-reader:settings";
 
 // Язык системы в первый запуск; сохранённый выбор важнее
 function initialLocale(): SupportedLocale {

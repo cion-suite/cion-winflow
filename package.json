@@ -1,5 +1,5 @@
 {
-  "name": "cion-winflow",
+  "name": "cion-reader",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -8,6 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node .claude/scripts/run-cargo.mjs test",
+    "check:rust": "node .claude/scripts/run-cargo.mjs fmt --check && node .claude/scripts/run-cargo.mjs clippy --all-targets -- -D warnings",
     "tauri": "tauri",
     "tauri:dev": "tauri dev"
   },

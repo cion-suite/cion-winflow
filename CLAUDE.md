@@ -1,11 +1,22 @@
-# cion-winflow
+# cion-reader
 
-Десктопное приложение на Rust + Tauri 2. У проекта две цели:
+Приватный self-hosted агрегатор манги, аниме и книг: каталог, библиотека и прогресс в одном месте для себя и небольшого круга читателей. Проект вырос из десктопного шаблона на Tauri и переезжает на веб: React SPA + сервер на Rust.
 
-1. **Шаблон** — от него будут стартовать другие приложения, поэтому код и конфиги остаются общими, без логики конкретного продукта.
+У проекта две цели:
+
+1. **Продукт** — cion-reader для закрытого круга: авторизация, несколько источников, ридер и плеер.
 2. **Обучение** — владелец проекта изучает Rust на практике.
 
-Целевая платформа — десктоп (основная ОС разработки — Windows). Android/iOS не настроены.
+Целевая платформа — веб-сервер (Linux). Пока в репозитории десктопная версия (Windows); Android/iOS не настроены.
+
+## Текущее состояние и переход
+
+Сейчас код — десктопное приложение на Tauri 2. Фронтенд (`src/`) перейдёт в веб без переписывания; слой `src-tauri/` будет заменён сервером `server/` на axum.
+
+- Целевая архитектура, фазы и критерии готовности — [docs/planned-now.md](docs/planned-now.md).
+- Причины выбора и альтернативы — [docs/decisions/0001-server-architecture.md](docs/decisions/0001-server-architecture.md).
+
+Пока серверного слоя нет в коде, всё ниже про Tauri и `src-tauri/` актуально. После переезда этот файл обновляется вместе с кодом.
 
 ## Режим обучения
 
@@ -16,6 +27,8 @@
 
 ## Стек
 
+Сейчас (десктоп):
+
 - Rust edition 2024, Tauri 2
 - Фронтенд: React 19, TypeScript 6, Vite 8
 - UI: shadcn/ui (база Base UI, стиль `base-nova`), Tailwind CSS 4
@@ -25,7 +38,9 @@
 - Проверки: ESLint 10 (`eslint-plugin-boundaries` держит границы слоёв)
 - Пакетный менеджер: pnpm
 
-## Структура
+Целевой бекенд (после переезда): axum, tokio, sqlx + SQLite, reqwest, scraper, argon2, tower-http. Полный список крейтов — в плане.
+
+## Структура (текущая)
 
 ```
 src/
@@ -38,7 +53,7 @@ src/
 index.html                 контейнер #root для React
 components.json            настройки shadcn CLI
 eslint.config.js           границы слоёв и правила линтера
-vite.config.ts             порт 1420 (strictPort), должен совпадать с devUrl; плагины, алиас @
+vite.config.ts             порт 1420 (strictPort); сейчас совпадает с devUrl, после переезда — proxy на axum; алиас @
 src-tauri/
   src/lib.rs               run() — настройка приложения; команды Tauri, когда появятся
   src/main.rs              точка входа, только вызывает run()
@@ -51,7 +66,7 @@ src-tauri/
 
 ## Команды
 
-Запускать из корня репозитория. `Cargo.toml` лежит в `src-tauri/`, поэтому cargo нужен `--manifest-path`.
+Запускать из корня репозитория. `Cargo.toml` лежит в `src-tauri/`, поэтому cargo нужен `--manifest-path`. Команды относятся к текущей десктопной версии; после переезда cargo-команды будут работать с `server/Cargo.toml`, а `pnpm tauri *` исчезнут.
 
 ```powershell
 pnpm install                                 # зависимости фронтенда
@@ -69,7 +84,20 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
 Перед завершением задачи с Rust-кодом прогоняй `test`, `fmt --check` и `clippy`, с фронтендом — `pnpm lint` и `pnpm build`.
 
-## Как добавлять команды Tauri
+## Команды разработки
+
+- `/planner <задача>` — фазовый план с quality gates и DRY-контрактом.
+- `/isplan [файл]` — adversarial review плана (по умолчанию `docs/planned-now.md`).
+- `/isgood [diff]` — adversarial review диффа и fix-loop.
+- `/sync-docs` — сверка ссылок в документации с репозиторием.
+- `/ship` — pre-flight перед merge: typecheck, lint, Rust-тесты, fmt/clippy, скан, циклы, build.
+- `/notes` — changelog и commit-сообщение.
+
+Правила для ревью — `.claude/rules/`, механика — `.claude/scripts/`, профили — `.claude/agents/`. Гейт после каждой фазы: `typecheck -> lint -> test -> check:rust -> /isgood -> /notes`.
+
+## Как добавлять команды Tauri (до переезда)
+
+> После переезда команда Tauri заменяется HTTP-эндпоинтом axum, а `call` в `src/api/client.ts` — на `fetch`. Правило слоёв сохраняется: HTTP-вызовы живут только в `src/api`.
 
 Команда — это Rust-функция с `#[tauri::command]`. Вся логика живёт в Rust, а в `src/api/` для неё есть только хук с именем команды и типами.
 
@@ -88,60 +116,43 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 Раскладка и правила импортов — в `docs/architecture.md`. Кто кого может импортировать — таблица там же, это проверяет `pnpm lint`.
 
 - Все экраны лежат в `src/pages/<имя>/`. Экран импортируется только из роутера `src/app/AppRouter.tsx`.
-- `invoke` есть только в `src/api/client.ts`. `src/api` импортируют `pages`, `shell` и `app`, но не `ui`.
+- `invoke` есть только в `src/api/client.ts`; после переезда там будет `fetch`. `src/api` импортируют `pages`, `shell` и `app`, но не `ui`.
 - Методы `api.*` — хуки: вызывай их только в начале компонента. Линтер не поймает `api.x.useY()` внутри `if`.
 
 - Компоненты shadcn не ставятся как библиотека: их код копируется в `src/ui/shadcn/` и принадлежит проекту. Перед написанием своего компонента проверь, нет ли готового в shadcn.
 - Цвета бери из токенов темы (`bg-primary`, `text-muted-foreground`), а не задавай вручную: так работает смена темы.
 - Алиас `@/` задан в трёх местах: `paths` в `tsconfig.json`, `resolve.alias` в `vite.config.ts` и `aliases` в `components.json`. Меняй их вместе, иначе `shadcn add` без ошибки создаст файлы не в той папке.
 - `tsconfig.json` один, `baseUrl` не нужен: в TypeScript 6 он устарел. Документация shadcn для Vite описывает другую схему (`tsconfig.app.json`, `baseUrl`), её не применяй.
-- Вызов команды может завершиться ошибкой, всегда показывай её. Хуки `api.*` отдают `Error`, поэтому текст берётся из `error.message`.
+- Вызов бэкенда может завершиться ошибкой, всегда показывай её. Хуки `api.*` отдают `Error`, поэтому текст берётся из `error.message`.
 - Строки интерфейса не пиши в компонентах: добавляй ключи в `lib/i18n/locales/en.ts` и `ru.ts` и бери их через `useT()`. Настройки читай через `useSetting()`, пиши через `settings.set()`.
 - Пункты меню и маршруты задаются одной таблицей `shell/sidebar/sections.ts`; новый экран без записи в ней в роутер не попадёт.
 - `Button` из Base UI без `type` рендерится как `type="button"` и форму не отправляет: кнопке отправки нужен явный `type="submit"`.
 - У `Button` вместо `asChild` проп `render`. Если он рендерит не `<button>`, добавь `nativeButton={false}`. Ссылку так не делай: она получит `role="button"`. Стилизуй её напрямую: `<a className={buttonVariants()} href="...">`.
 
-## Подводные камни
+## Подводные камни (текущая десктопная версия)
 
 - **Не запускай `create-tauri-app --force` в этом репозитории.** Флаг удаляет существующие файлы (проверено: пропал `LICENSE`, заменились `README.md` и `.gitignore`); уцелел только `.git`.
-- `src-tauri/tauri.conf.json` содержит `"csp": null`, то есть Content Security Policy отключена. Это настройка генератора, её нужно задать до реального использования приложения.
+- `src-tauri/tauri.conf.json` содержит `"csp": null`, то есть Content Security Policy отключена. Для веба CSP обязателен: задавай заголовками от сервера и не переноси `null` в прод.
 - `bundle.targets: "all"` включает MSI, а для него в Windows нужен компонент VBSCRIPT.
 - `pnpm tauri dev` перезаписывает `src-tauri/target/debug/*.exe` dev-версией, которой нужен запущенный Vite. Чтобы проверить собранное приложение, сначала выполни `pnpm tauri build --debug --no-bundle`.
 - `typescript-eslint` требует TypeScript ниже 6.1: не обновляй `typescript` до 7, пока этот диапазон не расширят.
 - `Cargo.lock` и `pnpm-lock.yaml` коммитятся. `node_modules`, `dist`, `src-tauri/target` и `src-tauri/gen/schemas` игнорируются.
 
-## Использование как шаблона
+После переезда Tauri-пункты (CSP, MSI, `tauri dev`, capabilities) уходят; общими остаются требования к версиям TypeScript и коммит lock-файлов.
 
-При создании приложения из шаблона замени имя и идентификатор:
+## Происхождение
 
-| Файл | Что менять |
-|------|------------|
-| `package.json` | `name` |
-| `src-tauri/Cargo.toml` | `name`, `[lib] name`, а также заглушки `description` и `authors` |
-| `src-tauri/src/main.rs` | вызов `cion_winflow_lib::run()` — имя из `[lib] name` |
-| `src-tauri/tauri.conf.json` | `productName`, `identifier`, заголовок окна `title` |
-| `index.html` | `<title>` |
-| `src/pages/` и маршруты в `src/app/AppRouter.tsx` | экраны и их адреса: замените на свои |
-| `src/shell/sidebar/sections.ts` | пункты меню: пути, ключи переводов, иконки |
-| `src/api/` | области команд: пустой каталог под команды приложения |
-| `src-tauri/src/lib.rs` | команды Rust и регистрация в `generate_handler!` |
-| `src/lib/i18n/locales/` | переводы языков |
-| `src/lib/settings.ts` | ключи настроек и их значения по умолчанию |
-| `README.md`, этот файл, `docs/architecture.md` | название, описание и примеры |
-| `docs/versions/release.md` | удали файл: это лог шаблона, новый создаст `/notes` |
-| `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` | `version`, если новое приложение начинает не с 0.1.0 |
-
-`identifier` должен быть уникальным для каждого приложения. Иконки лежат в `src-tauri/icons/`, новые генерируются командой `pnpm tauri icon <файл>`. Она также создаёт `icons/android/` и `icons/ios/`; для десктопа их можно удалить.
-
-`build.rs` вшивает в exe иконку по профилю сборки: `icons/cat.ico` для dev, `icons/cat_w.ico` для release (Windows берёт иконку окна из ресурсов exe). При смене иконок замени оба файла.
+Проект начинался как десктопный шаблон `cion-winflow`. Теперь это продукт `cion-reader`; инструкции «как использовать репозиторий как шаблон» больше не поддерживаются, история осталась в git.
 
 ## Документация для ИИ
 
 - Этот файл — точка входа: только то, что нужно почти в каждой задаче. Держи его коротким.
 - Подробности выноси в `docs/` и ставь сюда ссылку. Папку и файлы создавай, когда появляется содержимое:
-  - `docs/architecture.md` — устройство приложения;
+  - `docs/architecture.md` — устройство фронтенда и текущего десктопного слоя;
+  - `docs/planned-now.md` — целевая архитектура и порядок переезда;
   - `docs/decisions/NNNN-название.md` — принятые решения и их причины;
-  - `docs/learning/` — конспекты по Rust.
+  - `docs/learning/` — конспекты по Rust;
+  - `.claude/rules/` — правила ревью и навигации; `.claude/commands/` — рабочие команды.
 - Лог версий для пользователей (`docs/versions/release.md`) пишет только команда `/notes`, руками его не правь. Порядок релиза — в `.claude/commands/notes.md`.
 - Если изменение делает документацию неверной, обновляй её в той же задаче.
 - Записывай только проверенные факты и не описывай то, чего ещё нет в коде.

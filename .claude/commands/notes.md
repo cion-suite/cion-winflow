@@ -29,7 +29,7 @@ allowed-tools: Bash, Read
 
 - **Правки:** после каждой фазы `/notes` без аргумента -> раздел текущей версии в `release.md`.
 - **Релиз**, по шагам:
-  1. Поднять версию до стабильной (`2.1.0`) в `package.json`, `src-tauri/Cargo.toml` и `src-tauri/tauri.conf.json` и **закоммитить**: range берёт версию из `package.json` на `HEAD`, незакоммиченный bump не виден.
+  1. Поднять версию до стабильной (`2.1.0`) в `package.json` и Rust-манифесте (`src-tauri/Cargo.toml` сейчас; после переезда `server/Cargo.toml`), а пока существует `src-tauri/` - и в `src-tauri/tauri.conf.json`. **Закоммитить**: range берёт версию из `package.json` на `HEAD`, незакоммиченный bump не виден.
   2. `/notes <тег прошлого релиза>..HEAD`; раздел уже записан фазами -> `--replace` после согласия. У первого релиза тега нет - вместо него корневой коммит (`git rev-list --max-parents=0 HEAD`).
   3. Commit лога, тег `vX.Y.Z`.
 

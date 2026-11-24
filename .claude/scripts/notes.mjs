@@ -24,7 +24,7 @@ const AREAS = [
     [/^docs\/|\.md$/, 'документация'],
     [/(^|\/)(package\.json|Cargo\.toml|Cargo\.lock)$|^pnpm-lock/, 'зависимости'],
     [TEST_FILE, 'тесты'],
-    [/^src-tauri\/(src|capabilities)\//, 'бэкенд'],
+    [/^(?:src-tauri\/(?:src|capabilities)|server\/(?:src|migrations|tests))\//, 'бэкенд'],
     [/^src\/|^index\.html$|^src-tauri\/icons\//, 'UI'],
     [/tauri\.conf|components\.json|tsconfig|vite|^src-tauri\/build\.rs|^\.github\//, 'сборка'],
 ];

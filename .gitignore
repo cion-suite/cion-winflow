@@ -36,6 +36,15 @@ node_modules
 /dist-ssr
 *.local
 
+# Server build output and runtime data (after migration)
+/server/target/
+/data/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
 # Claude Code temporary files
 .claude/cache/
 settings.local.json
