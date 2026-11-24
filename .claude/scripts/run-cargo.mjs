@@ -7,19 +7,15 @@
 //   node .claude/scripts/run-cargo.mjs fmt --check
 //   node .claude/scripts/run-cargo.mjs clippy --all-targets -- -D warnings
 //
-// --manifest-path подставляется сам: server/Cargo.toml, пока его нет -
-// src-tauri/Cargo.toml.
+// --manifest-path подставляется сам: сервер — единственный Rust-крейт.
 import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 import { findVcvars, quote } from './vs.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const args = process.argv.slice(2);
-const manifest = fs.existsSync(path.join(ROOT, 'server/Cargo.toml'))
-    ? 'server/Cargo.toml'
-    : 'src-tauri/Cargo.toml';
-// --manifest-path - опция cargo, а не rustc: после `--` она бы ушла
+const manifest = 'server/Cargo.toml';
+// --manifest-path - опция cargo, а не rustc: после `--` она ушла бы
 // в clippy/rustc и cargo не нашёл бы манифест.
 const sep = args.indexOf('--');
 const withManifest = sep < 0

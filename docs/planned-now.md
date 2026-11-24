@@ -664,21 +664,21 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 
 Критерий: старых имён нет в конфигах, коде и документации (кроме намеренного упоминания в разделе «Происхождение»); `pnpm lint` и `pnpm build` проходят.
 
-### Фаза 1 — каркас сервера и транспорт
+### Фаза 1 — каркас сервера и транспорт (выполнено)
 
-- создать `server/` (axum 0.8), `GET /api/health`, конфиг из env, `tracing`;
-- отдача статики из `dist/` с SPA fallback только для навигации;
-- заменить блок `server` в `vite.config.ts` (proxy `/api`, убрать `watch.ignored`, `clearScreen`, Tauri-комментарии);
-- переписать `src/api/client.ts` на `fetch`; до этого зафиксировать ручной чек-лист (`toError` на строке и объекте, 401, сетевой сбой) или добавить vitest отдельной задачей — автотестов фронтенда сейчас нет;
-- убрать Tauri-ветку из `settings.ts` и `ThemeToggle.tsx` (импорты, `syncWindowTheme`, `useEffect`); битый JSON в `readBrowserSettings` логировать, а не молча возвращать defaults;
-- `HashRouter` → `BrowserRouter`, `QueryClient` — под HTTP;
-- вынести инлайновый скрипт темы из `index.html` в `public/theme.js` (CSP);
-- удалить `src-tauri/`, `tauri*` скрипты, `@tauri-apps/*`, Tauri-правила из ESLint; из `.claude/rules/build.md` убрать `pnpm tauri`, `run-vs.mjs` и `--manifest-path` на `src-tauri`, удалить `.claude/scripts/run-vs.mjs` (`vs.mjs` остаётся — `run-cargo.mjs` берёт из него `findVcvars`/`quote`);
-- обновить `.gitignore` (`server/target`, `data/`, `.env*`), `README`, `CLAUDE.md`;
-- решить судьбу шаблонных экранов (`home`, `network`, `apps`, `utils`, `system`, `changelog`) и синхронно обновить `sections.ts`, `AppRouter`, i18n, mock-данные;
-- параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) держать вне `SectionPath`/`sectionForPath`: отдельный список в `AppRouter`, активный пункт меню — по префиксу пути, меню остаётся статическим; `chapterKey` кодируется через `encodeURIComponent`;
-- добавить `dev:server` в `package.json`;
-- обновить `.claude/commands/notes.md` и `.claude/scripts/notes.mjs` под `server/`; новый `server/Cargo.lock` коммитится.
+- [x] создать `server/` (axum 0.8), `GET /api/health`, конфиг из env, `tracing`;
+- [x] отдача статики из `dist/` с SPA fallback только для навигации;
+- [x] заменить блок `server` в `vite.config.ts` (proxy `/api`, убрать `watch.ignored`, `clearScreen`, Tauri-комментарии);
+- [x] переписать `src/api/client.ts` на `fetch`; ручной чек-лист (`toError` на строке и объекте, 401, сетевой сбой) записан в `docs/architecture.md`, автотестов фронтенда пока нет;
+- [x] убрать Tauri-ветку из `settings.ts` и `ThemeToggle.tsx` (импорты, `syncWindowTheme`, `useEffect`); битый JSON в `readBrowserSettings` логируется, а не молча возвращает defaults;
+- [x] `HashRouter` → `BrowserRouter`, `QueryClient` — под HTTP;
+- [x] вынести инлайновый скрипт темы из `index.html` в `public/theme.js` (CSP);
+- [x] удалить `src-tauri/`, `tauri*` скрипты, `@tauri-apps/*`, Tauri-правила из ESLint; из `.claude/rules/build.md` убрать `pnpm tauri`, `run-vs.mjs` и `--manifest-path` на `src-tauri`, удалить `.claude/scripts/run-vs.mjs` (`vs.mjs` остаётся — `run-cargo.mjs` берёт из него `findVcvars`/`quote`);
+- [x] обновить `.gitignore` (`server/target`, `data/`, `.env*`), `README`, `CLAUDE.md`;
+- [x] решить судьбу шаблонных экранов: демо-разделы `network`, `apps`, `utils`, `system` и их mock-данные удалены, остались `home`, `changelog`, `settings`; `sections.ts`, `AppRouter`, i18n обновлены синхронно;
+- [x] параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) держать вне `SectionPath`/`sectionForPath`: отдельный список `PARAM_ROUTES` в `AppRouter`, активный пункт меню — по префиксу пути, меню остаётся статическим; `chapterKey` кодируется через `encodeURIComponent` в `src/lib/routes.ts`;
+- [x] добавить `dev:server` в `package.json`;
+- [x] обновить `.claude/commands/notes.md` и `.claude/scripts/notes.mjs` под `server/`; новый `server/Cargo.lock` коммитится.
 
 Критерий: приложение открывается в браузере на `:1420` через Vite, `/api/health` отвечает через прокси; после `pnpm build` сервер отдаёт SPA и API на `:3000`; в `src/` нет `@tauri-apps`; навигация использует чистые URL.
 

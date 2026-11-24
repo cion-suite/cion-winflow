@@ -1,13 +1,11 @@
 import { useSyncExternalStore } from "react";
-import { isTauri } from "@tauri-apps/api/core";
-import { load, type Store } from "@tauri-apps/plugin-store";
 
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from "./i18n/resources";
 
 /**
- * Настройки приложения: хранятся в Tauri store (файл settings.json в данных
- * приложения), а в обычном браузере - в localStorage. Читаются до первого
- * рендера, поэтому язык известен i18n сразу.
+ * Настройки приложения. Хранятся в localStorage; серверные настройки появятся
+ * вместе с профилем пользователя. Читаются до первого рендера, поэтому язык
+ * известен i18n сразу.
  */
 
 export type SettingKey = "locale" | "sidebarOpen";
@@ -17,7 +15,6 @@ type SettingsMap = {
   sidebarOpen: boolean;
 };
 
-const STORE_FILE = "settings.json";
 const BROWSER_KEY = "cion-reader:settings";
 
 // Язык системы в первый запуск; сохранённый выбор важнее
@@ -33,7 +30,6 @@ const DEFAULTS: SettingsMap = {
 
 const values: SettingsMap = { ...DEFAULTS };
 const listeners = new Map<SettingKey, Set<() => void>>();
-let store: Store | null = null;
 
 const isValid = {
   locale: (value: unknown): value is SupportedLocale =>
@@ -45,7 +41,9 @@ function readBrowserSettings(): unknown {
   try {
     const raw = localStorage.getItem(BROWSER_KEY);
     return raw === null ? null : JSON.parse(raw);
-  } catch {
+  } catch (error) {
+    // Битый JSON не должен откатывать настройки молча: причина видна в консоли
+    console.error("Failed to read settings from localStorage", error);
     return null;
   }
 }
@@ -63,12 +61,8 @@ function subscribe(key: SettingKey, listener: () => void): () => void {
   };
 }
 
-async function persist<K extends SettingKey>(key: K, value: SettingsMap[K]): Promise<void> {
+function persist(key: SettingKey): void {
   try {
-    if (store) {
-      await store.set(key, value);
-      return;
-    }
     localStorage.setItem(BROWSER_KEY, JSON.stringify(values));
   } catch (error) {
     console.error(`Failed to save setting "${key}"`, error);
@@ -76,27 +70,13 @@ async function persist<K extends SettingKey>(key: K, value: SettingsMap[K]): Pro
 }
 
 /** Загружает сохранённые настройки. Вызывать до initI18n и рендера. */
-export async function initSettings(): Promise<void> {
-  try {
-    if (!isTauri()) {
-      const saved = readBrowserSettings();
-      if (typeof saved === "object" && saved !== null) {
-        const record = saved as Record<string, unknown>;
-        if (isValid.locale(record.locale)) values.locale = record.locale;
-        if (isValid.sidebarOpen(record.sidebarOpen)) values.sidebarOpen = record.sidebarOpen;
-      }
-      return;
-    }
+export function initSettings(): void {
+  const saved = readBrowserSettings();
+  if (typeof saved !== "object" || saved === null) return;
 
-    store = await load(STORE_FILE, { autoSave: 100 });
-    const locale: unknown = await store.get("locale");
-    if (isValid.locale(locale)) values.locale = locale;
-    const sidebarOpen: unknown = await store.get("sidebarOpen");
-    if (isValid.sidebarOpen(sidebarOpen)) values.sidebarOpen = sidebarOpen;
-  } catch (error) {
-    // Приложение продолжает работать на значениях по умолчанию
-    console.error("Failed to load settings", error);
-  }
+  const record = saved as Record<string, unknown>;
+  if (isValid.locale(record.locale)) values.locale = record.locale;
+  if (isValid.sidebarOpen(record.sidebarOpen)) values.sidebarOpen = record.sidebarOpen;
 }
 
 export const settings = {
@@ -108,7 +88,7 @@ export const settings = {
     if (values[key] === value) return;
     values[key] = value;
     notify(key);
-    await persist(key, value);
+    persist(key);
   },
 
   /** Подписка на изменение одного ключа; возвращает отписку. */

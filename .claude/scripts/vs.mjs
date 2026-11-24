@@ -1,5 +1,5 @@
-// Общее для run-cargo и run-vs: обычный Windows-шелл не знает
-// INCLUDE/LIB, поэтому cargo и tauri запускаются после vcvars64.bat
+// Общее для run-cargo: обычный Windows-шелл не знает
+// INCLUDE/LIB, поэтому cargo запускается после vcvars64.bat
 // установки, у которой есть настоящие x64-библиотеки.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';

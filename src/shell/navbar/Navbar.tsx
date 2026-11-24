@@ -1,7 +1,7 @@
 import { useLocation } from "react-router";
 
 import { useT } from "@/lib/i18n";
-import { sectionForPath } from "@/shell/sidebar/sections";
+import { pageTitleKey } from "@/shell/sidebar/sections";
 import { LocaleMenu } from "./LocaleMenu";
 import { SidebarToggle } from "./SidebarToggle";
 import { ThemeToggle } from "./ThemeToggle";
@@ -9,12 +9,9 @@ import { ThemeToggle } from "./ThemeToggle";
 function PageTitle() {
   const t = useT();
   const { pathname } = useLocation();
-  const current = sectionForPath(pathname);
 
   return (
-    <span className="truncate text-sm font-medium">
-      {t(current?.i18nKey ?? "nav.unknown")}
-    </span>
+    <span className="truncate text-sm font-medium">{t(pageTitleKey(pathname))}</span>
   );
 }
 

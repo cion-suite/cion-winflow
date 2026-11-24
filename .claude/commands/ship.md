@@ -29,4 +29,4 @@ Rust-команды идут через `run-cargo.mjs`: на Windows он са�
 
 Границы слоёв проверяет `lint` (`boundaries/dependencies`); Rust - clippy через `check:rust`.
 
-Не делает: семантическое ревью - `/isgood`, commit-сообщение - `/notes`, релизную сборку - `pnpm tauri build` (сейчас) или release-сборка сервера после переезда.
+Не делает: семантическое ревью - `/isgood`, commit-сообщение - `/notes`, релизную сборку сервера (`cargo build --release`).

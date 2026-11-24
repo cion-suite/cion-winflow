@@ -12,18 +12,12 @@ export default defineConfig(() => ({
     },
   },
 
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
-  clearScreen: false,
-
-  // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
     strictPort: true,
-    watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+    // Dev-фронтенд ходит в axum через прокси: origin один, CORS не нужен
+    proxy: {
+      "/api": "http://127.0.0.1:3000",
     },
   },
 }));

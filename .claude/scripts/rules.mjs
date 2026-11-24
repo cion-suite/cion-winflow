@@ -14,8 +14,6 @@ const TEST = /(^|\/)(tests?|fixtures)\/|\.(test|spec)\./;
 
 const HTTP_HOME = 'src/api/client.ts';
 const SETTINGS_HOMES = new Set(['src/lib/settings.ts', 'src/shell/navbar/ThemeToggle.tsx']);
-// До миграции эти три файла - единственные, кому можно Tauri.
-const TAURI_HOMES = new Set([HTTP_HOME, ...SETTINGS_HOMES]);
 
 const HEX_CLASS = /\b(?:bg|text|border|ring|fill|stroke|from|via|to)-\[#[0-9a-fA-F]{3,8}\]/;
 const TS_ANY = /@ts-(?:ignore|nocheck)\b/;
@@ -30,19 +28,14 @@ const tsAny = t => TS_ANY.test(t) || (!COMMENT.test(t) && AS_ANY.test(t));
 
 export const RULES = [
     {
-        id: '1.1', sev: '🔴', tier: 'C', name: 'fetch/invoke только в src/api/client.ts',
+        id: '1.1', sev: '🔴', tier: 'C', name: 'fetch только в src/api/client.ts',
         hit: (t, f) => TS.test(f) && f.startsWith('src/') && !TEST.test(f) && f !== HTTP_HOME
-            && !COMMENT.test(t) && /\b(?:fetch|invoke)\s*\(/.test(t),
+            && !COMMENT.test(t) && /\bfetch\s*\(/.test(t),
     },
     {
         id: '1.2', sev: '🔴', tier: 'C', name: 'localStorage/sessionStorage только в settings.ts и ThemeToggle.tsx',
         hit: (t, f) => TS.test(f) && f.startsWith('src/') && !TEST.test(f) && !SETTINGS_HOMES.has(f)
             && !COMMENT.test(t) && /\b(?:local|session)Storage\s*\.\s*(?:getItem|setItem|removeItem|clear)\s*\(/.test(t),
-    },
-    {
-        id: '1.3', sev: '🔴', tier: 'C', name: '@tauri-apps/* только в transport, settings и ThemeToggle (до миграции)',
-        hit: (t, f) => TS.test(f) && f.startsWith('src/') && !TAURI_HOMES.has(f) && !COMMENT.test(t)
-            && /(?:from\s+['"]@tauri-apps\/|import\s*\(\s*['"]@tauri-apps\/)/.test(t),
     },
     {
         id: '1.4', sev: '🟡', tier: 'C', name: 'цвет Tailwind задан вручную вместо токена темы',
@@ -103,15 +96,13 @@ const CASES = [
     ['1.1', 'src/pages/a/index.tsx', 'const r = await fetch("/api")', 'const r = await fetch("/api")', 'src/api/client.ts'],
     ['1.2', 'src/pages/a/index.tsx', 'localStorage.getItem("k")', 'settings.get("locale")'],
     ['1.2', 'src/pages/a/index.tsx', 'localStorage.getItem("k")', 'localStorage.getItem("k")', 'src/lib/settings.ts'],
-    ['1.3', 'src/pages/a/index.tsx', "import { invoke } from '@tauri-apps/api/core'", "import { api } from '@/api'"],
-    ['1.3', 'src/pages/a/index.tsx', "import { invoke } from '@tauri-apps/api/core'", "import { invoke } from '@tauri-apps/api/core'", 'src/api/client.ts'],
     ['1.4', 'src/pages/a/index.tsx', '<div className="bg-[#fff]" />', '<div className="bg-background" />'],
     ['1.5', 'src/pages/a/index.tsx', '<Button asChild>', '<Button render={<a />} nativeButton={false}>'],
     ['1.6', 'src/pages/a/index.tsx', '// @ts-ignore', '// обычный комментарий'],
     ['1.6', 'src/pages/a/index.tsx', 'const x = value as any', 'const x = value as string'],
     ['1.7', 'server/src/main.rs', 'let x = value.unwrap();', 'let x = value?;'],
     ['1.7', 'server/src/main.rs', 'let x = value.unwrap();', '// WHY: инвариант проверен выше\nlet x = value.unwrap();'],
-    ['1.7', 'server/src/main.rs', 'let x = value.unwrap();', 'tauri_build::try_build(attributes).expect("build failed");', 'src-tauri/build.rs'],
+    ['1.7', 'server/src/main.rs', 'let x = value.unwrap();', 'let out = std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo");', 'server/build.rs'],
     ['1.8', 'server/src/main.rs', 'panic!("boom")', 'return Err(AppError::Internal);'],
     ['1.8', 'server/src/main.rs', 'todo!("later")', '// TODO: реализовать в фазе 2'],
 ];

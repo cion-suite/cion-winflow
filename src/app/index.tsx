@@ -9,7 +9,7 @@ import "./styles/index.css";
 
 // Настройки и язык готовы до первого рендера: без этого язык интерфейса мигал бы
 async function bootstrap(): Promise<void> {
-  await initSettings();
+  initSettings();
   initI18n();
 
   const rootElement = document.getElementById("root");

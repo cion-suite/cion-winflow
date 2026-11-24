@@ -48,7 +48,7 @@ const check = findings.filter(x => x.tier === 'K');
 const INLINE = 200, INLINE_LINES = 600, SPLIT = 800, TRIAGE = 25;
 const SENSITIVE = [
     /^src\/(app|shell|pages|api|ui|lib)\//,
-    /^server\//, /^src-tauri\/src\//,
+    /^server\//,
 ];
 
 const sum = files => files.reduce((n, f) => n + f.plus, 0);

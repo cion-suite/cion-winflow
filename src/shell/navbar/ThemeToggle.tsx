@@ -1,27 +1,17 @@
-import { useEffect } from "react";
-import { isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-
 import { useT } from "@/lib/i18n";
 import { Button } from "@/ui/shadcn/button";
 
-// index.html reads the same key to set the theme before the first paint
+// public/theme.js reads the same key to set the theme before the first paint
 const THEME_KEY = "theme";
-
-// The native title bar is not part of the page, Tauri repaints it separately
-function syncWindowTheme(isDark: boolean) {
-  // getCurrentWindow throws in a plain browser, for example with `pnpm dev`
-  if (!isTauri()) return;
-
-  getCurrentWindow()
-    .setTheme(isDark ? "dark" : "light")
-    .catch(console.error);
-}
 
 function toggleTheme() {
   const isDark = document.documentElement.classList.toggle("dark");
-  localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
-  syncWindowTheme(isDark);
+  try {
+    localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
+  } catch (error) {
+    // Хранилище может быть недоступно; тема всё равно переключилась в DOM
+    console.error("Failed to save theme", error);
+  }
 }
 
 function ThemeIcon() {
@@ -48,10 +38,6 @@ function ThemeIcon() {
 export function ThemeToggle() {
   const t = useT();
   const label = t("theme.toggle");
-
-  useEffect(() => {
-    syncWindowTheme(document.documentElement.classList.contains("dark"));
-  }, []);
 
   return (
     <Button

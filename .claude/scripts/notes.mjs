@@ -24,9 +24,9 @@ const AREAS = [
     [/^docs\/|\.md$/, 'документация'],
     [/(^|\/)(package\.json|Cargo\.toml|Cargo\.lock)$|^pnpm-lock/, 'зависимости'],
     [TEST_FILE, 'тесты'],
-    [/^(?:src-tauri\/(?:src|capabilities)|server\/(?:src|migrations|tests))\//, 'бэкенд'],
-    [/^src\/|^index\.html$|^src-tauri\/icons\//, 'UI'],
-    [/tauri\.conf|components\.json|tsconfig|vite|^src-tauri\/build\.rs|^\.github\//, 'сборка'],
+    [/^server\/(?:src|migrations|tests)\//, 'бэкенд'],
+    [/^src\/|^index\.html$/, 'UI'],
+    [/components\.json|tsconfig|vite|^\.github\//, 'сборка'],
 ];
 const areaOf = f => AREAS.find(([re]) => re.test(f))?.[1] ?? 'прочее';
 

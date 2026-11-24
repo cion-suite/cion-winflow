@@ -1,12 +1,11 @@
 ---
 paths:
   - "server/**"
-  - "src-tauri/src/**"
 ---
 
 # Бэкенд
 
-Целевое устройство - `docs/planned-now.md`; пока серверного слоя нет, правила действуют для `src-tauri/src/`.
+Целевое устройство - `docs/planned-now.md`; сервер - единственный Rust-крейт (`server/`).
 
 - **Слои.** HTTP-обработчик тонкий: разбор запроса, вызов сервиса, ответ. Логика - в сервисах и репозиториях; адаптеры источников не знают о БД.
 - **Ошибки.** `Result<T, AppError>`, `AppError: IntoResponse`, `thiserror`. В production-коде нет `unwrap` / `expect` / `panic!`; причина `unsafe` - в WHY-комментарии.

@@ -141,6 +141,8 @@ const mutedWhy = (m, ln) => {
     const gone = m.kind === 'slice' && !exists(m.tok.split('/').slice(0, 2).join('/'));
     if (m.fence && !gone) return 'пример в fence';
     if (EXAMPLE.test(m.tok)) return 'пример или внешний артефакт';
+    // HTTP-путь в примере кода, а не slash-команда
+    if (m.kind === 'command?' && /\b(?:request|fetch|GET|POST|PUT|PATCH|DELETE)\b/.test(ln)) return 'HTTP-путь в примере';
     if (EXTERNAL.some(re => re.test(m.tok))) return 'внешний репозиторий';
     // вход пакета, названного в той же строке
     const pkgOf = m.kind === 'command?' && [...ln.matchAll(DEP)].map(d => d[1]).find(d => entries(d).includes('./' + m.tok));

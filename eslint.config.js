@@ -9,7 +9,8 @@ const API_ENTRY = {
 };
 
 export default defineConfig([
-  globalIgnores(["dist", "src-tauri", "src/ui/shadcn", ".claude/scripts", ".claude/cache"]),
+  // public/theme.js исполняется до загрузки модулей и не входит в tsconfig
+  globalIgnores(["dist", "public/theme.js", "src/ui/shadcn", ".claude/scripts", ".claude/cache"]),
   ...tseslint.configs.recommended,
   {
     files: ["src/**/*.{ts,tsx}", "vite.config.ts"],
@@ -69,28 +70,6 @@ export default defineConfig([
             {
               from: { element: { types: ["ui", "api"] } },
               allow: { to: { element: { type: "lib" } } },
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/api/client.ts"],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            {
-              name: "@tauri-apps/api/core",
-              importNames: ["invoke"],
-              message: "Rust is called through src/api, invoke lives in src/api/client.ts.",
-            },
-            {
-              name: "@tauri-apps/api",
-              message: "Import from a subpath such as @tauri-apps/api/event: the root exposes invoke.",
             },
           ],
         },

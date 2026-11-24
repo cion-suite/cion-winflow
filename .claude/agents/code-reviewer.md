@@ -22,13 +22,13 @@ tools: Bash, Read, Glob, Grep
 ### A. Архитектура (CLAUDE.md, docs/architecture.md)
 
 1. Импорты по слоям: `app -> shell | pages | api | ui | lib`; `shell/pages -> api | ui | lib`; `api -> lib`; `ui -> lib`. `ui` не импортирует `api`; экран импортируется только роутером.
-2. Экран - `src/pages/<имя>/index.tsx`, рядом его части. Новый экран без записи в `shell/sidebar/sections.ts` в роутер не попадёт.
-3. `fetch`/`invoke` - только в `src/api/client.ts`. Методы `api.*` - хуки, вызываются в начале компонента; внутри `if` линтер не поймает.
-4. Настройки - `useSetting()` / `settings.set()`. `localStorage` напрямую допустим только в `src/lib/settings.ts` и `src/shell/navbar/ThemeToggle.tsx` (до переезда).
+2. Экран - `src/pages/<имя>/index.tsx`, рядом его части. Статический экран попадает в меню и роутер через `shell/sidebar/sections.ts`, параметрические маршруты - отдельным списком `PARAM_ROUTES` в `AppRouter`.
+3. `fetch` - только в `src/api/client.ts`. Методы `api.*` - хуки, вызываются в начале компонента; внутри `if` линтер не поймает.
+4. Настройки - `useSetting()` / `settings.set()`. `localStorage` напрямую допустим только в `src/lib/settings.ts`, `src/shell/navbar/ThemeToggle.tsx` и `public/theme.js`.
 5. Строки интерфейса - в `src/lib/i18n/locales/{en,ru}.ts`, не в компонентах. Цвета - токены темы (`bg-primary`), не hex.
 6. Base UI: `Button` без `type` - `type="button"`; отправке формы нужен `type="submit"`. Вместо `asChild` - `render`; не-`<button>` требует `nativeButton={false}`.
-7. Переезд на сервер: в `src/` не должно оставаться `@tauri-apps/*`; `ThemeToggle` и `settings` чистятся; `HashRouter` меняется на `BrowserRouter`; `QueryClient` настраивается под HTTP.
-8. Rust (когда появится `server/`): обработчик тонкий, логика в сервисе; ошибки через `AppError` + `IntoResponse`; без `unwrap`/`panic` в проде; URL источника не приходит от клиента; SSRF-allowlist и лимиты на прокси картинок.
+7. Транспорт: `fetch` только в `src/api/client.ts`; `BrowserRouter`; `QueryClient` на HTTP-умолчаниях; ссылки вне меню - через `src/lib/routes.ts`.
+8. Rust (`server/`): обработчик тонкий, логика в сервисе; ошибки через `AppError` + `IntoResponse`; без `unwrap`/`panic` в проде; URL источника не приходит от клиента; SSRF-allowlist и лимиты на прокси картинок.
 
 ### B. Код (CLAUDE.md)
 
@@ -42,11 +42,10 @@ tools: Bash, Read, Glob, Grep
 
 ### C. Подводные камни (CLAUDE.md)
 
-- `tauri.conf.json` с `"csp": null` нельзя переносить в веб; CSP задаётся заголовками.
+- CSP ещё не задаётся: это фаза 8 (заголовки сервера или Caddy). Инлайновый скрипт темы вынесен в `public/theme.js`, чтобы позже не требовать `'unsafe-inline'`; в dev строгий CSP отключён ради Vite/React Refresh.
 - `typescript-eslint` требует TypeScript ниже 6.1.
-- `Cargo.lock` и `pnpm-lock.yaml` коммитятся; `dist`, `src-tauri/target`, `src-tauri/gen/schemas` игнорируются.
-- `pnpm tauri dev` перезаписывает dev-exe; проверка собранного приложения - `pnpm tauri build --debug --no-bundle`.
-- `build.rs` вшивает иконку exe; менять оба `.ico`.
+- `Cargo.lock` (в `server/`) и `pnpm-lock.yaml` коммитятся; `dist`, `server/target`, `data/` игнорируются.
+- Статику отдаёт `ServeDir`; `rust-embed` не используем, иначе правка UI требует пересборки Rust.
 
 ### D. Scope и STOP & ASK - если явно запрошено
 
