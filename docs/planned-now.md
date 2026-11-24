@@ -32,7 +32,7 @@ cion-reader — закрытый self-hosted агрегатор: манга, а�
 | `src/shell/navbar/ThemeToggle.tsx` | убрать импорты `@tauri-apps/*` и `syncWindowTheme`, оставить класс темы |
 | `vite.config.ts` | заменить блок `server` целиком: proxy `/api`, убрать `watch.ignored`, `clearScreen` и Tauri-комментарии |
 | `.gitignore` | `server/target`, `data/`, `.env*` (кроме примера); `server/Cargo.lock` коммитится |
-| `.claude/commands/notes.md`, `.claude/scripts/notes.mjs` | версия в `server/Cargo.toml`, области для `server/` вместо `src-tauri/` |
+| `.claude/commands/notes.md`, `.claude/scripts/notes.mjs` | источник версии остаётся `package.json` (`notes.mjs` читает его), `server/Cargo.toml` bump-ается тем же значением; области для `server/` вместо `src-tauri/` |
 | `docs/` | `architecture.md` обновляется, план и решение добавлены |
 
 Временное сосуществование: пока `src-tauri/` не удалён, `server/` — отдельный крейт, workspace не нужен. После удаления Tauri `server/` остаётся единственным Rust-крейтом.
@@ -111,13 +111,13 @@ sources(id, code UNIQUE, name, base_url, adapter, enabled, config_json, created_
 titles(id, kind, name, alt_names_json, description, cover_path, created_at, updated_at)
 source_entries(id, title_id, source_id, external_id, external_url, raw_json,
                is_primary, last_synced_at)
-chapters(id, source_entry_id, external_id, number, volume, name,
+chapters(id, source_entry_id, external_id, chapter_key, number, volume, name,
          external_url, embed_url, published_at)
 pages(id, chapter_id, idx, image_ref, image_url, width, height)
 
 library(user_id, title_id, status, score, added_at, updated_at,
         PRIMARY KEY(user_id, title_id))
-progress(user_id, title_id, chapter_number, page, seconds, updated_at,
+progress(user_id, title_id, chapter_key, page, seconds, updated_at,
          PRIMARY KEY(user_id, title_id))
 chapter_reads(user_id, title_id, chapter_number, read_at,
               PRIMARY KEY(user_id, title_id, chapter_number))  -- опционально
@@ -127,7 +127,8 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 
 Ключевые решения:
 
-- **Канонический прогресс.** `progress` хранится по `title_id` + номеру главы, а не по `chapter_id` конкретного источника: при переключении источника та же глава имеет другой `chapter_id`, и прогресс терялся бы. `PUT /api/progress/{titleId}` принимает `chapterId`, но обработчик проверяет, что глава принадлежит тайтлу (`chapters → source_entries.title_id`), и сохраняет её `number`. Для видео `number` — номер эпизода, `seconds` — позиция.
+- **Канонический прогресс.** `progress` хранится по `title_id` + `chapter_key`, а не по `chapter_id` конкретного источника: при переключении источника та же глава имеет другой `chapter_id`, и прогресс терялся бы. `PUT /api/progress/{titleId}` принимает `chapterId`, но обработчик проверяет, что глава принадлежит тайтлу (`chapters → source_entries.title_id`), и сохраняет её `chapter_key`. Для видео `number` — номер эпизода, `seconds` — позиция.
+- **Ключ главы.** Номер главы нельзя сравнивать между источниками как `f32`: у источников разная база (0/1), тома и спецвыпуски. Хранить нормализованный `chapter_key` (например, `volume:number` строкой или целым), `progress` пишется по нему; `SourceChapter.number` остаётся для отображения.
 - **Дедупликация.** `chapters.external_id` и `UNIQUE(source_entry_id, external_id)`; `pages` — `UNIQUE(chapter_id, idx)`. Импорт — `INSERT ... ON CONFLICT ... DO UPDATE`, иначе refresh создаст дубли.
 - **Ссылки на страницы.** `pages.image_ref` — стабильная ссылка источника (путь или id), `image_url` — последний разрешённый URL. Подписанные CDN-URL живут недолго: при `401/403` адаптер перезапрашивает список страниц, а кэш байтов ключуется по `(source_id, external chapter id, idx)`, не по подписанному URL.
 - **Конфиг источника.** `sources.config_json`: `image_hosts`, `player_hosts`, заголовки/куки. `image_hosts` нужен потому, что картинки часто лежат на отдельном CDN, а не на `base_url`.
@@ -157,7 +158,7 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `GET /api/chapters/{id}/pages` | список страниц с внутренними URL |
 | `GET /api/chapters/{id}/watch` | данные плеера и `embed_url` |
 | `GET /api/pages/{id}/image` | прокси страницы из источника |
-| `GET /api/titles/{id}/cover` | обложка (локальная или прокси) |
+| `GET /api/titles/{id}/cover?size=thumb\|full` | обложка (локальная или прокси) |
 | `GET /api/library` | библиотека пользователя |
 | `PUT /api/library/{titleId}` | статус и оценка |
 | `DELETE /api/library/{titleId}` | убрать из библиотеки |
@@ -169,6 +170,7 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `POST /api/sources/{code}/search` | поиск по источнику (admin) |
 | `POST /api/sources/{code}/import` | импорт: `{ externalId, titleId? }`; без `titleId` создаёт тайтл |
 | `GET/POST /api/admin/invites` | список и создание инвайтов (admin) |
+| `POST /api/admin/users/{id}/disable` | отключить пользователя (admin) |
 | `POST /api/titles`, `PUT /api/titles/{id}` | создание и правка тайтла (admin) |
 | `POST /api/titles/{id}/cover` | загрузка обложки (admin) |
 | `POST /api/titles/{id}/sources` | привязать источник к тайтлу (admin) |
@@ -176,16 +178,16 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `PUT /api/titles/{id}/primary-source` | выбрать основной источник (admin) |
 | `POST /api/admin/refresh/{titleId}` | обновить главы (admin) |
 
-Поток импорта: поиск по источнику → пользователь выбирает результат → `POST /api/sources/{code}/import` создаёт канонический тайтл и `source_entry` (или привязывает к существующему `titleId`) → адаптер импортирует главы и страницы.
+Поток импорта: поиск по источнику → пользователь выбирает результат → `POST /api/sources/{code}/import` создаёт канонический тайтл и `source_entry` (или привязывает к существующему `titleId`) → адаптер импортирует главы и страницы. `externalId` приходит из ответа поиска (в БД его ещё нет), адаптер валидирует и URL-кодирует его.
 
-Правила: мутирующие запросы требуют сессии и проверки `Origin`; админские — роли; список страниц отдаёт внутренние URL, а не ссылки на чужой сайт; для загрузки аватарки повесить `DefaultBodyLimit::max(6 * 1024 * 1024)` (дефолтные 2 МиБ не пропустят 5-мегабайтный файл) и отдельно проверить размер в обработчике. Изображения клиент получает только через сервер; видео — через встроенный плеер, браузер обращается к домену плеера напрямую (см. §9).
+Правила: мутирующие запросы требуют сессии и проверки `Origin`; админские — роли; список страниц отдаёт внутренние URL, а не ссылки на чужой сайт; для загрузки аватарки повесить `DefaultBodyLimit::max(6 * 1024 * 1024)` (дефолтные 2 МиБ не пропустят 5-мегабайтный файл) и отдельно проверить размер в обработчике. Изображения клиент получает только через сервер; видео — через встроенный плеер, браузер обращается к домену плеера напрямую (см. §9). Аватарки опциональны: не входят в критерии готовности и могут быть отложены.
 
 ## 7. Источники
 
 Реестр — таблица `sources` плюс скомпилированные адаптеры. Новый источник = новый модуль + запись в реестре, без изменения остального кода.
 
 ```rust
-struct SourceChapter { external_id: String, number: f32, name: Option<String> }
+struct SourceChapter { external_id: String, key: String, number: f32, name: Option<String> }
 struct SourcePage { index: u32, image_ref: String }
 
 enum SourceKind { Remanga(Remanga), MangaLib(MangaLib) }
@@ -205,7 +207,7 @@ impl SourceKind {
 - лимиты раздельные: 1–2 параллельных запроса на метаданные (поиск, тайтл, главы) и отдельный пул 8–16 на скачивание страниц; учитывать `429` и `Retry-After`; prefetch ограничивать;
 - 2 ретрая с backoff на сетевые ошибки, circuit breaker после серии неудач;
 - ошибка одного источника не ломает выдачу: поиск возвращает частичный результат и статус по каждому источнику;
-- URL источника никогда не приходит от клиента: только `source_id` из реестра и `external_id` из БД;
+- URL источника никогда не приходит от клиента: только `source_id` из реестра и `external_id` из БД; исключение - импорт: `externalId` берётся из ответа поиска, адаптер валидирует и URL-кодирует его, после импорта ссылки только из БД;
 - парсинг отделять от загрузки: чистые `parse_search(&str)`, `parse_chapter(&str)` тестируются через `#[cfg(test)]` и `include_str!` на фикстурах, без сети;
 - в `sources.config_json` хранить разрешённые хосты изображений и CDN, домены плееров, заголовки/куки;
 - Cloudflare и JS-челленджи заголовками не обходятся: источник либо имеет API/статический HTML, либо не подходит. Проверяйте кандидата до написания адаптера.
@@ -223,12 +225,12 @@ impl SourceKind {
 - ссылки, отдаваемые по сессии, кэшируются как `private, max-age=86400`; `public, immutable` — только для действительно публичных ассетов;
 - SSRF-защита: разрешённые хосты брать из `sources.config_json` (сайт и CDN), только `http/https` и порты 80/443; отключить автоматические редиректы (`reqwest::redirect::Policy::none()`) или проверять каждый хоп; резолвить имя, проверять **все** полученные IP и соединяться с проверенным (кастомный `reqwest::dns::Resolve` или подключение по IP); отклонять private/loopback/link-local, CGNAT `100.64.0.0/10`, `169.254.169.254`, ULA `fc00::/7` и IPv4-mapped IPv6; лимит тела ~15 МБ;
 - проверять магические байты и разрешать только `image/jpeg`, `image/png`, `image/webp`, `image/gif` (AVIF — если включён в `image`); SVG и HTML отклонять, иначе чужой файл исполнится в вашем origin; отдавать с `X-Content-Type-Options: nosniff` и `Content-Disposition: inline`;
-- загрузки: лимит 5 МБ, `DefaultBodyLimit` на маршруте, декодирование через `image` с `Limits` (`max_alloc`, `max_image_width/height`, лимит площади пикселей), чтобы сжатая «бомба» не съела память; перекодирование, удаление EXIF, первый кадр для анимаций или отказ; оригинал не отдаётся;
+- загрузки: лимит 5 МБ, `DefaultBodyLimit` на маршруте, декодирование через `image` с `Limits` (`max_alloc`, `max_image_width/height`, лимит площади пикселей), чтобы сжатая «бомба» не съела память; перекодирование, удаление EXIF, первый кадр для анимаций или отказ; оригинал не отдаётся; декодирование и перекодирование - в `tokio::task::spawn_blocking` с ограничением параллелизма;
 - локальные обложки тайтлов — тот же путь загрузки или импорт по разрешённому URL.
 
 ## 9. Видео
 
-1. **Первый вариант — встраивание.** В `chapters.embed_url` лежит ссылка, клиент рендерит `<iframe>` с `referrerpolicy="no-referrer"`, `allowfullscreen` и минимальным набором разрешений: `sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-forms"`; голый `sandbox` заблокирует плеер. Домены плееров хранить в конфиге источника и генерировать `frame-src`. Учтите: браузер не даёт подставить свой `Referer`, поэтому часть источников встраивание запретит — проверяйте до интеграции.
+1. **Первый вариант — встраивание.** В `chapters.embed_url` лежит ссылка, клиент рендерит `<iframe title="..."` с `referrerpolicy="no-referrer"`, `allowfullscreen` и минимальным набором разрешений: `sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-forms"`; голый `sandbox` заблокирует плеер. `embed_url` проверяется на импорте и при отдаче: схема только `https`, хост из `player_hosts` конфига источника; `javascript:`/`data:` и чужие хосты отклоняются, CSP `frame-src` — вторая линия, не замена проверке. Домены плееров хранить в конфиге источника и генерировать `frame-src`. Учтите: браузер не даёт подставить свой `Referer`, поэтому часть источников встраивание запретит — проверяйте до интеграции.
 2. **HLS-прокси — только если источники не дают встраивать.** `hls.js` на клиенте, маршруты `/api/titles/{id}/video/playlist` и `/segment` с непрозрачными токенами вместо сырых URL. Парсить m3u8 и переписывать все URI: варианты master-плейлиста, `EXT-X-KEY`, `EXT-X-MAP`, абсолютные и относительные ссылки; поддерживать `Range`, отдельный allowlist медиа-хостов и лимит кэша сегментов. Для `hls.js` в CSP нужны `worker-src 'self' blob:` и `media-src 'self' blob:`.
 3. Полное скачивание и перекодирование видео не делаем.
 
@@ -238,11 +240,12 @@ impl SourceKind {
 
 - регистрация только по инвайту; `REGISTRATION_MODE=invite|closed`: в `closed` `POST /api/auth/register` возвращает 403 независимо от инвайта;
 - первый администратор создаётся подкомандой CLI или одноразовыми `ADMIN_USERNAME`/`ADMIN_PASSWORD` из env при пустой таблице `users` — иначе создать инвайт некому;
-- пароли — Argon2id, минимум 10 символов, одинаковое сообщение об ошибке входа;
-- сессии — opaque-токен: 32 случайных байта, в БД только SHA-256, cookie `sid` с `HttpOnly`, `SameSite=Lax`, `Secure` в проде; idle-срок 30 дней, абсолютный — 90; ротация при входе; logout удаляет запись; `last_seen_at` обновляется с троттлингом;
+- пароли — Argon2id, минимум 10 символов, одинаковое сообщение об ошибке входа; хеш и проверка - в `tokio::task::spawn_blocking` с семафором, иначе CPU-работа блокирует tokio-воркеры;
+- сессии — opaque-токен: 32 случайных байта, в БД только SHA-256, cookie `sid` с `HttpOnly`, `SameSite=Lax`, `Secure` в проде, `Path=/`; `Max-Age`/`Expires` выставляются при входе (иначе cookie сессионная и пропадает при закрытии браузера); idle-срок 30 дней, абсолютный — 90; ротация при входе; logout удаляет запись и выставляет `Set-Cookie` с `Max-Age=0`; `last_seen_at` обновляется с троттлингом;
 - инвайт захватывается атомарно в транзакции: `UPDATE invites SET used_by = ? WHERE id = ? AND used_by IS NULL AND (expires_at IS NULL OR expires_at > ?)`, проверка `rows_affected() == 1`, затем вставка пользователя;
-- CSRF: same-origin + `SameSite=Lax` + проверка `Origin` у всех POST/PUT/DELETE. Допустимые origin — `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`: `http://localhost:1420` в dev, один https-домен в проде. Отсутствующий или несовпавший `Origin` отклоняется; дополнительно проверяется `Sec-Fetch-Site`. `COOKIE_SECURE` включается в проде, `X-Forwarded-Proto` доверять только от Caddy;
-- rate limit на login и регистрацию по паре `(IP, username)`, обязателен в фазе 2. За Caddy axum видит `127.0.0.1`: IP брать из `X-Forwarded-For` только если peer — доверенный прокси, иначе из `ConnectInfo`;
+- CSRF: same-origin + `SameSite=Lax` + проверка `Origin` у всех POST/PUT/DELETE. Допустимые origin — `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`: `http://localhost:1420` и `http://127.0.0.1:1420` в dev, один https-домен в проде. Отсутствующий или несовпавший `Origin` отклоняется; дополнительно проверяется `Sec-Fetch-Site`. `COOKIE_SECURE` включается в проде, `X-Forwarded-Proto` доверять только от Caddy;
+- отключённый пользователь (`disabled_at`) не проходит middleware сессии, даже если cookie ещё валидна;
+- rate limit на login и регистрацию по паре `(IP, username)`, обязателен в фазе 2. За Caddy axum видит `127.0.0.1`: IP брать из `X-Forwarded-For` только если peer — доверенный прокси, иначе из `ConnectInfo`. `tower-governor` видит только запрос без тела: IP-лимит — middleware, лимит по `username` — счётчик в обработчике после разбора JSON;
 - админ-роль для источников, импорта и ручного связывания;
 - CSP задаётся заголовками: в Caddy для HTML (вариант 2) или в axum (вариант 1), но не в обоих. Инлайновый скрипт темы вынести в `public/theme.js` и подключить блокирующим `<script src>`. Директивы: `default-src 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'` (Base UI ставит inline-стили), `img-src 'self' data: blob:`, `connect-src 'self'`, `font-src 'self'`, `frame-src` домены плееров, `media-src 'self' blob:`, `worker-src 'self' blob:` (HLS), `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`. В dev строгий CSP отключается: Vite/React Refresh используют инлайновые скрипты;
 - секреты — только env, `.env` в dev через `dotenvy`, в git не попадает;
@@ -262,7 +265,7 @@ cargo watch -x "run --manifest-path server/Cargo.toml"
 pnpm dev
 ```
 
-`dev:server` — это `cargo run --manifest-path server/Cargo.toml`; без `cargo watch` правка Rust подхватится только после перезапуска процесса.
+`dev:server` — это `node .claude/scripts/run-cargo.mjs run`: скрипт сам подставляет `--manifest-path` и на Windows окружение Visual Studio, прямой `cargo` в обычном shell падает на линковке. Без `cargo watch` правка Rust подхватится только после перезапуска процесса; `cargo watch` на Windows запускай из Developer PowerShell или через vcvars.
 
 В `vite.config.ts`:
 
@@ -296,7 +299,7 @@ CORS не нужен: в dev работает прокси, в проде origin
 
 ```powershell
 pnpm build
-cargo build --release --manifest-path server/Cargo.toml   # локальная проверка; релиз — в CI
+node .claude/scripts/run-cargo.mjs build --release   # локальная проверка; релиз — в CI (там обычный cargo)
 ```
 
 Два варианта отдачи статики:
@@ -327,13 +330,15 @@ reader.example.com {
     Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-src https://player.example; media-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
     -Server
   }
-  @html path / /index.html
-  header @html Cache-Control "no-cache"
   header /assets/* Cache-Control "public, max-age=31536000, immutable"
 
   handle /api/* { reverse_proxy 127.0.0.1:3000 }
   handle /assets/* { file_server }
-  handle { try_files {path} /index.html; file_server }
+  handle {
+    header Cache-Control "no-cache"
+    try_files {path} /index.html
+    file_server
+  }
 }
 ```
 
@@ -368,13 +373,14 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - создать `server/` (axum 0.8), `GET /api/health`, конфиг из env, `tracing`;
 - отдача статики из `dist/` с SPA fallback только для навигации;
 - заменить блок `server` в `vite.config.ts` (proxy `/api`, убрать `watch.ignored`, `clearScreen`, Tauri-комментарии);
-- переписать `src/api/client.ts` на `fetch`;
-- убрать Tauri-ветку из `settings.ts` и `ThemeToggle.tsx` (импорты, `syncWindowTheme`, `useEffect`);
+- переписать `src/api/client.ts` на `fetch`; до этого зафиксировать ручной чек-лист (`toError` на строке и объекте, 401, сетевой сбой) или добавить vitest отдельной задачей — автотестов фронтенда сейчас нет;
+- убрать Tauri-ветку из `settings.ts` и `ThemeToggle.tsx` (импорты, `syncWindowTheme`, `useEffect`); битый JSON в `readBrowserSettings` логировать, а не молча возвращать defaults;
 - `HashRouter` → `BrowserRouter`, `QueryClient` — под HTTP;
 - вынести инлайновый скрипт темы из `index.html` в `public/theme.js` (CSP);
-- удалить `src-tauri/`, `tauri*` скрипты, `@tauri-apps/*`, Tauri-правила из ESLint;
+- удалить `src-tauri/`, `tauri*` скрипты, `@tauri-apps/*`, Tauri-правила из ESLint; из `.claude/rules/build.md` убрать `pnpm tauri`, `run-vs.mjs` и `--manifest-path` на `src-tauri`, удалить `.claude/scripts/run-vs.mjs` (`vs.mjs` остаётся — `run-cargo.mjs` берёт из него `findVcvars`/`quote`);
 - обновить `.gitignore` (`server/target`, `data/`, `.env*`), `README`, `CLAUDE.md`;
 - решить судьбу шаблонных экранов (`home`, `network`, `apps`, `utils`, `system`, `changelog`) и синхронно обновить `sections.ts`, `AppRouter`, i18n, mock-данные;
+- параметрические маршруты (`/title/:id`, `/reader/:chapterId`, `/watch/:chapterId`) держать вне `SectionPath`/`sectionForPath`: отдельный список в `AppRouter`, активный пункт меню — по префиксу пути, меню остаётся статическим;
 - добавить `dev:server` в `package.json`;
 - обновить `.claude/commands/notes.md` и `.claude/scripts/notes.mjs` под `server/`; новый `server/Cargo.lock` коммитится.
 
@@ -387,7 +393,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - регистрация по инвайту с атомарным захватом, вход, выход, `GET /api/me`, middleware сессии;
 - bootstrap первого администратора (CLI или env при пустой БД);
 - `REGISTRATION_MODE=invite|closed`, rate limit login/register;
-- экраны `login`/`register`, защищённые маршруты, `AuthProvider`;
+- экраны `login`/`register`, защищённые маршруты, `AuthProvider`; logout и 401 очищают кэш React Query (`queryClient.clear()`), иначе на общем браузере виден кэш прошлого пользователя; 401 не ретраить, а уводить на login;
 - тесты: без cookie → 401, чужой `Origin` → 403, лимит входа, инвайт нельзя использовать дважды.
 
 Критерий: регистрация по одноразовому инвайту, вход, сохранение сессии после перезагрузки, выход; в режиме `closed` регистрация возвращает 403; пароли — Argon2; cookie с нужными флагами.
@@ -406,8 +412,9 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 
 - реестр источников и первый адаптер (API или HTML); парсеры — чистые функции с фикстурами;
 - поиск, импорт тайтла, импорт глав и страниц с upsert;
+- импорт не держать в одном синхронном запросе: главы импортируются сразу, страницы — лениво при открытии главы или фоновой задачей, иначе полный тайтл висит минутами и упирается в таймаут;
 - `GET /api/pages/{id}/image` с дисковым кэшем, single-flight и SSRF-защитой;
-- экран `reader`: виртуализация страниц, prefetch следующих, клавиатура, сохранение прогресса с дебаунсом;
+- экран `reader`: виртуализация страниц, prefetch следующих, клавиатура (не перехватывать, когда фокус в поле ввода), сохранение прогресса с дебаунсом и flush на `visibilitychange`/`pagehide` через `fetch(..., { keepalive: true })` или `sendBeacon` плюс cleanup при размонтировании — иначе последняя позиция теряется при закрытии вкладки;
 - обработка подписанных CDN-URL: при `401/403` перезапросить страницы главы.
 
 Критерий: реальный тайтл импортируется, глава читается через проксированные картинки, прогресс сохраняется и восстанавливается; падение источника показывается ошибкой, а не белым экраном; повторное открытие главы не скачивает картинки заново.
@@ -417,7 +424,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - второй адаптер;
 - `source_entries`: связывание с каноническим тайтлом, `is_primary` (частичный уникальный индекс);
 - админ-экран связывания, переключение источника у тайтла;
-- объединённый список глав; прогресс не зависит от источника.
+- объединённый список глав: группировка по `chapter_key`, при совпадении показывается глава основного источника; прогресс не зависит от источника.
 
 Критерий: один тайтл из двух источников даёт одну запись в каталоге и одну в библиотеке; источник переключается; прогресс сохраняется при переключении; дублей в библиотеке нет.
 
@@ -435,7 +442,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - `jobs` + воркер: обновление глав, prefetch, эвикшен кэша, чистка сессий;
 - уведомление о новых главах в интерфейсе;
 - настройки ридера (режим, ширина, направление), PWA;
-- локализация новых экранов (en/ru), мобильная вёрстка;
+- проверка локализации новых экранов: пропущенные ключи (строки добавляются в `lib/i18n/locales/{en,ru}.ts` в той же фазе, где экран), мобильная вёрстка;
 - мониторинг egress и лимиты prefetch/HLS.
 
 Критерий: обновление в фоне добавляет главы; задачи повторяются после ошибки; кэш не растёт бесконечно; ридер и плеер удобны на телефоне.

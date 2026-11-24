@@ -135,6 +135,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 - `src-tauri/tauri.conf.json` содержит `"csp": null`, то есть Content Security Policy отключена. Для веба CSP обязателен: задавай заголовками от сервера и не переноси `null` в прод.
 - `bundle.targets: "all"` включает MSI, а для него в Windows нужен компонент VBSCRIPT.
 - `pnpm tauri dev` перезаписывает `src-tauri/target/debug/*.exe` dev-версией, которой нужен запущенный Vite. Чтобы проверить собранное приложение, сначала выполни `pnpm tauri build --debug --no-bundle`.
+- Скрипты `tauri` и `tauri:dev` идут через `.claude/scripts/run-vs.mjs`: на Windows он подхватывает окружение Visual Studio BuildTools. Прямой `cargo` запускай через `run-cargo.mjs`, иначе возможна ошибка `vswhom-sys` / `legacy_stdio_definitions.lib`.
 - `typescript-eslint` требует TypeScript ниже 6.1: не обновляй `typescript` до 7, пока этот диапазон не расширят.
 - `Cargo.lock` и `pnpm-lock.yaml` коммитятся. `node_modules`, `dist`, `src-tauri/target` и `src-tauri/gen/schemas` игнорируются.
 

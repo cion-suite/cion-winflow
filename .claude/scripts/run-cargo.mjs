@@ -12,6 +12,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { findVcvars, quote } from './vs.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const args = process.argv.slice(2);
@@ -26,31 +27,7 @@ const withManifest = sep < 0
     : [...args.slice(0, sep), '--manifest-path', manifest, ...args.slice(sep)];
 const full = args.includes('--manifest-path') ? args : withManifest;
 
-const quote = s => /[\s"]/.test(s) ? `"${s.replaceAll('"', '\\"')}"` : s;
-
-// vswhere знает все установки; берём первую, у которой есть
-// legacy_stdio_definitions.lib в lib/x64 (у неполной установки её нет).
-const vcvars = () => {
-    if (process.platform !== 'win32' || process.env.VCINSTALLDIR) return null;
-    const programFilesX86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)';
-    const vswhere = path.join(programFilesX86, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
-    if (!fs.existsSync(vswhere)) return null;
-    const found = spawnSync(vswhere, ['-products', '*', '-format', 'json'], { encoding: 'utf8' });
-    if (found.status !== 0) return null;
-    let installs;
-    try { installs = JSON.parse(found.stdout.replace(/^\uFEFF/, '')); } catch { return null; }
-    for (const inst of installs) {
-        const bat = path.join(inst.installationPath, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat');
-        const tools = path.join(inst.installationPath, 'VC', 'Tools', 'MSVC');
-        if (!fs.existsSync(bat) || !fs.existsSync(tools)) continue;
-        const complete = fs.readdirSync(tools).some(v =>
-            fs.existsSync(path.join(tools, v, 'lib', 'x64', 'legacy_stdio_definitions.lib')));
-        if (complete) return bat;
-    }
-    return null;
-};
-
-const bat = vcvars();
+const bat = findVcvars();
 const line = `cargo ${full.map(quote).join(' ')}`;
 const options = { cwd: ROOT, stdio: 'inherit' };
 // windowsVerbatimArguments: cmd.exe понимает кавычки по-своему,

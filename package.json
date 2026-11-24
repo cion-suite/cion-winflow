@@ -11,8 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node .claude/scripts/run-cargo.mjs test",
     "check:rust": "node .claude/scripts/run-cargo.mjs fmt --check && node .claude/scripts/run-cargo.mjs clippy --all-targets -- -D warnings",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev"
+    "tauri": "node .claude/scripts/run-vs.mjs tauri",
+    "tauri:dev": "node .claude/scripts/run-vs.mjs tauri dev"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
