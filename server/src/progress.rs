@@ -192,6 +192,20 @@ pub async fn save_progress(
     .execute(&state.pool)
     .await?;
 
+    // Журнал прочитанного: карточка библиотеки показывает read_count,
+    // страница тайтла — отметку у главы. Ключ канонический, как и прогресс.
+    sqlx::query(
+        "INSERT INTO chapter_reads (user_id, title_id, chapter_key, read_at) \
+         VALUES (?, ?, ?, ?) \
+         ON CONFLICT (user_id, title_id, chapter_key) DO UPDATE SET read_at = excluded.read_at",
+    )
+    .bind(user.id)
+    .bind(title_id)
+    .bind(&canonical)
+    .bind(updated_at)
+    .execute(&state.pool)
+    .await?;
+
     Ok(Json(ProgressDto {
         chapter_key: canonical,
         page,

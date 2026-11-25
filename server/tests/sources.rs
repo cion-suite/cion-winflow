@@ -503,6 +503,8 @@ async fn image_proxy_caches_and_cover_allowlist() {
         "source_image_host_not_allowed"
     );
 
+    // Обложка нужна и обычному пользователю для поиска по источникам;
+    // сессия обязательна, роль администратора — нет.
     let user = app.register_extra_user("reader").await;
     let response = app
         .request(with_cookie(
@@ -510,7 +512,13 @@ async fn image_proxy_caches_and_cover_allowlist() {
             &user,
         ))
         .await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(hit_count(&hits, "/cover.jpg"), 1);
+
+    let response = app
+        .request(get("/api/sources/fixture/cover?ref=%2Fcover.jpg"))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

@@ -2,6 +2,7 @@ import { adminApi } from "./admin";
 import { authApi } from "./auth";
 import { catalogApi } from "./catalog";
 import { chaptersApi } from "./chapters";
+import { discoverApi } from "./discover";
 import { libraryApi } from "./library";
 import { progressApi } from "./progress";
 
@@ -11,6 +12,7 @@ export const api = {
   auth: authApi,
   catalog: catalogApi,
   chapters: chaptersApi,
+  discover: discoverApi,
   library: libraryApi,
   progress: progressApi,
 };
@@ -27,15 +29,12 @@ export {
   formValuesToTitleInput,
   titleCoverUrl,
   titleToFormValues,
-  useCatalogQuery,
   useCreateTitleMutation,
   useTitleQuery,
   useUpdateTitleMutation,
   useUploadCoverMutation,
 } from "./catalog";
 export type {
-  CatalogQuery,
-  CatalogResponse,
   ChapterAlias,
   ChapterVariant,
   CoverResponse,
@@ -90,6 +89,19 @@ export type {
   ContentPage,
 } from "./chapters";
 export {
+  discoverApi,
+  sourceCoverUrl,
+  useAddDiscoveredTitleMutation,
+  useDiscoverSearchQuery,
+} from "./discover";
+export type {
+  DiscoverAddInput,
+  DiscoverAddResponse,
+  DiscoverItem,
+  DiscoverSearchResponse,
+  DiscoverSourceError,
+} from "./discover";
+export {
   progressApi,
   progressQueryKey,
   useProgressQuery,
@@ -98,14 +110,25 @@ export {
 export type { Progress, ProgressInput, ProgressResponse } from "./progress";
 export { useErrorText } from "./errors";
 export {
+  useCreateLibraryTabMutation,
+  useDeleteLibraryTabMutation,
   useLibraryQuery,
+  useLibraryTabsQuery,
   useRemoveLibraryMutation,
+  useRenameLibraryTabMutation,
+  useSetTitleTabsMutation,
   useUpsertLibraryMutation,
 } from "./library";
 export type {
+  LibraryCounts,
   LibraryEntry,
   LibraryInput,
   LibraryItem,
   LibraryListResponse,
   LibraryQuery,
+  LibrarySort,
+  LibraryTab,
+  LibraryTabsResponse,
+  StatusCounts,
+  TitleTabsResponse,
 } from "./library";

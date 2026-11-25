@@ -7,7 +7,7 @@ type PaginationProps = {
   onPageChange: (page: number) => void;
 };
 
-/** Кнопки «назад/вперёд» для списков каталога и библиотеки. */
+/** Кнопки «назад/вперёд» для постраничных списков. */
 export function Pagination({ page, pages, onPageChange }: PaginationProps) {
   const t = useT();
   if (pages <= 1) return null;
@@ -20,10 +20,10 @@ export function Pagination({ page, pages, onPageChange }: PaginationProps) {
         disabled={page <= 1}
         onClick={() => onPageChange(Math.max(1, page - 1))}
       >
-        {t("catalog.previous")}
+        {t("library.previous")}
       </Button>
       <span className="text-sm text-muted-foreground">
-        {t("catalog.page", { page, pages })}
+        {t("library.page", { page, pages })}
       </span>
       <Button
         type="button"
@@ -31,7 +31,7 @@ export function Pagination({ page, pages, onPageChange }: PaginationProps) {
         disabled={page >= pages}
         onClick={() => onPageChange(page + 1)}
       >
-        {t("catalog.next")}
+        {t("library.next")}
       </Button>
     </div>
   );

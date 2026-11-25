@@ -40,6 +40,7 @@ pub struct ChapterCandidate {
     pub ordinal_site: i64,
     pub external_url: Option<String>,
     pub embed_url: Option<String>,
+    pub published_at: Option<i64>,
     pub source_entry_id: i64,
     pub source_id: i64,
     pub title_id: i64,
@@ -117,7 +118,7 @@ pub async fn candidates(
                 ch.number_milli, ch.volume, ch.chapter_kind, ch.content_kind, ch.name, \
                 ch.group_name, ch.language, ch.is_locked, ch.availability, \
                 ch.availability_checked_at, ch.page_count, ch.ordinal_site, ch.external_url, \
-                ch.embed_url, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
+                ch.embed_url, ch.published_at, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
                 s.code AS source_code, s.name AS source_name, (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled \
          FROM chapters ch \
          JOIN source_entries e ON e.id = ch.source_entry_id \

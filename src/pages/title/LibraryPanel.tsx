@@ -1,120 +1,141 @@
 import { useState } from "react";
+import { BookmarkIcon, CheckIcon, PlusIcon, Trash2Icon } from "lucide-react";
 
-import {
-  useErrorText,
-  useRemoveLibraryMutation,
-  useUpsertLibraryMutation,
-  type LibraryState,
-} from "@/api";
+import type { LibraryState, LibraryTab } from "@/api";
 import { LIBRARY_STATUSES, type LibraryStatus } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { Button } from "@/ui/shadcn/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/ui/shadcn/dropdown-menu";
 import { Select } from "@/ui/Select";
 
 type LibraryPanelProps = {
-  titleId: number;
   entry: LibraryState | null;
+  tabs: LibraryTab[];
+  pending: boolean;
+  errorText: string | null;
+  onAdd: () => void;
+  onStatus: (status: LibraryStatus) => void;
+  onToggleTab: (tabId: number) => void;
+  onRemove: () => void;
 };
 
-function parseScore(value: string): number | null {
-  return value === "" ? null : Number(value);
-}
-
-/** Статус и оценка применяются сразу: отдельной кнопки «сохранить» нет. */
-export function LibraryPanel({ titleId, entry }: LibraryPanelProps) {
+/**
+ * Статус, закладки и удаление живут под обложкой. Оценка — рядом с рейтингом
+ * источника: так две шкалы не путаются.
+ */
+export function LibraryPanel({
+  entry,
+  tabs,
+  pending,
+  errorText,
+  onAdd,
+  onStatus,
+  onToggleTab,
+  onRemove,
+}: LibraryPanelProps) {
   const t = useT();
-  const [status, setStatus] = useState<LibraryStatus>(entry?.status ?? "planned");
-  const [score, setScore] = useState(entry?.score === null || entry?.score === undefined
-    ? ""
-    : String(entry.score));
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
-  const upsert = useUpsertLibraryMutation(titleId);
-  const remove = useRemoveLibraryMutation(titleId);
-  const errorText = useErrorText(upsert.error ?? remove.error);
-  const pending = upsert.isPending || remove.isPending;
-
-  function revertToEntry(): void {
-    setStatus(entry?.status ?? "planned");
-    setScore(
-      entry?.score === null || entry?.score === undefined ? "" : String(entry.score),
-    );
-  }
-
-  function save(nextStatus: LibraryStatus, nextScore: string): void {
-    // Ошибка прошлого удаления не относится к текущему действию
-    remove.reset();
-    upsert.mutate(
-      { status: nextStatus, score: parseScore(nextScore) },
-      { onError: revertToEntry },
+  if (!entry) {
+    return (
+      <div className="flex flex-col gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          disabled={pending}
+          onClick={onAdd}
+        >
+          <PlusIcon data-icon="inline-start" />
+          {t("title.addToLibrary")}
+        </Button>
+        {errorText && (
+          <p role="alert" className="text-sm text-destructive">
+            {errorText}
+          </p>
+        )}
+      </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs text-muted-foreground">{t("library.status")}</span>
-          <Select
-            value={status}
-            disabled={pending}
-            className="w-44"
-            onChange={(event) => {
-              const next = event.target.value as LibraryStatus;
-              setStatus(next);
-              if (entry) save(next, score);
-            }}
-          >
-            {LIBRARY_STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {t(`library.statuses.${value}`)}
-              </option>
-            ))}
-          </Select>
-        </label>
+    <div className="flex flex-col gap-2">
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs text-muted-foreground">{t("library.status")}</span>
+        <Select
+          value={entry.status}
+          disabled={pending}
+          aria-label={t("library.status")}
+          onChange={(event) => onStatus(event.target.value as LibraryStatus)}
+        >
+          {LIBRARY_STATUSES.map((status) => (
+            <option key={status} value={status}>
+              {t(`library.statuses.${status}`)}
+            </option>
+          ))}
+        </Select>
+      </label>
 
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs text-muted-foreground">{t("library.score")}</span>
-          <Select
-            value={score}
-            disabled={pending}
-            className="w-28"
-            onChange={(event) => {
-              const next = event.target.value;
-              setScore(next);
-              if (entry) save(status, next);
-            }}
+      {tabs.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={<Button type="button" variant="outline" className="w-full" />}
           >
-            <option value="">{t("library.noScore")}</option>
-            {Array.from({ length: 10 }, (_, index) => String(index + 1)).map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </Select>
-        </label>
+            <BookmarkIcon data-icon="inline-start" />
+            {t("library.customTabs")}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-(--anchor-width)">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t("library.customTabs")}</DropdownMenuLabel>
+              {tabs.map((tab) => {
+                const selected = entry.tab_ids.includes(tab.id);
+                return (
+                  <DropdownMenuItem
+                    key={tab.id}
+                    disabled={pending}
+                    onClick={() => onToggleTab(tab.id)}
+                  >
+                    {selected ? (
+                      <CheckIcon aria-hidden />
+                    ) : (
+                      <span className="size-4" aria-hidden />
+                    )}
+                    <span className="truncate">{tab.name}</span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
 
-        {entry ? (
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={pending}
-            onClick={() => {
-              upsert.reset();
-              remove.mutate();
-            }}
-          >
-            {t("library.remove")}
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            disabled={pending}
-            onClick={() => save(status, score)}
-          >
-            {t("title.addToLibrary")}
-          </Button>
-        )}
-      </div>
+      {confirmingRemove ? (
+        <Button
+          type="button"
+          variant="destructive"
+          disabled={pending}
+          onClick={onRemove}
+        >
+          <Trash2Icon data-icon="inline-start" />
+          {t("library.confirmRemove")}
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={pending}
+          onClick={() => setConfirmingRemove(true)}
+        >
+          {t("library.remove")}
+        </Button>
+      )}
 
       {errorText && (
         <p role="alert" className="text-sm text-destructive">

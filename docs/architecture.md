@@ -9,9 +9,9 @@
 | Слой | Что лежит | Сейчас в приложении |
 |---|---|---|
 | `app/` | запуск: `index.tsx`, провайдеры, маршрутизатор, глобальные стили | `AppProvider.tsx`, `AppRouter.tsx`, `styles/index.css` |
-| `shell/` | оболочка окна: то, что не принадлежит ни одному экрану | `layout/`, `navbar/` (шапка, язык, тема), `sidebar/` |
-| `pages/<имя>/` | экраны, по папке на экран | `catalog/`, `title/`, `library/`, `admin/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
-| `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `progress.ts`, `admin.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
+| `shell/` | оболочка окна: то, что не принадлежит ни одному экрану | `layout/`, `navbar/` (шапка, поиск по библиотеке, меню пользователя, язык, тема), `nav.ts` |
+| `pages/<имя>/` | экраны, по папке на экран | `title/`, `library/`, `admin/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
+| `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `discover.ts`, `progress.ts`, `admin.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
 | `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `Pagination.tsx`, `Select.tsx`, `Textarea.tsx` |
 | `lib/` | утилиты, хуки и типы без UI | `utils.ts`, `settings.ts`, `routes.ts`, `catalog.ts`, `apiErrors.ts`, `i18n/` |
 
@@ -39,18 +39,11 @@
 
 ## Экраны и меню
 
-Экран — `pages/<имя>/index.tsx`, рядом лежат его компоненты. Файл называется `index`, а компонент — по экрану (`export function CatalogPage`), импорт выглядит так: `@/pages/catalog`. Импортировать экран может только `app`, экраны друг друга не импортируют.
+Экран — `pages/<имя>/index.tsx`, рядом лежат его компоненты. Файл называется `index`, а компонент — по экрану (`export function LibraryPage`), импорт выглядит так: `@/pages/library`. Импортировать экран может только `app`, экраны друг друга не импортируют.
 
-Пункты меню и их порядок — единая таблица `shell/sidebar/sections.ts`. Она же задаёт `SectionPath`, а роутер (`app/AppRouter.tsx`) требует экран для каждого пути кроме корневого: забытый маршрут не скомпилируется. Корневой маршрут — `index` (`/`, каталог), поэтому в таблице у него путь `/`.
+Сайдбара нет: корневой экран `/` — библиотека. Ссылки шапки и меню пользователя задаёт таблица `shell/nav.ts` (`MAIN_NAV`, `MENU_NAV`); администратор видит пункт «Админка». Статические маршруты `PAGES` перечислены в `AppRouter` явно, `/library` перенаправляет на `/`.
 
-| Группа | Заголовок | Экраны |
-|---|---|---|
-| `overview` | Обзор | Каталог (`/`), Библиотека (`/library`), Админка (`/admin`, только admin) |
-| `footer` | без заголовка | Что нового, Настройки |
-
-`SidebarGroupLabel` сам скрывает заголовок, когда сайдбар свёрнут до иконок. Свернуть сайдбар можно кнопкой в шапке или `Ctrl+B`; состояние сохраняется в настройках.
-
-Параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) не входят в `SectionPath` и `sectionForPath`: они перечислены отдельным списком `PARAM_ROUTES` в `AppRouter`. Меню остаётся статическим, активный пункт ищется по префиксу пути, а заголовок в шапке — через `pageTitleKey`. Ссылки на эти экраны собирай через `src/lib/routes.ts`: `chapterKey` содержит `:` и `.`, поэтому кодируется `encodeURIComponent`.
+Параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены отдельным списком `PARAM_ROUTES` в `AppRouter`. Ссылки на них собирай через `src/lib/routes.ts`: `chapterKey` содержит `:` и `.`, поэтому кодируется `encodeURIComponent`.
 
 ## Авторизация
 
@@ -65,12 +58,14 @@
 
 Снаружи `src/api` импортируется только через `@/api` (хуки, провайдер) и `@/api/client` (`request`, `ApiError`) — это проверяет `eslint-plugin-boundaries`. Ошибки с известным `code` переводятся в i18n через `lib/apiErrors.ts` и хук `useErrorText` (`api/errors.ts`); незнакомый код показывается текстом сервера.
 
-## Каталог и библиотека
+## Библиотека, поиск и тайтл
 
-- **Каталог** (`pages/catalog/`) — `GET /api/catalog?q=&kind=&page=&page_size=`, ответ `{ items, total, page, page_size }`. `q` ищется по колонке `titles.name_lower` (Unicode-lowercase копия названия: SQLite `lower()` понимает только ASCII), `%` и `_` экранируются; `kind` — `manga|anime|book`. Администратор видит кнопку «Добавить тайтл» с формой `POST /api/titles`.
-- **Тайтл** (`pages/title/`) — `GET /api/titles/{id}` отдаёт `{ title, library, chapters, sources, aliases }`, где `library` — запись текущего пользователя или `null`, `chapters` — сгруппированные по каноническому `chapter_key` главы с выбранным доступным вариантом и всеми вариантами групп, `sources` — статистика источников, `aliases` — ручные связи ключей. Запрос читает только БД и не ходит в источники. Администратор может править тайтл (`PUT /api/titles/{id}`, полная замена полей), загружать обложку, привязывать/отвязывать источники, назначать primary, обновлять главы и связывать alias-ключи (`AdminSourcePanel`/`AliasesPanel`). Сменить `kind` при привязанных `source_entries` нельзя — 409 `kind_locked`.
-- **Админка** (`pages/admin/`) — `GET /api/sources` (состояние адаптеров, настройка `base_url`, enable/disable, probe) и приоритеты `GET/PUT /api/admin/source-priorities` по `(kind, lang)`; порядок меняется кнопками, сохранение заменяет список целиком.
-- **Библиотека** (`pages/library/`) — `GET /api/library?page=&page_size=` возвращает `{ items, total, page, page_size }` с краткой карточкой тайтла; `PUT /api/library/{title_id}` (`{ status, score }`) вставляет или обновляет запись, `DELETE` убирает. Статусы: `planned|in_progress|completed|on_hold|dropped`, оценка — 1..10 или `null`. Библиотека у каждого пользователя своя.
+- **Библиотека** (`pages/library/`) — корневой экран. `GET /api/library?q=&status=&favorite=&tab_id=&sort=&page=&page_size=` возвращает `{ items, total, page, page_size, counts }`; у элемента есть `favorite`, `read_count`, `chapter_count`, `tab_ids` и краткая карточка тайтла. `counts` — общие счётчики для вкладок (все, статусы, избранное). `PUT /api/library/{title_id}` (`{ status, score, favorite }`) вставляет или обновляет запись, `DELETE` убирает. Статусы: `planned|in_progress|completed|on_hold|dropped|not_interested`, оценка — 1..10 или `null`, `favorite` независим от статуса. Сортировка — `updated|added|title|score`.
+- **Свои закладки** — не больше трёх на пользователя: `GET/POST /api/library/tabs`, `PUT/DELETE /api/library/tabs/{id}`, `PUT /api/library/{title_id}/tabs` (`{ tab_ids }` заменяет состав). Закладка содержит только тайтлы из библиотеки: составной FK на `library` чистит её при удалении записи. `GET /api/titles/{id}` отдаёт `library.tab_ids` для формы тайтла.
+- **Добавление тайтла** — диалог на экране библиотеки: `GET /api/discover/search?q=&kind=` ищет по всем включённым источникам (ошибка одного источника возвращается в `errors`, а не ломает выдачу), `POST /api/discover/add` (`{ code, external_id, kind }`) импортирует тайтл на сервер, если его там нет, и добавляет запись в библиотеку со статусом `planned`. Доступно любому пользователю с сессией; маршрут `add` под rate limit, потому что ходит в чужую сеть. `in_library` и `title_id` в выдаче позволяют показать «Уже в библиотеке».
+- **Поиск в шапке** (`shell/navbar/LibrarySearch.tsx`) — тот же `GET /api/library` с `q` и небольшим `page_size`; ищет только по своей библиотеке.
+- **Тайтл** (`pages/title/`) — `GET /api/titles/{id}` отдаёт `{ title, library, chapters, sources, aliases, read_keys }`. `library` — `{ status, score, favorite, tab_ids }` текущего пользователя или `null`; `chapters` сгруппированы по каноническому `chapter_key` и содержат выбранный вариант, `published_at` и `source_enabled`; `read_keys` — прочитанные ключи. Запрос читает только БД. Под обложкой — «Читать» (продолжает с прогресса или с первой доступной главы), «Любимое», статус, свои закладки и удаление. Вкладки: «Главы» (первая) и «Главная». Недоступные главы (`locked`/`missing`) в списке скрыты, остальные фильтруются и сортируются по номеру/тому; отметка глаза показывает, прочитана ли глава. На «Главной» — описание, метаданные, а у администратора ещё правка тайтла, источники, `AdminSourcePanel` и `AliasesPanel`.
+- **Админка** (`pages/admin/`) — `GET /api/sources` (состояние адаптеров, `base_url`, enable/disable, probe), приоритеты `GET/PUT /api/admin/source-priorities` по `(kind, lang)`, импорт из конкретного источника и ручное создание тайтла (`POST /api/titles` с формой `TitleForm`). После создания админ переходит на карточку тайтла.
 - **Обложки.** `POST /api/titles/{id}/cover` (multipart, поле `file`, до 5 МиБ, тело до 6 МиБ) принимает JPEG/PNG/WebP/GIF, декодирует с лимитами в `spawn_blocking`, ресайзит в `full` (1200×1800) и `thumb` (320×480) и сохраняет WebP в `DATA_DIR/covers/{id}/`. `GET /api/titles/{id}/cover?size=thumb|full` отдаёт файл с `ETag` и `Cache-Control: private, max-age=86400`; UI добавляет `v={updated_at}` как cache-buster. Оригинал не сохраняется и не отдаётся.
 - **Типы и статусы** общие для формы и API — строковые константы в `lib/catalog.ts`. Форма тайтла (`ui/TitleForm.tsx`) не знает об API: получает значения и колбэк.
 
@@ -84,7 +79,7 @@
 
 ## Настройки
 
-`lib/settings.ts` хранит пары ключ-значение в `localStorage` под ключом `cion-reader:settings`. Ключи: `locale` и `sidebarOpen`. Серверные настройки появятся вместе с профилем пользователя. Битый JSON логируется, а не молча заменяется значениями по умолчанию.
+`lib/settings.ts` хранит пары ключ-значение в `localStorage` под ключом `cion-reader:settings`. Ключ сейчас один — `locale`. Серверные настройки появятся вместе с профилем пользователя. Битый JSON логируется, а не молча заменяется значениями по умолчанию.
 
 Порядок запуска в `app/index.tsx` важен: `initSettings()` читает сохранённые значения, `initI18n()` берёт из них язык, и только потом приложение рендерится — иначе интерфейс мигал бы языком по умолчанию. Компоненты читают настройку через `useSetting(key)` и пишут через `settings.set(key, value)`.
 
@@ -112,9 +107,10 @@ pages/<экран>/index.tsx → api/<область>.ts → api/client.ts → /
 |---|---|
 | `api/client.ts` | `request<T>(path, init)`: путь относительно префикса API; `apiUrl(path)` для `<img src>` и ссылок; `jsonMutation(body, method)` для JSON-мутаций; `ApiError` с `status` и `code` |
 | `api/auth.tsx` | `AuthProvider`, `useAuth`, хуки входа/регистрации/выхода |
-| `api/catalog.ts` | Каталог, тайтл с главами и источниками, создание/правка, загрузка обложки, `titleCoverUrl` |
+| `api/catalog.ts` | Тайтл с главами и источниками, создание/правка, загрузка обложки, `titleCoverUrl` |
 | `api/chapters.ts` | `useChapterContentQuery`, `pageImageUrl`, типы страниц и fallback |
-| `api/library.ts` | Библиотека пользователя: список, upsert, удаление |
+| `api/library.ts` | Библиотека: список с фильтрами и счётчиками, upsert, удаление, свои закладки |
+| `api/discover.ts` | Поиск по источникам и ленивый импорт (`search`, `add`), `sourceCoverUrl` |
 | `api/progress.ts` | `useProgressQuery`, `useSaveProgressMutation`, `progressApi.flush` (keepalive) |
 | `api/errors.ts` | `useErrorText`: `ApiError.code` -> ключ i18n (`lib/apiErrors.ts`) |
 | `api/<область>.ts` | Хуки области: `useQuery` для чтения, `useMutation` для изменений |
@@ -146,16 +142,20 @@ server/
     0002_catalog.sql  sources, titles, source_entries, chapters, aliases,
                       pages, chapter_texts, library, progress, chapter_reads
     0003_source_entry_per_source.sql  один source_entry на (title_id, source_id)
+    0004_library_tabs.sql  статус not_interested, favorite, library_tabs,
+                           library_tab_items
   src/
     main.rs          конфиг, БД, DataDir, bootstrap админа, tracing, запуск
-    app.rs           Router: health, auth, catalog, titles, library, rate limit, слои
+    app.rs           Router: health, auth, catalog, titles, library, discover,
+                     rate limit, слои
     auth/            handlers, service, password, session, middleware, limiter
     catalog/         service (каталог, тайтл), handlers, cover; selection (приоритеты
                      и fallback), chapters (группировка глав), content (выдача главы),
                      links (attach/detach, primary, chapter_aliases)
     images/          cache (диск, single-flight), handlers (прокси страниц и обложек)
-    library/         service (библиотека пользователя), handlers
-    progress.rs      чтение и запись прогресса по chapter_key
+    library/         service (библиотека пользователя, свои закладки), handlers
+    discover/        поиск по всем источникам и ленивый импорт для библиотеки
+    progress.rs      чтение и запись прогресса по chapter_key + chapter_reads
     source_admin/    service (реестр, конфиг, поиск, импорт, probe, refresh),
                      priorities (kind/lang), handlers
     sources/         dto, descriptor, config, error, http (SSRF-клиент, circuit breaker,
@@ -172,6 +172,8 @@ server/
   tests/auth.rs      вход, инвайты, сессии, rate limit
   tests/catalog.rs   тайтлы, поиск, пагинация, обложки, права admin
   tests/library.rs   библиотека, оценки, изоляция пользователей
+  tests/library_tabs.rs  фильтры, счётчики, избранное, свои закладки
+  tests/discover.rs  поиск по источникам, ленивый импорт, отметка прочитанного
   tests/sources.rs   источники, импорт, главы, прогресс, кэш картинок, fallback
   tests/multi_source.rs  два источника, приоритеты, preferred, alias, группы, attach/detach
   tests/live_remanga.rs  live-проверка API Remanga (ignored, `pnpm test -- --ignored`)
@@ -181,13 +183,15 @@ server/
 - `GET /api/health` отдаёт `{ "status": "ok", "version": "..." }` без сессии и проверяет БД (`SELECT 1`); ошибка БД — 500.
 - Публичные пути перечислены явно: `/api/health` и `/api/auth/*`. Остальной `/api` требует cookie `sid`: без сессии — JSON 401, неизвестный путь с сессией — JSON 404.
 - Auth: `POST /api/auth/register` (по инвайту, сразу создаёт сессию), `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/me`; админские `GET/POST /api/admin/invites`.
-- Каталог: `GET /api/catalog` (поиск по `name_lower`, фильтр `kind`, пагинация), `GET /api/titles/{id}`, админские `POST /api/titles`, `PUT /api/titles/{id}`, `POST /api/titles/{id}/cover`, `GET /api/titles/{id}/cover?size=thumb|full`.
-- Библиотека: `GET /api/library?page=&page_size=` (`{ items, total, page, page_size }`), `PUT /api/library/{title_id}` (`{ status, score }`), `DELETE /api/library/{title_id}` — всегда для текущего пользователя.
+- Каталог: `GET /api/catalog` (поиск по `name_lower`, фильтр `kind`, пагинация) остаётся серверным API, но отдельного экрана в UI нет; `GET /api/titles/{id}` отдаёт `read_keys`; админские `POST /api/titles`, `PUT /api/titles/{id}`, `POST /api/titles/{id}/cover`, `GET /api/titles/{id}/cover?size=thumb|full`.
+- Библиотека: `GET /api/library?q=&status=&favorite=&tab_id=&sort=&page=&page_size=` (`{ items, total, page, page_size, counts }`), `PUT /api/library/{title_id}` (`{ status, score, favorite }`), `DELETE /api/library/{title_id}` — всегда для текущего пользователя. Статус `not_interested` и `favorite` независимы. Свои закладки: `GET/POST /api/library/tabs`, `PUT/DELETE /api/library/tabs/{id}`, `PUT /api/library/{title_id}/tabs`; не больше трёх, имя уникально у пользователя.
+- Поиск и импорт для пользователя: `GET /api/discover/search?q=&kind=` собирает выдачу включённых источников с поиском и главами (ошибки — в `errors`), `POST /api/discover/add` импортирует найденный тайтл при необходимости и добавляет его в библиотеку (`planned`). Импорт идёт тем же кодом, что админский, но без роли admin; маршрут `add` под rate limit.
+- `PUT /api/progress/{title_id}` дополнительно пишет `chapter_reads` по каноническому ключу: карточка библиотеки показывает `read_count`, страница тайтла — отметку прочитанного.
 - Пагинация каталога и библиотеки — общая `pagination::resolve`: `page >= 1`, `page_size` по умолчанию 50, потолок 200; `page=0` — 400 `validation`.
 - Обложки: multipart-поле `file` до 5 МиБ, только JPEG/PNG/WebP/GIF, декодирование с `image::Limits` в `spawn_blocking` с семафором; результат — два WebP-файла в `DATA_DIR/covers/{id}/`, запись атомарная (tmp + rename). Оригинал не отдаётся; ответ с `ETag`, `nosniff`, `Cache-Control: private`.
 - Пароли — Argon2id в `spawn_blocking` с семафором. Токен сессии — 32 случайных байта, в БД только SHA-256; idle 30 дней, абсолютный срок 90. Cookie `sid`: `HttpOnly`, `SameSite=Lax`, `Secure` по `COOKIE_SECURE`, `Max-Age` 30 дней.
 - Мутации (`POST`/`PUT`/`PATCH`/`DELETE`) требуют разрешённый `Origin`; `Sec-Fetch-Site: cross-site` отклоняется. В dev разрешены localhost/127.0.0.1 на `:1420` и `:3000`; в release без `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS` мутации запрещены.
-- Rate limit: IP — `tower_governor` (login — burst 10, пополнение раз в 2 с; register — burst 5, раз в 10 с), username — счётчик в памяти (10 попыток за 15 минут). `X-Forwarded-For` читается только от адресов из `TRUSTED_PROXIES`.
+- Rate limit: IP — `tower_governor` (login — burst 10, пополнение раз в 2 с; register — burst 5, раз в 10 с; discover add — burst 6, раз в 4 с), username — счётчик в памяти (10 попыток за 15 минут). `X-Forwarded-For` читается только от адресов из `TRUSTED_PROXIES`.
 - Первый администратор — `ADMIN_USERNAME`/`ADMIN_PASSWORD` при пустой таблице `users`; повторно не создаётся.
 - БД: `DATABASE_URL` (по умолчанию `sqlite://data/cion.db`), WAL, `foreign_keys=ON`, `busy_timeout=5s`, `create_if_missing`; миграции — `sqlx::migrate!` при старте. Время — unix seconds.
 - `index.html` получают только навигационные запросы: `Sec-Fetch-Mode: navigate` или `Accept: text/html`. Путь вида `/reader/1/c12.5` не считается файлом по расширению и работает.
@@ -198,7 +202,7 @@ server/
 - Приоритеты (admin): `GET/PUT /api/admin/source-priorities?kind=&lang=`; ранг 0-based, список заменяется целиком, после сохранения preferred пересчитывается у всех тайтлов типа. Набор языка тайтла полностью заменяет `*`. Effective enabled = `enabled AND base_url IS NOT NULL AND config_error IS NULL`; такие источники не участвуют в preferred, статистике страницы и выбранном варианте. Один `source_entry` на `(title_id, source_id)`.
 - Импорт: адаптер заново получает метаданные по `external_id`, затем главы; запись — upsert в транзакции. `chapter_key` фиксируется при первом импорте (расхождение — в `source_entries.last_error`). После импорта считаются `chapter_count`/`available_count`/`locked_count`/`missing_count` и `titles.preferred_source_id`.
 - Выдача главы: `GET /api/titles/{title_id}/chapters/{chapter_key}/content` сам выбирает вариант и делает fallback; `locked`/`missing` кешируются по TTL (6/24 ч), временные ошибки не меняют доступность. `GET /api/chapters/{id}/content` — прямой вариант без fallback.
-- Картинки: `GET /api/pages/{id}/image` и `GET /api/sources/{code}/cover?ref=`; ключ кэша страницы — `(source_entry_id, external chapter id, idx)`, запись атомарная, одновременные запросы дедуплицируются. SQLite-статусы `401/403/410` запускают до двух перезапросов списка страниц; затем глава помечается `locked`.
+- Картинки: `GET /api/pages/{id}/image` и `GET /api/sources/{code}/cover?ref=`; обложка из выдачи источника доступна любому пользователю с сессией (нужна диалогу добавления), не только админу. Ключ кэша страницы — `(source_entry_id, external chapter id, idx)`, запись атомарная, одновременные запросы дедуплицируются. SQLite-статусы `401/403/410` запускают до двух перезапросов списка страниц; затем глава помечается `locked`.
 - SSRF: общий DNS-резолвер отбрасывает private/loopback/link-local/CGNAT/ULA/IPv4-mapped; редиректы у HTTP-клиентов выключены, порты ограничены (loopback — только тестам). URL источника берётся из реестра, а не от клиента; `external_id` валидируется. `SSRF_ALLOW_LOOPBACK` (по умолчанию `false`) нужен только интеграционным тестам с локальным сервером картинок.
 - Конфиг из env: `BIND_ADDR` (по умолчанию `127.0.0.1:3000`), `STATIC_DIR` (`dist`), `DATABASE_URL`, `DATA_DIR` (`data`), `REGISTRATION_MODE` (`invite|closed`), `PUBLIC_ORIGIN`, `ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `SSRF_ALLOW_LOOPBACK` (только тесты), `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG`. В dev `.env` читает `dotenvy`, пример — `.env.example`.
 - Статика читается с диска при каждом запросе: обновление `dist/` не требует перезапуска сервера. `rust-embed` не используем.

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, State},
+    extract::State,
     http::{
         HeaderMap, HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_NONE_MATCH},
@@ -9,7 +9,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::{
-    auth::session::{CurrentUser, now_unix},
+    auth::session::now_unix,
     catalog::{content::replace_pages, selection},
     error::AppError,
     extract::{ApiPath, ApiQuery},
@@ -81,13 +81,12 @@ pub async fn page_image(
 
 pub async fn source_cover(
     State(state): State<AppState>,
-    Extension(user): Extension<CurrentUser>,
     ApiPath(code): ApiPath<String>,
     ApiQuery(params): ApiQuery<CoverParams>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    user.require_admin()?;
-
+    // Обложки нужны и поиску по источникам, а не только админке: источник
+    // и ref всё равно приходят из allowlist адаптера, а не от клиента напрямую.
     let reference = params
         .reference
         .as_deref()
@@ -100,7 +99,8 @@ pub async fn source_cover(
         registry.runtime(&code)
     }
     .ok_or_else(|| AppError::not_found("source_not_found", "source is not registered"))?;
-    // Обложку можно посмотреть до включения источника: это админский preview
+    // Обложку можно посмотреть и у выключенного источника: поиск показывает
+    // только включённые, но выдача в открытой вкладке не должна ломаться.
     let adapter = runtime.adapter_unchecked()?.clone();
 
     let url = adapter.resolve_cover(reference).map_err(map_image_error)?;

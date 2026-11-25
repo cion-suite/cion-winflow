@@ -1,65 +1,57 @@
-import { LogOutIcon } from "lucide-react";
-import { useLocation, useNavigate } from "react-router";
+import { Link, useLocation } from "react-router";
 
-import { useAuth, useLogoutMutation } from "@/api";
+import { useAuth } from "@/api";
 import { useT } from "@/lib/i18n";
-import { pageTitleKey } from "@/shell/sidebar/sections";
-import { Button } from "@/ui/shadcn/button";
+import { cn } from "@/lib/utils";
+import { isActivePath, MAIN_NAV } from "@/shell/nav";
+import { buttonVariants } from "@/ui/shadcn/button";
+import { LibrarySearch } from "./LibrarySearch";
 import { LocaleMenu } from "./LocaleMenu";
-import { SidebarToggle } from "./SidebarToggle";
 import { ThemeToggle } from "./ThemeToggle";
-
-function PageTitle() {
-  const t = useT();
-  const { pathname } = useLocation();
-
-  return (
-    <span className="truncate text-sm font-medium">{t(pageTitleKey(pathname))}</span>
-  );
-}
-
-function UserMenu() {
-  const t = useT();
-  const { user } = useAuth();
-  const logout = useLogoutMutation();
-  const navigate = useNavigate();
-
-  // RequireAuth не рендерит Layout без user; guard сужает тип из useAuth
-  if (!user) return null;
-
-  return (
-    <div className="flex items-center gap-1">
-      <span className="hidden max-w-32 truncate text-sm text-muted-foreground sm:inline">
-        {user.username}
-      </span>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        aria-label={t("auth.logout")}
-        title={t("auth.logout")}
-        disabled={logout.isPending}
-        onClick={() =>
-          logout.mutate(undefined, {
-            onSuccess: () => void navigate("/login", { replace: true }),
-          })
-        }
-      >
-        <LogOutIcon />
-      </Button>
-    </div>
-  );
-}
+import { UserMenu } from "./UserMenu";
 
 export function Navbar() {
+  const t = useT();
+  const { pathname } = useLocation();
+  const { user } = useAuth();
+  const items = MAIN_NAV.filter(
+    (item) => !item.adminOnly || user?.role === "admin",
+  );
+
   return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-      <SidebarToggle />
-      <PageTitle />
-      <div className="ml-auto flex items-center gap-1">
-        <UserMenu />
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
+      <Link
+        to="/"
+        className="font-heading text-sm font-semibold tracking-tight whitespace-nowrap"
+      >
+        cion-reader
+      </Link>
+
+      <nav className="hidden items-center gap-1 md:flex">
+        {items.map((item) => (
+          <Link
+            key={item.path}
+            to={item.path}
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "sm" }),
+              isActivePath(pathname, item.path) && "bg-muted text-foreground",
+            )}
+          >
+            {t(item.i18nKey)}
+          </Link>
+        ))}
+      </nav>
+
+      <div className="flex min-w-0 flex-1 justify-center px-2">
+        <div className="w-full max-w-md">
+          <LibrarySearch />
+        </div>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1">
         <LocaleMenu />
         <ThemeToggle />
+        <UserMenu />
       </div>
     </header>
   );

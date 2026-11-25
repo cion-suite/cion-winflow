@@ -8,11 +8,10 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from "./i18n/
  * известен i18n сразу.
  */
 
-export type SettingKey = "locale" | "sidebarOpen";
+export type SettingKey = "locale";
 
 type SettingsMap = {
   locale: SupportedLocale;
-  sidebarOpen: boolean;
 };
 
 const BROWSER_KEY = "cion-reader:settings";
@@ -25,7 +24,6 @@ function initialLocale(): SupportedLocale {
 
 const DEFAULTS: SettingsMap = {
   locale: initialLocale(),
-  sidebarOpen: true,
 };
 
 const values: SettingsMap = { ...DEFAULTS };
@@ -34,7 +32,6 @@ const listeners = new Map<SettingKey, Set<() => void>>();
 const isValid = {
   locale: (value: unknown): value is SupportedLocale =>
     typeof value === "string" && SUPPORTED_LOCALES.some((code) => code === value),
-  sidebarOpen: (value: unknown): value is boolean => typeof value === "boolean",
 };
 
 function readBrowserSettings(): unknown {
@@ -76,7 +73,6 @@ export function initSettings(): void {
 
   const record = saved as Record<string, unknown>;
   if (isValid.locale(record.locale)) values.locale = record.locale;
-  if (isValid.sidebarOpen(record.sidebarOpen)) values.sidebarOpen = record.sidebarOpen;
 }
 
 export const settings = {

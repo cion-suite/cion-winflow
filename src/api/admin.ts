@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { MediaKind, TitleStatus } from "@/lib/catalog";
 import { jsonMutation, request } from "./client";
-import { CATALOG_QUERY_KEY, titleQueryKey, type ChapterAlias } from "./catalog";
+import { titleQueryKey, type ChapterAlias } from "./catalog";
 import { progressQueryKey } from "./progress";
 
 export type SourceState = {
@@ -190,7 +190,6 @@ export function useToggleSourceMutation() {
       void queryClient.invalidateQueries({ queryKey: SOURCE_PRIORITIES_QUERY_KEY });
       // Выключение меняет preferred source у тайтлов
       void queryClient.invalidateQueries({ queryKey: ["title"] });
-      void queryClient.invalidateQueries({ queryKey: CATALOG_QUERY_KEY });
     },
   });
 }
@@ -231,7 +230,6 @@ export function useSaveSourcePrioritiesMutation() {
 
 function invalidateTitle(queryClient: ReturnType<typeof useQueryClient>, titleId: number): void {
   void queryClient.invalidateQueries({ queryKey: titleQueryKey(titleId) });
-  void queryClient.invalidateQueries({ queryKey: CATALOG_QUERY_KEY });
   // Связи и доступность меняют выбранный вариант и canonical-ключ прогресса.
   void queryClient.invalidateQueries({ queryKey: ["chapter-content", titleId] });
   void queryClient.invalidateQueries({ queryKey: progressQueryKey(titleId) });
@@ -249,7 +247,7 @@ export function useImportSourceMutation() {
       externalId: string;
       kind: MediaKind;
     }) => adminApi.importTitle(code, externalId, kind),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: CATALOG_QUERY_KEY }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["title"] }),
   });
 }
 

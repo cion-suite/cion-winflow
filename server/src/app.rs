@@ -13,7 +13,7 @@ use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 
 use crate::{
     auth::{self, limiter::ClientIpKeyExtractor},
-    catalog, error,
+    catalog, discover, error,
     error::AppError,
     images, library, progress, source_admin,
     state::AppState,
@@ -52,6 +52,14 @@ pub fn router(state: AppState) -> Router {
         state.config.trusted_proxies.clone(),
         5,
         10,
+    );
+    // Ленивый импорт ходит в чужую сеть и пишет сотни строк: ограничиваем,
+    // чтобы один клиент не выкачал источники целиком.
+    let discover_add = with_rate_limit(
+        post(discover::handlers::add),
+        state.config.trusted_proxies.clone(),
+        6,
+        4,
     );
 
     let api = Router::new()
@@ -108,9 +116,23 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/library", get(library::handlers::list_library))
         .route(
+            "/library/tabs",
+            get(library::handlers::list_tabs).post(library::handlers::create_tab),
+        )
+        .route(
+            "/library/tabs/{id}",
+            put(library::handlers::rename_tab).delete(library::handlers::delete_tab),
+        )
+        .route(
+            "/library/{title_id}/tabs",
+            put(library::handlers::set_title_tabs),
+        )
+        .route(
             "/library/{title_id}",
             put(library::handlers::upsert_library).delete(library::handlers::remove_library),
         )
+        .route("/discover/search", get(discover::handlers::search))
+        .route("/discover/add", discover_add)
         .route(
             "/progress/{title_id}",
             get(progress::get_progress).put(progress::save_progress),

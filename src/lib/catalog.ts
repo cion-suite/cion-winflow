@@ -18,6 +18,7 @@ export const LIBRARY_STATUSES = [
   "completed",
   "on_hold",
   "dropped",
+  "not_interested",
 ] as const;
 export type LibraryStatus = (typeof LIBRARY_STATUSES)[number];
 

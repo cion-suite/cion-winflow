@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   joinList,
@@ -37,6 +37,8 @@ export type Title = TitleSummary & {
 export type LibraryState = {
   status: LibraryStatus;
   score: number | null;
+  favorite: boolean;
+  tab_ids: number[];
 };
 
 export type ChapterVariant = {
@@ -52,6 +54,7 @@ export type ChapterVariant = {
   is_locked: boolean;
   content_kind: ContentKind | null;
   page_count: number | null;
+  source_enabled: boolean;
 };
 
 export type TitleChapter = {
@@ -65,6 +68,7 @@ export type TitleChapter = {
   page_count: number | null;
   availability: Availability;
   is_locked: boolean;
+  published_at: number | null;
   selected_chapter_id: number;
   variants: ChapterVariant[];
 };
@@ -96,6 +100,7 @@ export type TitleResponse = {
   chapters: TitleChapter[];
   sources: TitleSource[];
   aliases: ChapterAlias[];
+  read_keys: string[];
 };
 
 export type TitlePayload = {
@@ -105,20 +110,6 @@ export type TitlePayload = {
 export type CoverResponse = {
   has_cover: boolean;
   updated_at: number;
-};
-
-export type CatalogResponse = {
-  items: TitleSummary[];
-  total: number;
-  page: number;
-  page_size: number;
-};
-
-export type CatalogQuery = {
-  q?: string;
-  kind?: MediaKind;
-  page?: number;
-  pageSize?: number;
 };
 
 /** Полная замена: PUT присылает все поля, отсутствующие — пустые. */
@@ -135,19 +126,6 @@ export type TitleInput = {
   rating: number | null;
 };
 
-export const CATALOG_QUERY_KEY = ["catalog"] as const;
-
-function catalogPath(query: CatalogQuery): string {
-  const params = new URLSearchParams();
-  if (query.q) params.set("q", query.q);
-  if (query.kind) params.set("kind", query.kind);
-  if (query.page && query.page > 1) params.set("page", String(query.page));
-  if (query.pageSize) params.set("page_size", String(query.pageSize));
-
-  const search = params.toString();
-  return search ? `/catalog?${search}` : "/catalog";
-}
-
 export function titleQueryKey(id: number | null) {
   return ["title", id] as const;
 }
@@ -161,7 +139,6 @@ export function titleCoverUrl(
 }
 
 export const catalogApi = {
-  list: (query: CatalogQuery) => request<CatalogResponse>(catalogPath(query)),
   title: (id: number) => request<TitleResponse>(`/titles/${id}`),
   create: (input: TitleInput) => request<TitlePayload>("/titles", jsonMutation(input)),
   update: (id: number, input: TitleInput) =>
@@ -172,21 +149,6 @@ export const catalogApi = {
     return request<CoverResponse>(`/titles/${id}/cover`, { method: "POST", body });
   },
 };
-
-export function useCatalogQuery(query: CatalogQuery) {
-  return useQuery({
-    queryKey: [
-      ...CATALOG_QUERY_KEY,
-      query.q ?? "",
-      query.kind ?? "",
-      query.page ?? 1,
-      query.pageSize ?? 50,
-    ],
-    queryFn: () => catalogApi.list(query),
-    // При смене страницы прошлая выдача остаётся на экране без мигания
-    placeholderData: keepPreviousData,
-  });
-}
 
 export function useTitleQuery(id: number | null) {
   return useQuery({
@@ -204,7 +166,7 @@ export function useCreateTitleMutation() {
 
   return useMutation({
     mutationFn: catalogApi.create,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOG_QUERY_KEY }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["title"] }),
   });
 }
 
@@ -215,7 +177,6 @@ export function useUpdateTitleMutation(id: number) {
     mutationFn: (input: TitleInput) => catalogApi.update(id, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: titleQueryKey(id) });
-      void queryClient.invalidateQueries({ queryKey: CATALOG_QUERY_KEY });
     },
   });
 }
@@ -227,7 +188,6 @@ export function useUploadCoverMutation(id: number) {
     mutationFn: (file: File) => catalogApi.uploadCover(id, file),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: titleQueryKey(id) });
-      void queryClient.invalidateQueries({ queryKey: CATALOG_QUERY_KEY });
     },
   });
 }

@@ -26,6 +26,8 @@ pub struct TitleChapterVariantDto {
     pub is_locked: bool,
     pub content_kind: Option<String>,
     pub page_count: Option<i64>,
+    /// Выключенный источник не может отдать главу, даже если она в списке.
+    pub source_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,6 +42,7 @@ pub struct TitleChapterDto {
     pub page_count: Option<i64>,
     pub availability: String,
     pub is_locked: bool,
+    pub published_at: Option<i64>,
     pub selected_chapter_id: i64,
     pub variants: Vec<TitleChapterVariantDto>,
 }
@@ -103,7 +106,7 @@ pub async fn title_chapters(
                 ch.number_milli, ch.volume, ch.chapter_kind, ch.content_kind, ch.name, \
                 ch.group_name, ch.language, ch.is_locked, ch.availability, \
                 ch.availability_checked_at, ch.page_count, ch.ordinal_site, ch.external_url, \
-                ch.embed_url, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
+                ch.embed_url, ch.published_at, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
                 s.code AS source_code, s.name AS source_name, (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled \
          FROM chapters ch \
          JOIN source_entries e ON e.id = ch.source_entry_id \
@@ -154,6 +157,7 @@ pub async fn title_chapters(
             page_count: selected.page_count,
             availability,
             is_locked,
+            published_at: selected.published_at,
             selected_chapter_id: selected.chapter_id,
             variants: variants
                 .into_iter()
@@ -169,6 +173,7 @@ pub async fn title_chapters(
                     is_locked: variant.is_locked,
                     content_kind: variant.content_kind,
                     page_count: variant.page_count,
+                    source_enabled: variant.source_enabled,
                 })
                 .collect(),
         });

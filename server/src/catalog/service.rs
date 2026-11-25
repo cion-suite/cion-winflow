@@ -86,6 +86,9 @@ pub struct TitleSummaryDto {
 pub struct LibraryState {
     pub status: String,
     pub score: Option<i64>,
+    pub favorite: bool,
+    /// Пользовательские закладки, в которые входит тайтл.
+    pub tab_ids: Vec<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,6 +100,8 @@ pub struct TitleResponse {
     pub sources: Vec<chapters::TitleSourceDto>,
     /// Ручные связи ключей глав: alias -> canonical.
     pub aliases: Vec<AliasDto>,
+    /// Прочитанные главы текущего пользователя по каноническому ключу.
+    pub read_keys: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -255,6 +260,13 @@ pub async fn get_title(
     };
     let chapters = chapters::title_chapters(pool, &info).await?;
     let aliases = links::load_aliases(pool, title_id).await?;
+    let read_keys = sqlx::query_scalar::<_, String>(
+        "SELECT chapter_key FROM chapter_reads WHERE user_id = ? AND title_id = ?",
+    )
+    .bind(user_id)
+    .bind(title_id)
+    .fetch_all(pool)
+    .await?;
 
     Ok(TitleResponse {
         title: TitleDto::from(title),
@@ -262,6 +274,7 @@ pub async fn get_title(
         chapters: chapters.chapters,
         sources: chapters.sources,
         aliases,
+        read_keys,
     })
 }
 
@@ -368,15 +381,32 @@ async fn find_library_state(
     user_id: i64,
     title_id: i64,
 ) -> Result<Option<LibraryState>, AppError> {
-    let row = sqlx::query_as::<_, (String, Option<i64>)>(
-        "SELECT status, score FROM library WHERE user_id = ? AND title_id = ?",
+    let row = sqlx::query_as::<_, (String, Option<i64>, bool)>(
+        "SELECT status, score, favorite FROM library WHERE user_id = ? AND title_id = ?",
     )
     .bind(user_id)
     .bind(title_id)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(status, score)| LibraryState { status, score }))
+    let Some((status, score, favorite)) = row else {
+        return Ok(None);
+    };
+
+    let tab_ids = sqlx::query_scalar::<_, i64>(
+        "SELECT tab_id FROM library_tab_items WHERE user_id = ? AND title_id = ? ORDER BY tab_id",
+    )
+    .bind(user_id)
+    .bind(title_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(Some(LibraryState {
+        status,
+        score,
+        favorite,
+        tab_ids,
+    }))
 }
 
 struct ValidatedTitle {

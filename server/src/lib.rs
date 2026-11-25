@@ -3,6 +3,7 @@ pub mod auth;
 pub mod catalog;
 pub mod config;
 pub mod db;
+pub mod discover;
 pub mod error;
 pub mod extract;
 pub mod images;

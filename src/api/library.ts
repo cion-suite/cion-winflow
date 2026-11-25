@@ -4,12 +4,20 @@ import type { LibraryStatus } from "@/lib/catalog";
 import { titleQueryKey, type TitleSummary } from "./catalog";
 import { jsonMutation, request } from "./client";
 
+export type LibrarySort = "updated" | "added" | "title" | "score";
+
 export type LibraryItem = {
   title_id: number;
   status: LibraryStatus;
   score: number | null;
+  favorite: boolean;
   added_at: number;
   updated_at: number;
+  /** Прочитано глав по журналу chapter_reads. */
+  read_count: number;
+  /** Глав в самом полном источнике. */
+  chapter_count: number;
+  tab_ids: number[];
   title: TitleSummary;
 };
 
@@ -18,8 +26,17 @@ export type LibraryEntry = {
   title_id: number;
   status: LibraryStatus;
   score: number | null;
+  favorite: boolean;
   added_at: number;
   updated_at: number;
+};
+
+export type StatusCounts = Record<LibraryStatus, number>;
+
+export type LibraryCounts = {
+  all: number;
+  statuses: StatusCounts;
+  favorite: number;
 };
 
 export type LibraryListResponse = {
@@ -27,27 +44,61 @@ export type LibraryListResponse = {
   total: number;
   page: number;
   page_size: number;
+  counts: LibraryCounts;
 };
 
 export type LibraryQuery = {
   page?: number;
   pageSize?: number;
+  /** Поиск по названию только среди своих тайтлов. */
+  q?: string;
+  status?: LibraryStatus;
+  favorite?: boolean;
+  tabId?: number;
+  sort?: LibrarySort;
 };
 
 export type LibraryInput = {
   status: LibraryStatus;
   score: number | null;
+  favorite: boolean;
+};
+
+export type LibraryTab = {
+  id: number;
+  name: string;
+  position: number;
+  count: number;
+};
+
+export type LibraryTabsResponse = {
+  tabs: LibraryTab[];
+  limit: number;
+};
+
+export type TitleTabsResponse = {
+  tab_ids: number[];
 };
 
 export const LIBRARY_QUERY_KEY = ["library"] as const;
+export const LIBRARY_TABS_QUERY_KEY = ["library-tabs"] as const;
 
 function libraryPath(query: LibraryQuery): string {
   const params = new URLSearchParams();
   if (query.page && query.page > 1) params.set("page", String(query.page));
   if (query.pageSize) params.set("page_size", String(query.pageSize));
+  if (query.q) params.set("q", query.q);
+  if (query.status) params.set("status", query.status);
+  if (query.favorite !== undefined) params.set("favorite", query.favorite ? "1" : "0");
+  if (query.tabId) params.set("tab_id", String(query.tabId));
+  if (query.sort) params.set("sort", query.sort);
 
   const search = params.toString();
   return search ? `/library?${search}` : "/library";
+}
+
+function tabPath(tabId: number): string {
+  return `/library/tabs/${tabId}`;
 }
 
 export const libraryApi = {
@@ -56,14 +107,57 @@ export const libraryApi = {
     request<LibraryEntry>(`/library/${titleId}`, jsonMutation(input, "PUT")),
   remove: (titleId: number) =>
     request<void>(`/library/${titleId}`, { method: "DELETE" }),
+  tabs: () => request<LibraryTabsResponse>("/library/tabs"),
+  createTab: (name: string) =>
+    request<LibraryTab>("/library/tabs", jsonMutation({ name })),
+  renameTab: (tabId: number, name: string) =>
+    request<LibraryTab>(tabPath(tabId), jsonMutation({ name }, "PUT")),
+  deleteTab: (tabId: number) =>
+    request<void>(tabPath(tabId), { method: "DELETE" }),
+  setTitleTabs: (titleId: number, tabIds: number[]) =>
+    request<TitleTabsResponse>(
+      `/library/${titleId}/tabs`,
+      jsonMutation({ tab_ids: tabIds }, "PUT"),
+    ),
 };
 
-export function useLibraryQuery(query: LibraryQuery = {}) {
+export function useLibraryQuery(
+  query: LibraryQuery = {},
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
-    queryKey: [...LIBRARY_QUERY_KEY, query.page ?? 1, query.pageSize ?? 50],
+    queryKey: [
+      ...LIBRARY_QUERY_KEY,
+      query.q ?? "",
+      query.status ?? "",
+      query.favorite ?? null,
+      query.tabId ?? null,
+      query.sort ?? "updated",
+      query.page ?? 1,
+      query.pageSize ?? 50,
+    ],
     queryFn: () => libraryApi.list(query),
     placeholderData: keepPreviousData,
+    enabled: options.enabled ?? true,
   });
+}
+
+export function useLibraryTabsQuery() {
+  return useQuery({
+    queryKey: LIBRARY_TABS_QUERY_KEY,
+    queryFn: libraryApi.tabs,
+  });
+}
+
+function invalidateLibrary(
+  queryClient: ReturnType<typeof useQueryClient>,
+  titleId?: number,
+): void {
+  void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY });
+  void queryClient.invalidateQueries({ queryKey: LIBRARY_TABS_QUERY_KEY });
+  if (titleId !== undefined) {
+    void queryClient.invalidateQueries({ queryKey: titleQueryKey(titleId) });
+  }
 }
 
 export function useUpsertLibraryMutation(titleId: number) {
@@ -71,10 +165,7 @@ export function useUpsertLibraryMutation(titleId: number) {
 
   return useMutation({
     mutationFn: (input: LibraryInput) => libraryApi.upsert(titleId, input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY });
-      void queryClient.invalidateQueries({ queryKey: titleQueryKey(titleId) });
-    },
+    onSuccess: () => invalidateLibrary(queryClient, titleId),
   });
 }
 
@@ -83,9 +174,43 @@ export function useRemoveLibraryMutation(titleId: number) {
 
   return useMutation({
     mutationFn: () => libraryApi.remove(titleId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY });
-      void queryClient.invalidateQueries({ queryKey: titleQueryKey(titleId) });
-    },
+    onSuccess: () => invalidateLibrary(queryClient, titleId),
+  });
+}
+
+export function useCreateLibraryTabMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (name: string) => libraryApi.createTab(name),
+    onSuccess: () => invalidateLibrary(queryClient),
+  });
+}
+
+export function useRenameLibraryTabMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ tabId, name }: { tabId: number; name: string }) =>
+      libraryApi.renameTab(tabId, name),
+    onSuccess: () => invalidateLibrary(queryClient),
+  });
+}
+
+export function useDeleteLibraryTabMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (tabId: number) => libraryApi.deleteTab(tabId),
+    onSuccess: () => invalidateLibrary(queryClient),
+  });
+}
+
+export function useSetTitleTabsMutation(titleId: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (tabIds: number[]) => libraryApi.setTitleTabs(titleId, tabIds),
+    onSuccess: () => invalidateLibrary(queryClient, titleId),
   });
 }

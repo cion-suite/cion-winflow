@@ -1,9 +1,11 @@
 import { type FormEvent, useState } from "react";
-import { ArrowDownIcon, ArrowUpIcon, ShieldIcon } from "lucide-react";
-import { Link } from "react-router";
+import { ArrowDownIcon, ArrowUpIcon, PlusIcon, ShieldIcon } from "lucide-react";
+import { Link, useNavigate } from "react-router";
 
 import {
+  formValuesToTitleInput,
   useAuth,
+  useCreateTitleMutation,
   useErrorText,
   useImportSourceMutation,
   useProbeSourceMutation,
@@ -15,11 +17,17 @@ import {
   type SourcePriority,
   type SourceState,
 } from "@/api";
-import { MEDIA_KINDS, type MediaKind } from "@/lib/catalog";
+import {
+  emptyTitleFormValues,
+  MEDIA_KINDS,
+  type MediaKind,
+  type TitleFormValues,
+} from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { titlePath } from "@/lib/routes";
 import { PageHeader } from "@/ui/PageHeader";
 import { Select } from "@/ui/Select";
+import { TitleForm } from "@/ui/TitleForm";
 import { Badge } from "@/ui/shadcn/badge";
 import { Button } from "@/ui/shadcn/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui/shadcn/card";
@@ -305,6 +313,56 @@ function ImportFromSource({ sources }: { sources: SourceState[] }) {
   );
 }
 
+function ManualTitleCard() {
+  const t = useT();
+  const navigate = useNavigate();
+  const create = useCreateTitleMutation();
+  const [creating, setCreating] = useState(false);
+  const errorText = useErrorText(create.error);
+
+  function handleCreate(values: TitleFormValues): void {
+    create.mutate(formValuesToTitleInput(values), {
+      onSuccess: (payload) => void navigate(titlePath(payload.title.id)),
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("admin.manualTitle")}</CardTitle>
+        <CardDescription>{t("admin.manualTitleHint")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {creating ? (
+          <TitleForm
+            initial={emptyTitleFormValues()}
+            submitLabel={t("admin.createTitle")}
+            isPending={create.isPending}
+            errorText={errorText}
+            onSubmit={handleCreate}
+            onCancel={() => {
+              create.reset();
+              setCreating(false);
+            }}
+          />
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              create.reset();
+              setCreating(true);
+            }}
+          >
+            <PlusIcon data-icon="inline-start" />
+            {t("admin.manualTitle")}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function PrioritiesEditor({
   sources,
   isPending,
@@ -437,6 +495,8 @@ function AdminContent() {
       <PageHeader title={t("admin.title")} description={t("admin.description")} />
 
       <ImportFromSource sources={sources.data?.sources ?? []} />
+
+      <ManualTitleCard />
 
       <Card>
         <CardHeader>

@@ -1,4 +1,13 @@
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  BookOpenIcon,
+  EyeIcon,
+  HeartIcon,
+  SearchIcon,
+  UploadIcon,
+} from "lucide-react";
 import { Link, useParams } from "react-router";
 
 import {
@@ -7,22 +16,38 @@ import {
   titleToFormValues,
   useAuth,
   useErrorText,
+  useLibraryTabsQuery,
+  useProgressQuery,
+  useRemoveLibraryMutation,
+  useSetTitleTabsMutation,
   useTitleQuery,
   useUpdateTitleMutation,
   useUploadCoverMutation,
+  useUpsertLibraryMutation,
+  type LibraryTab,
   type TitleChapter,
 } from "@/api";
-import type { TitleFormValues } from "@/lib/catalog";
-import { useT } from "@/lib/i18n";
+import type { LibraryStatus, TitleFormValues } from "@/lib/catalog";
+import { isAvailableChapter, sortChapters } from "@/lib/chapters";
+import { useLocale, useT } from "@/lib/i18n";
 import { readerPath } from "@/lib/routes";
+import { cn } from "@/lib/utils";
 import { CoverImage } from "@/ui/CoverImage";
-import { PageHeader } from "@/ui/PageHeader";
+import { Select } from "@/ui/Select";
 import { TitleForm } from "@/ui/TitleForm";
 import { Badge } from "@/ui/shadcn/badge";
 import { Button, buttonVariants } from "@/ui/shadcn/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/ui/shadcn/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/ui/shadcn/empty";
 import { Input } from "@/ui/shadcn/input";
 import { Skeleton } from "@/ui/shadcn/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/shadcn/tabs";
 import { AdminSourcePanel } from "./AdminSourcePanel";
 import { AliasesPanel } from "./AliasesPanel";
 import { LibraryPanel } from "./LibraryPanel";
@@ -31,27 +56,56 @@ function chapterLabel(
   chapter: TitleChapter,
   chapterWord: string,
   specialWord: string,
-  volumeLabel: string,
 ): string {
-  const number = chapter.number_text
-    ? `${chapterWord} ${chapter.number_text}`
-    : specialWord;
-  const parts = [number];
-  if (chapter.volume !== null) {
-    parts.push(volumeLabel);
-  }
-  if (chapter.name !== null) {
-    parts.push(chapter.name);
-  }
-  return parts.join(" · ");
+  return chapter.number_text ? `${chapterWord} ${chapter.number_text}` : specialWord;
+}
+
+function makeDateFormatter(locale: string): (unix: number) => string {
+  const formatter = new Intl.DateTimeFormat(locale === "ru" ? "ru-RU" : "en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  return (unix) => formatter.format(new Date(unix * 1000));
 }
 
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid gap-1 sm:grid-cols-[160px_1fr] sm:gap-3">
+    <div className="grid gap-1 sm:grid-cols-[180px_1fr] sm:gap-3">
       <span className="text-sm text-muted-foreground">{label}</span>
       <div className="text-sm">{children}</div>
     </div>
+  );
+}
+
+function ScoreSelect({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: number | null;
+  disabled: boolean;
+  onChange: (score: number | null) => void;
+}) {
+  const t = useT();
+
+  return (
+    <Select
+      value={value === null ? "" : String(value)}
+      disabled={disabled}
+      className="h-7 w-20"
+      aria-label={t("library.score")}
+      onChange={(event) =>
+        onChange(event.target.value === "" ? null : Number(event.target.value))
+      }
+    >
+      <option value="">{t("library.noScore")}</option>
+      {Array.from({ length: 10 }, (_, index) => String(index + 1)).map((score) => (
+        <option key={score} value={score}>
+          {score}
+        </option>
+      ))}
+    </Select>
   );
 }
 
@@ -75,16 +129,26 @@ function CoverEditor({ titleId }: { titleId: number }) {
 
   return (
     <form className="flex flex-col gap-2" onSubmit={handleSubmit}>
-      <Input
-        type="file"
-        name="file"
-        aria-label={t("title.uploadCover")}
-        accept="image/jpeg,image/png,image/webp,image/gif"
-        onChange={(event) => {
-          upload.reset();
-          setFile(event.target.files?.[0] ?? null);
-        }}
-      />
+      <label
+        className={cn(
+          buttonVariants({ variant: "outline" }),
+          "w-full min-w-0 cursor-pointer",
+        )}
+      >
+        <UploadIcon data-icon="inline-start" />
+        <span className="truncate">{file?.name ?? t("title.chooseCover")}</span>
+        <input
+          type="file"
+          name="file"
+          className="sr-only"
+          aria-label={t("title.uploadCover")}
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          onChange={(event) => {
+            upload.reset();
+            setFile(event.target.files?.[0] ?? null);
+          }}
+        />
+      </label>
       <Button type="submit" variant="outline" disabled={!file || upload.isPending}>
         {t("title.uploadCover")}
       </Button>
@@ -98,20 +162,131 @@ function CoverEditor({ titleId }: { titleId: number }) {
   );
 }
 
+function ChapterRow({
+  titleId,
+  chapter,
+  read,
+  formatDate,
+}: {
+  titleId: number;
+  chapter: TitleChapter;
+  read: boolean;
+  formatDate: (unix: number) => string;
+}) {
+  const t = useT();
+  // variants[0] может быть свежим locked preferred, а не выбранным вариантом.
+  const variant =
+    chapter.variants.find((item) => item.chapter_id === chapter.selected_chapter_id) ??
+    chapter.variants[0];
+  const source = variant?.source_name ?? "";
+  const date = chapter.published_at === null ? null : formatDate(chapter.published_at);
+
+  return (
+    <Link
+      to={readerPath(titleId, chapter.chapter_key)}
+      className={cn(
+        "flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors outline-none",
+        "hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+      )}
+    >
+      <span
+        className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"
+        title={read ? t("title.chapterRead") : t("title.chapterUnread")}
+      >
+        <EyeIcon className={cn("size-4", read && "text-primary")} aria-hidden />
+        <span className="sr-only">
+          {read ? t("title.chapterRead") : t("title.chapterUnread")}
+        </span>
+      </span>
+
+      {chapter.volume !== null && (
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg border text-sm font-medium tabular-nums">
+          {chapter.volume}
+        </span>
+      )}
+
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">
+          {chapterLabel(chapter, t("title.chapter"), t("title.special"))}
+        </p>
+        <p className="truncate text-xs text-muted-foreground">
+          {[source, chapter.name].filter(Boolean).join(" · ")}
+        </p>
+      </div>
+
+      {date && (
+        <span className="hidden shrink-0 text-xs text-muted-foreground tabular-nums sm:inline">
+          {date}
+        </span>
+      )}
+    </Link>
+  );
+}
+
 export function TitlePage() {
   const t = useT();
+  const locale = useLocale();
   const { id } = useParams();
   const { user } = useAuth();
   const parsed = Number(id);
   const titleId = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 
   const query = useTitleQuery(titleId);
+  const progressQuery = useProgressQuery(titleId);
+  const tabsQuery = useLibraryTabsQuery();
   const update = useUpdateTitleMutation(titleId ?? 0);
+  const upsert = useUpsertLibraryMutation(titleId ?? 0);
+  const remove = useRemoveLibraryMutation(titleId ?? 0);
+  const setTabs = useSetTitleTabsMutation(titleId ?? 0);
+
+  const [tab, setTab] = useState("chapters");
   const [editing, setEditing] = useState(false);
+  const [chapterFilter, setChapterFilter] = useState("");
+  const [ascending, setAscending] = useState(false);
 
   const queryError = useErrorText(query.error);
   const updateError = useErrorText(update.error);
+  const mutationError = useErrorText(upsert.error ?? remove.error ?? setTabs.error);
+  const mutationPending = upsert.isPending || remove.isPending || setTabs.isPending;
   const isAdmin = user?.role === "admin";
+
+  const availableChapters = useMemo(
+    () => (query.data?.chapters ?? []).filter(isAvailableChapter),
+    [query.data?.chapters],
+  );
+  const readKeys = useMemo(
+    () => new Set(query.data?.read_keys ?? []),
+    [query.data?.read_keys],
+  );
+
+  const visibleChapters = useMemo(() => {
+    const sorted = sortChapters(availableChapters, ascending);
+    const needle = chapterFilter.trim().toLowerCase();
+    if (needle === "") return sorted;
+    return sorted.filter((chapter) =>
+      [chapter.number_text, chapter.name, chapter.chapter_key]
+        .filter((value): value is string => value !== null)
+        .join(" ")
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [availableChapters, ascending, chapterFilter]);
+
+  const firstChapterKey = useMemo(() => {
+    const ascendingChapters = sortChapters(availableChapters, true);
+    return ascendingChapters[0]?.chapter_key ?? null;
+  }, [availableChapters]);
+
+  const progressKey = progressQuery.data?.progress?.chapter_key ?? null;
+  const readTarget = useMemo(() => {
+    const saved = availableChapters.find(
+      (chapter) => chapter.chapter_key === progressKey,
+    );
+    return saved?.chapter_key ?? firstChapterKey;
+  }, [availableChapters, progressKey, firstChapterKey]);
+
+  const formatDate = useMemo(() => makeDateFormatter(locale), [locale]);
+  const tabs: LibraryTab[] = tabsQuery.data?.tabs ?? [];
 
   if (titleId === null) {
     return (
@@ -127,12 +302,13 @@ export function TitlePage() {
 
   if (query.isPending) {
     return (
-      <div className="mx-auto grid w-full max-w-5xl gap-6 md:grid-cols-[240px_1fr]">
+      <div className="mx-auto grid w-full max-w-6xl gap-8 md:grid-cols-[260px_1fr]">
         <Skeleton className="aspect-2/3 w-full rounded-xl" />
         <div className="flex flex-col gap-3">
+          <Skeleton className="h-4 w-1/4" />
           <Skeleton className="h-8 w-1/2" />
-          <Skeleton className="h-4 w-1/3" />
-          <Skeleton className="h-32 w-full rounded-xl" />
+          <Skeleton className="h-10 w-full rounded-xl" />
+          <Skeleton className="h-64 w-full rounded-xl" />
         </div>
       </div>
     );
@@ -153,7 +329,8 @@ export function TitlePage() {
     );
   }
 
-  const { title, library, chapters, sources, aliases } = query.data;
+  const { title, library, sources, aliases } = query.data;
+  const favorite = library?.favorite ?? false;
   const meta = [
     t(`catalog.kinds.${title.kind}`),
     title.year === null ? null : String(title.year),
@@ -162,218 +339,351 @@ export function TitlePage() {
     .filter((part) => part !== null)
     .join(" · ");
 
+  function currentInput() {
+    return {
+      status: library?.status ?? "planned",
+      score: library?.score ?? null,
+      favorite,
+    };
+  }
+
+  function handleStatus(status: LibraryStatus): void {
+    upsert.mutate({ ...currentInput(), status });
+  }
+
+  function handleScore(score: number | null): void {
+    upsert.mutate({ ...currentInput(), score });
+  }
+
+  function toggleFavorite(): void {
+    upsert.mutate({ ...currentInput(), favorite: !favorite });
+  }
+
+  function addToLibrary(): void {
+    upsert.mutate(currentInput());
+  }
+
+  function toggleTab(tabId: number): void {
+    const current = library?.tab_ids ?? [];
+    setTabs.mutate(
+      current.includes(tabId)
+        ? current.filter((value) => value !== tabId)
+        : [...current, tabId],
+    );
+  }
+
+  function toggleEditing(): void {
+    update.reset();
+    setEditing((value) => !value);
+    setTab("main");
+  }
+
   function handleUpdate(values: TitleFormValues): void {
     update.mutate(formValuesToTitleInput(values), {
       onSuccess: () => setEditing(false),
     });
   }
 
-  function toggleEditing(): void {
-    update.reset();
-    setEditing((value) => !value);
-  }
-
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-      <PageHeader
-        title={title.name}
-        description={meta}
-        actions={
-          isAdmin && (
-            <Button type="button" variant="outline" onClick={toggleEditing}>
-              {t("title.edit")}
-            </Button>
-          )
-        }
-      />
-
-      <div className="grid gap-6 md:grid-cols-[240px_1fr]">
-        <div className="flex flex-col gap-3">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
+      <div className="grid gap-8 md:grid-cols-[260px_minmax(0,1fr)]">
+        <aside className="flex flex-col gap-3 md:sticky md:top-6 md:self-start">
           <CoverImage
             src={title.has_cover ? titleCoverUrl(title, "full") : null}
             alt={title.name}
             loading="eager"
             className="aspect-2/3 w-full rounded-xl ring-1 ring-foreground/10"
           />
+
+          {readTarget ? (
+            <Link
+              to={readerPath(titleId, readTarget)}
+              className={cn(buttonVariants(), "w-full")}
+            >
+              <BookOpenIcon data-icon="inline-start" />
+              {t("title.read")}
+            </Link>
+          ) : (
+            <Button type="button" className="w-full" disabled>
+              <BookOpenIcon data-icon="inline-start" />
+              {t("title.read")}
+            </Button>
+          )}
+
+          <Button
+            type="button"
+            variant={favorite ? "default" : "secondary"}
+            className="w-full"
+            aria-pressed={favorite}
+            disabled={mutationPending}
+            onClick={toggleFavorite}
+          >
+            <HeartIcon
+              data-icon="inline-start"
+              className={favorite ? "fill-current" : undefined}
+            />
+            {t("library.favorite")}
+          </Button>
+
+          {isAdmin && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              onClick={toggleEditing}
+            >
+              {t("title.edit")}
+            </Button>
+          )}
+
+          <LibraryPanel
+            entry={library}
+            tabs={tabs}
+            pending={mutationPending}
+            errorText={mutationError}
+            onAdd={addToLibrary}
+            onStatus={handleStatus}
+            onToggleTab={toggleTab}
+            onRemove={() => remove.mutate()}
+          />
+
           {isAdmin && <CoverEditor titleId={titleId} />}
-        </div>
+        </aside>
 
         <div className="flex min-w-0 flex-col gap-4">
-          {editing && isAdmin && (
-            <Card>
-              <CardHeader>
-                <CardTitle>{t("title.editTitle")}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <TitleForm
-                  initial={titleToFormValues(title)}
-                  submitLabel={t("title.save")}
-                  isPending={update.isPending}
-                  errorText={updateError}
-                  onSubmit={handleUpdate}
-                  onCancel={() => {
-                    update.reset();
-                    setEditing(false);
-                  }}
-                />
-              </CardContent>
-            </Card>
-          )}
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 flex-col gap-1">
+              <p className="text-sm text-muted-foreground">{meta}</p>
+              <h1 className="text-2xl font-semibold tracking-tight">{title.name}</h1>
+              <p className="text-sm text-muted-foreground">
+                {t("title.chapterCount", { count: availableChapters.length })}
+              </p>
+            </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("library.title")}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <LibraryPanel
-                key={`${titleId}:${
-                  library === null
-                    ? "not-in-library"
-                    : `${library.status}:${library.score ?? ""}`
-                }`}
-                titleId={titleId}
-                entry={library}
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("title.about")}</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              {title.alt_names.length > 0 && (
-                <MetaRow label={t("title.altNames")}>{title.alt_names.join(", ")}</MetaRow>
-              )}
-              {title.authors.length > 0 && (
-                <MetaRow label={t("title.authors")}>{title.authors.join(", ")}</MetaRow>
-              )}
-              {title.genres.length > 0 && (
-                <MetaRow label={t("title.genres")}>{title.genres.join(", ")}</MetaRow>
-              )}
-              {title.lang !== null && (
-                <MetaRow label={t("title.lang")}>{title.lang}</MetaRow>
-              )}
-              {title.rating !== null && (
-                <MetaRow label={t("title.rating")}>{title.rating.toFixed(1)}</MetaRow>
-              )}
-              <MetaRow label={t("title.description")}>
-                {title.description === null ? (
-                  <span className="text-muted-foreground">{t("title.noDescription")}</span>
-                ) : (
-                  <p className="whitespace-pre-line">{title.description}</p>
-                )}
-              </MetaRow>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("title.chapters")}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {chapters.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("title.chaptersEmpty")}</p>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              {title.rating !== null ? (
+                <span className="text-2xl font-semibold text-success">
+                  {title.rating.toFixed(1)}
+                </span>
               ) : (
-                <ul className="divide-y divide-border">
-                  {chapters.map((chapter) => (
-                    <li
-                      key={chapter.chapter_key}
-                      className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {chapterLabel(
-                            chapter,
-                            t("title.chapter"),
-                            t("title.special"),
-                            t("title.volumeLabel", { volume: chapter.volume ?? "" }),
-                          )}
-                        </p>
-                        {chapter.variants.length > 1 && (
-                          <p className="truncate text-xs text-muted-foreground">
-                            {t("title.variants", {
-                              variants: chapter.variants
-                                .map((variant) => variant.source_name)
-                                .join(", "),
-                            })}
-                          </p>
-                        )}
-                        {chapter.availability === "missing" && (
-                          <p className="text-xs text-muted-foreground">
-                            {t("title.unavailable")}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {chapter.is_locked && (
-                          <Badge variant="outline">{t("title.locked")}</Badge>
-                        )}
-                        <Link
-                          to={readerPath(titleId, chapter.chapter_key)}
-                          className={buttonVariants({ variant: "outline", size: "sm" })}
-                        >
-                          {t("title.read")}
-                        </Link>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <span className="text-sm text-muted-foreground">
+                  {t("title.noRating")}
+                </span>
               )}
-            </CardContent>
-          </Card>
+              <span className="text-xs text-muted-foreground">
+                {t("title.sourceRating")}
+              </span>
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-xs text-muted-foreground">
+                  {t("title.yourScore")}
+                </span>
+                <ScoreSelect
+                  value={library?.score ?? null}
+                  disabled={mutationPending}
+                  onChange={handleScore}
+                />
+              </div>
+            </div>
+          </div>
 
-          {sources.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>{t("title.sources")}</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2">
-                {sources.map((source) => (
-                  <div key={source.source_entry_id} className="flex flex-col gap-1">
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{source.name}</span>
-                        {source.is_primary && (
-                          <Badge variant="secondary">{t("title.primarySource")}</Badge>
-                        )}
-                        {title.preferred_source_id === source.source_id && (
-                          <Badge>{t("title.preferredSource")}</Badge>
-                        )}
-                        {!source.enabled && (
-                          <Badge variant="outline">{t("title.sourceDisabled")}</Badge>
-                        )}
-                      </div>
-                      <span className="text-muted-foreground">
-                        {t("title.sourceStats", {
-                          chapters: source.chapter_count,
-                          available: source.available_count,
-                        })}
-                      </span>
-                    </div>
-                    {source.last_error !== null && (
-                      <p className="text-xs text-destructive">
-                        {t("title.sourceError", { message: source.last_error })}
-                      </p>
-                    )}
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList
+              variant="line"
+              className="w-full justify-start overflow-x-auto scrollbar-none"
+            >
+              <TabsTrigger value="chapters" className="flex-none">
+                {t("title.chapters")} ({availableChapters.length})
+              </TabsTrigger>
+              <TabsTrigger value="main" className="flex-none">
+                {t("title.main")}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="chapters">
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <div className="relative flex-1">
+                    <SearchIcon
+                      aria-hidden
+                      className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+                    />
+                    <Input
+                      value={chapterFilter}
+                      placeholder={t("title.chapterSearch")}
+                      aria-label={t("title.chapterSearch")}
+                      className="pl-8"
+                      onChange={(event) => setChapterFilter(event.target.value)}
+                    />
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setAscending((value) => !value)}
+                  >
+                    {ascending ? (
+                      <ArrowUpIcon data-icon="inline-start" />
+                    ) : (
+                      <ArrowDownIcon data-icon="inline-start" />
+                    )}
+                    {ascending ? t("title.showFromStart") : t("title.showNewest")}
+                  </Button>
+                </div>
 
-          {isAdmin && (
-            <AdminSourcePanel
-              titleId={titleId}
-              titleKind={title.kind}
-              sources={sources}
-              preferredSourceId={title.preferred_source_id}
-            />
-          )}
+                {visibleChapters.length === 0 ? (
+                  <Empty className="border">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <BookOpenIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>{t("title.chaptersEmpty")}</EmptyTitle>
+                      <EmptyDescription>
+                        {chapterFilter === ""
+                          ? t("title.chaptersEmptyDescription")
+                          : t("title.chaptersNoMatch")}
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  <div className="flex flex-col gap-1.5">
+                    {visibleChapters.map((chapter) => (
+                      <ChapterRow
+                        key={chapter.chapter_key}
+                        titleId={titleId}
+                        chapter={chapter}
+                        read={readKeys.has(chapter.chapter_key)}
+                        formatDate={formatDate}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </TabsContent>
 
-          {isAdmin && (
-            <AliasesPanel titleId={titleId} chapters={chapters} aliases={aliases} />
-          )}
+            <TabsContent value="main">
+              <div className="flex flex-col gap-4">
+                {editing && isAdmin && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>{t("title.editTitle")}</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <TitleForm
+                        initial={titleToFormValues(title)}
+                        submitLabel={t("title.save")}
+                        isPending={update.isPending}
+                        errorText={updateError}
+                        onSubmit={handleUpdate}
+                        onCancel={() => {
+                          update.reset();
+                          setEditing(false);
+                        }}
+                      />
+                    </CardContent>
+                  </Card>
+                )}
+
+                <div className="rounded-xl border p-4 text-sm whitespace-pre-line">
+                  {title.description === null ? (
+                    <span className="text-muted-foreground">
+                      {t("title.noDescription")}
+                    </span>
+                  ) : (
+                    title.description
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  {title.alt_names.length > 0 && (
+                    <MetaRow label={t("title.altNames")}>
+                      {title.alt_names.join(", ")}
+                    </MetaRow>
+                  )}
+                  {title.authors.length > 0 && (
+                    <MetaRow label={t("title.authors")}>
+                      {title.authors.join(", ")}
+                    </MetaRow>
+                  )}
+                  {title.genres.length > 0 && (
+                    <MetaRow label={t("title.genres")}>
+                      {title.genres.join(", ")}
+                    </MetaRow>
+                  )}
+                  {title.lang !== null && (
+                    <MetaRow label={t("title.lang")}>{title.lang}</MetaRow>
+                  )}
+                  {title.status !== null && (
+                    <MetaRow label={t("title.status")}>
+                      {t(`title.statuses.${title.status}`)}
+                    </MetaRow>
+                  )}
+                  {title.year !== null && (
+                    <MetaRow label={t("title.year")}>{title.year}</MetaRow>
+                  )}
+                </div>
+
+                {isAdmin && sources.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>{t("title.sources")}</CardTitle>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-2">
+                      {sources.map((source) => (
+                        <div
+                          key={source.source_entry_id}
+                          className="flex flex-col gap-1"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{source.name}</span>
+                              {source.is_primary && (
+                                <Badge variant="secondary">
+                                  {t("title.primarySource")}
+                                </Badge>
+                              )}
+                              {title.preferred_source_id === source.source_id && (
+                                <Badge>{t("title.preferredSource")}</Badge>
+                              )}
+                              {!source.enabled && (
+                                <Badge variant="outline">
+                                  {t("title.sourceDisabled")}
+                                </Badge>
+                              )}
+                            </div>
+                            <span className="text-muted-foreground">
+                              {t("title.sourceStats", {
+                                chapters: source.chapter_count,
+                                available: source.available_count,
+                              })}
+                            </span>
+                          </div>
+                          {source.last_error !== null && (
+                            <p className="text-xs text-destructive">
+                              {t("title.sourceError", {
+                                message: source.last_error,
+                              })}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {isAdmin && (
+                  <AdminSourcePanel
+                    titleId={titleId}
+                    titleKind={title.kind}
+                    sources={sources}
+                    preferredSourceId={title.preferred_source_id}
+                  />
+                )}
+
+                {isAdmin && (
+                  <AliasesPanel titleId={titleId} chapters={query.data.chapters} aliases={aliases} />
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>

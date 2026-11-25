@@ -2,7 +2,6 @@ import type { ReactElement } from "react";
 import { Navigate, Route, Routes } from "react-router";
 
 import { AdminPage } from "@/pages/admin";
-import { CatalogPage } from "@/pages/catalog";
 import { ChangelogPage } from "@/pages/changelog";
 import { LibraryPage } from "@/pages/library";
 import { LoginPage } from "@/pages/login";
@@ -12,20 +11,18 @@ import { SettingsPage } from "@/pages/settings";
 import { TitlePage } from "@/pages/title";
 import { WatchPage } from "@/pages/watch";
 import { Layout } from "@/shell/layout/Layout";
-import type { SectionPath } from "@/shell/sidebar";
 import { RequireAuth } from "./RequireAuth";
 
-// Ключ - раздел из SECTIONS: рассинхрон не скомпилируется
-const PAGES: Record<Exclude<SectionPath, "/">, ReactElement> = {
-  "/library": <LibraryPage />,
-  "/admin": <AdminPage />,
-  "/changelog": <ChangelogPage />,
-  "/settings": <SettingsPage />,
-};
+/** Статические экраны: меню шапки берёт подписи из shell/nav.ts. */
+const PAGES = [
+  { path: "/admin", element: <AdminPage /> },
+  { path: "/changelog", element: <ChangelogPage /> },
+  { path: "/settings", element: <SettingsPage /> },
+] as const satisfies readonly { path: string; element: ReactElement }[];
 
 /**
- * Параметрические маршруты живут вне SectionPath: меню остаётся статическим,
- * а активный пункт и заголовок определяются по префиксу пути.
+ * Параметрические маршруты живут отдельно: меню остаётся статическим,
+ * а заголовок экрана задаёт сам экран.
  */
 const PARAM_ROUTES = [
   { path: "/title/:id", element: <TitlePage /> },
@@ -35,14 +32,16 @@ const PARAM_ROUTES = [
 export function AppRouter() {
   return (
     <Routes>
-      {/* Экраны входа живут вне Layout: сайдбар и шапка гостю не нужны */}
+      {/* Экраны входа живут вне Layout: шапка гостю не нужна */}
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 
       <Route element={<RequireAuth />}>
         <Route element={<Layout />}>
-          <Route index element={<CatalogPage />} />
-          {Object.entries(PAGES).map(([path, element]) => (
+          <Route index element={<LibraryPage />} />
+          {/* Старая ссылка на отдельный экран библиотеки */}
+          <Route path="/library" element={<Navigate to="/" replace />} />
+          {PAGES.map(({ path, element }) => (
             <Route key={path} path={path} element={element} />
           ))}
           {PARAM_ROUTES.map(({ path, element }) => (
@@ -51,7 +50,7 @@ export function AppRouter() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
 
-        {/* Читалка — во весь экран, без сайдбара и шапки */}
+        {/* Читалка — во весь экран, без шапки */}
         <Route path="/reader/:titleId/:chapterKey" element={<ReaderPage />} />
       </Route>
     </Routes>

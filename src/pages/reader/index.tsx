@@ -12,6 +12,7 @@ import {
   useTitleQuery,
   type ContentPage,
 } from "@/api";
+import { isAvailableChapter, sortChapters } from "@/lib/chapters";
 import { useT } from "@/lib/i18n";
 import { readerPath, titlePath } from "@/lib/routes";
 import { Button, buttonVariants } from "@/ui/shadcn/button";
@@ -70,7 +71,15 @@ function ReaderView({
 
   const content = contentQuery.data?.content;
   const pages = content?.kind === "images" ? content.pages : EMPTY_PAGES;
-  const chapters = titleQuery.data?.chapters ?? [];
+  // Переходы «назад/вперёд» не должны предлагать locked/missing главы
+  const chapters = useMemo(
+    () =>
+      sortChapters(
+        (titleQuery.data?.chapters ?? []).filter(isAvailableChapter),
+        true,
+      ),
+    [titleQuery.data?.chapters],
+  );
 
   const [width, setWidth] = useState(0);
   const [current, setCurrent] = useState(0);

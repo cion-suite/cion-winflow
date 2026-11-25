@@ -1,215 +1,274 @@
-import { Link } from "react-router";
-import { Trash2Icon } from "lucide-react";
 import { useState } from "react";
+import { LibraryBigIcon, PencilIcon, PlusIcon } from "lucide-react";
 
 import {
-  titleCoverUrl,
   useErrorText,
   useLibraryQuery,
-  useRemoveLibraryMutation,
-  useUpsertLibraryMutation,
-  type LibraryItem,
+  useLibraryTabsQuery,
+  type LibraryQuery,
+  type LibrarySort,
+  type LibraryTab,
 } from "@/api";
-import { LIBRARY_STATUSES, type LibraryStatus } from "@/lib/catalog";
+import type { LibraryStatus } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
-import { titlePath } from "@/lib/routes";
-import { CoverImage } from "@/ui/CoverImage";
-import { PageHeader } from "@/ui/PageHeader";
+import { cn } from "@/lib/utils";
 import { Pagination } from "@/ui/Pagination";
 import { Select } from "@/ui/Select";
-import { Badge } from "@/ui/shadcn/badge";
-import { Button, buttonVariants } from "@/ui/shadcn/button";
+import { Button } from "@/ui/shadcn/button";
+import { Card, CardContent } from "@/ui/shadcn/card";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/ui/shadcn/card";
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/ui/shadcn/empty";
 import { Skeleton } from "@/ui/shadcn/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/ui/shadcn/tabs";
+import { AddTitleDialog } from "./AddTitleDialog";
+import { LibraryCard } from "./LibraryCard";
+import { CreateTabDialog, ManageTabsDialog } from "./TabDialogs";
 
-function LibraryRow({ item }: { item: LibraryItem }) {
-  const t = useT();
-  const upsert = useUpsertLibraryMutation(item.title_id);
-  const remove = useRemoveLibraryMutation(item.title_id);
-  const errorText = useErrorText(upsert.error ?? remove.error);
-  const pending = upsert.isPending || remove.isPending;
-  // Пока PUT в пути, select показывает выбор пользователя, а не старое значение
-  const [status, setStatus] = useState<LibraryStatus>(item.status);
-  const [score, setScore] = useState<number | null>(item.score);
+const PAGE_SIZE = 24;
+const DEFAULT_TAB_LIMIT = 3;
 
-  function revertToItem(): void {
-    setStatus(item.status);
-    setScore(item.score);
+/** Порядок вкладок как в макете: «Читаю» левее «Буду читать». */
+const STATUS_ORDER: LibraryStatus[] = [
+  "in_progress",
+  "planned",
+  "completed",
+  "dropped",
+  "on_hold",
+  "not_interested",
+];
+
+/** Удалённая закладка не должна оставлять пустую вкладку выбранной. */
+function resolveView(view: string, tabs: LibraryTab[] | undefined): string {
+  if (!view.startsWith("tab:") || tabs === undefined) return view;
+  const tabId = Number(view.slice("tab:".length));
+  return tabs.some((tab) => tab.id === tabId) ? view : "all";
+}
+
+function viewToQuery(
+  view: string,
+): Pick<LibraryQuery, "status" | "favorite" | "tabId"> {
+  if (view === "favorite") return { favorite: true };
+  if (view.startsWith("status:")) {
+    return { status: view.slice("status:".length) as LibraryStatus };
   }
-
-  function save(nextStatus: LibraryStatus, nextScore: number | null): void {
-    remove.reset();
-    upsert.mutate(
-      { status: nextStatus, score: nextScore },
-      { onError: revertToItem },
-    );
+  if (view.startsWith("tab:")) {
+    return { tabId: Number(view.slice("tab:".length)) };
   }
-
-  function changeStatus(next: LibraryStatus): void {
-    setStatus(next);
-    save(next, score);
-  }
-
-  function changeScore(next: number | null): void {
-    setScore(next);
-    save(status, next);
-  }
-
-  return (
-    <Card size="sm">
-      <div className="flex flex-wrap items-center gap-3 px-(--card-spacing)">
-        <Link
-          to={titlePath(item.title_id)}
-          className="flex min-w-0 flex-1 items-center gap-3 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-        >
-          <CoverImage
-            src={item.title.has_cover ? titleCoverUrl(item.title, "thumb") : null}
-            alt={item.title.name}
-            className="h-24 w-16 shrink-0 rounded-md"
-          />
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="truncate text-sm font-medium">{item.title.name}</span>
-            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-              <Badge variant="outline">{t(`catalog.kinds.${item.title.kind}`)}</Badge>
-              {item.title.year !== null && <span>{item.title.year}</span>}
-            </div>
-          </div>
-        </Link>
-
-        <div className="ml-auto flex items-center gap-2">
-          <Select
-            aria-label={t("library.status")}
-            value={status}
-            disabled={pending}
-            className="w-40"
-            onChange={(event) => changeStatus(event.target.value as LibraryStatus)}
-          >
-            {LIBRARY_STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {t(`library.statuses.${value}`)}
-              </option>
-            ))}
-          </Select>
-
-          <Select
-            aria-label={t("library.score")}
-            value={score === null ? "" : String(score)}
-            disabled={pending}
-            className="w-24"
-            onChange={(event) =>
-              changeScore(event.target.value === "" ? null : Number(event.target.value))
-            }
-          >
-            <option value="">{t("library.noScore")}</option>
-            {Array.from({ length: 10 }, (_, index) => String(index + 1)).map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </Select>
-
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={t("library.remove")}
-            title={t("library.remove")}
-            disabled={pending}
-            onClick={() => {
-              upsert.reset();
-              remove.mutate();
-            }}
-          >
-            <Trash2Icon aria-hidden />
-          </Button>
-        </div>
-
-        {errorText && (
-          <p role="alert" className="w-full text-sm text-destructive">
-            {errorText}
-          </p>
-        )}
-      </div>
-    </Card>
-  );
+  return {};
 }
 
 export function LibraryPage() {
   const t = useT();
+  const [view, setView] = useState("all");
+  const [sort, setSort] = useState<LibrarySort>("updated");
   const [page, setPage] = useState(1);
-  const query = useLibraryQuery({ page });
-  const errorText = useErrorText(query.error);
-  const items = query.data?.items ?? [];
-  const total = query.data?.total ?? 0;
-  const pageSize = query.data?.page_size ?? 50;
-  const pages = Math.max(1, Math.ceil(total / pageSize), page);
+  const [addOpen, setAddOpen] = useState(false);
+  const [createTabOpen, setCreateTabOpen] = useState(false);
+  const [manageTabsOpen, setManageTabsOpen] = useState(false);
+
+  const tabsQuery = useLibraryTabsQuery();
+  const customTabs = tabsQuery.data?.tabs ?? [];
+  const effectiveView = resolveView(view, tabsQuery.data?.tabs);
+  const library = useLibraryQuery({
+    ...viewToQuery(effectiveView),
+    sort,
+    page,
+    pageSize: PAGE_SIZE,
+  });
+  const errorText = useErrorText(library.error);
+
+  const items = library.data?.items ?? [];
+  const total = library.data?.total ?? 0;
+  const pageSize = library.data?.page_size ?? PAGE_SIZE;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const counts = library.data?.counts;
+  const tabLimit = tabsQuery.data?.limit ?? DEFAULT_TAB_LIMIT;
+  const isFiltered = effectiveView !== "all";
+
+  const tabDefs = [
+    { value: "all", label: t("library.tabs.all"), count: counts?.all ?? 0 },
+    ...STATUS_ORDER.map((status) => ({
+      value: `status:${status}`,
+      label: t(`library.statuses.${status}`),
+      count: counts?.statuses[status] ?? 0,
+    })),
+    {
+      value: "favorite",
+      label: t("library.favorite"),
+      count: counts?.favorite ?? 0,
+    },
+    ...customTabs.map((tab) => ({
+      value: `tab:${tab.id}`,
+      label: tab.name,
+      count: tab.count,
+    })),
+  ];
+
+  function changeView(next: string): void {
+    setView(next);
+    setPage(1);
+  }
+
+  function changeSort(next: LibrarySort): void {
+    setSort(next);
+    setPage(1);
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-      <PageHeader title={t("library.title")} description={t("library.description")} />
-
-      {query.isPending && (
+    <div className="flex w-full flex-col gap-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-2">
-          {Array.from({ length: 4 }, (_, index) => (
-            <Skeleton key={index} className="h-28 w-full rounded-xl" />
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("library.title")}
+          </h1>
+          <span className="h-1 w-16 rounded-full bg-primary" aria-hidden />
+        </div>
+        <Button type="button" onClick={() => setAddOpen(true)}>
+          <PlusIcon data-icon="inline-start" />
+          {t("library.addTitle")}
+        </Button>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
+          <Tabs value={effectiveView} onValueChange={changeView}>
+            <TabsList variant="line" className="w-max justify-start">
+              {tabDefs.map((tab) => (
+                <TabsTrigger
+                  key={tab.value}
+                  value={tab.value}
+                  className="flex-none gap-1.5 px-2"
+                >
+                  {tab.label}
+                  <span
+                    className={cn(
+                      "rounded-full px-1.5 py-0.5 text-xs tabular-nums",
+                      effectiveView === tab.value
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {tab.count}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={t("library.tabs.createTitle")}
+            title={
+              customTabs.length >= tabLimit
+                ? t("library.tabs.limit", { count: tabLimit })
+                : t("library.tabs.createTitle")
+            }
+            disabled={customTabs.length >= tabLimit}
+            onClick={() => setCreateTabOpen(true)}
+          >
+            <PlusIcon />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={t("library.tabs.manageTitle")}
+            title={t("library.tabs.manageTitle")}
+            onClick={() => setManageTabsOpen(true)}
+          >
+            <PencilIcon />
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        <Select
+          className="w-48"
+          value={sort}
+          aria-label={t("library.sortLabel")}
+          onChange={(event) => changeSort(event.target.value as LibrarySort)}
+        >
+          <option value="updated">{t("library.sorts.updated")}</option>
+          <option value="added">{t("library.sorts.added")}</option>
+          <option value="title">{t("library.sorts.title")}</option>
+          <option value="score">{t("library.sorts.score")}</option>
+        </Select>
+      </div>
+
+      {library.isPending && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+          {Array.from({ length: 12 }, (_, index) => (
+            <div key={index} className="flex flex-col gap-2">
+              <Skeleton className="aspect-2/3 w-full rounded-xl" />
+              <Skeleton className="h-3 w-2/3" />
+              <Skeleton className="h-4 w-5/6" />
+            </div>
           ))}
         </div>
       )}
 
-      {query.isError && (
+      {library.isError && (
         <Card>
           <CardContent className="flex flex-col items-start gap-2">
             <p role="alert" className="text-sm text-destructive">
               {errorText}
             </p>
-            <Button type="button" variant="outline" onClick={() => void query.refetch()}>
+            <Button type="button" variant="outline" onClick={() => void library.refetch()}>
               {t("retry")}
             </Button>
           </CardContent>
         </Card>
       )}
 
-      {!query.isPending && !query.isError && items.length === 0 && total === 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("library.empty")}</CardTitle>
-            <CardDescription>{t("library.emptyDescription")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Link className={buttonVariants()} to="/">
-              {t("library.browseCatalog")}
-            </Link>
-          </CardContent>
-        </Card>
+      {!library.isPending && !library.isError && items.length === 0 && (
+        <Empty className="border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <LibraryBigIcon />
+            </EmptyMedia>
+            <EmptyTitle>
+              {isFiltered ? t("library.emptyTab") : t("library.empty")}
+            </EmptyTitle>
+            <EmptyDescription>
+              {isFiltered
+                ? t("library.emptyTabDescription")
+                : t("library.emptyDescription")}
+            </EmptyDescription>
+          </EmptyHeader>
+          {!isFiltered && (
+            <EmptyContent>
+              <Button type="button" onClick={() => setAddOpen(true)}>
+                <PlusIcon data-icon="inline-start" />
+                {t("library.addTitle")}
+              </Button>
+            </EmptyContent>
+          )}
+        </Empty>
       )}
 
-      {!query.isPending && !query.isError && items.length === 0 && total > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("library.emptyPage")}</CardTitle>
-            <CardDescription>{t("library.emptyPageDescription")}</CardDescription>
-          </CardHeader>
-        </Card>
-      )}
-
-      {!query.isError && items.length > 0 && (
-        <div className="flex flex-col gap-2">
+      {!library.isError && items.length > 0 && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
           {items.map((item) => (
-            <LibraryRow
-              key={`${item.title_id}:${item.status}:${item.score ?? ""}`}
-              item={item}
-            />
+            <LibraryCard key={item.title_id} item={item} />
           ))}
         </div>
       )}
 
       <Pagination page={page} pages={pages} onPageChange={setPage} />
+
+      <AddTitleDialog open={addOpen} onOpenChange={setAddOpen} />
+      <CreateTabDialog open={createTabOpen} onOpenChange={setCreateTabOpen} />
+      <ManageTabsDialog open={manageTabsOpen} onOpenChange={setManageTabsOpen} />
     </div>
   );
 }
