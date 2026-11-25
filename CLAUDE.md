@@ -11,7 +11,7 @@
 
 ## Текущее состояние
 
-Фазы 0–2 плана выполнены: `server/` на axum отдаёт API и статику `dist/`, работает SQLite (sqlx, миграции при старте), вход по инвайту, сессии в HttpOnly-cookie и защищённые экраны. Фронтенд ходит в API через `fetch`, навигация — чистые URL. Каталог, источники и ридер — следующие фазы.
+Фазы 0–3 плана выполнены: `server/` на axum отдаёт API и статику `dist/`, работает SQLite (sqlx, миграции при старте), вход по инвайту, сессии в HttpOnly-cookie и защищённые экраны. Есть каталог с поиском и пагинацией, карточка тайтла, библиотека со статусом и оценкой, ручное создание тайтлов и обложки для администратора. Фронтенд ходит в API через `fetch`, навигация — чистые URL. Источники, ридер и прогресс — следующие фазы.
 
 - Целевая архитектура, фазы и критерии готовности — [docs/planned-now.md](docs/planned-now.md).
 - Причины выбора и альтернативы — [docs/decisions/0001-server-architecture.md](docs/decisions/0001-server-architecture.md).
@@ -25,7 +25,7 @@
 
 ## Стек
 
-- Rust edition 2024, axum 0.8, tokio, tower-http; tracing, thiserror.
+- Rust edition 2024, axum 0.8 (multipart), tokio, tower-http; tracing, thiserror, image.
 - Фронтенд: React 19, TypeScript 6, Vite 8
 - UI: shadcn/ui (база Base UI, стиль `base-nova`), Tailwind CSS 4
 - Данные и навигация: TanStack Query 5, React Router 8 (`BrowserRouter`)
@@ -34,7 +34,7 @@
 - Проверки: ESLint 10 (`eslint-plugin-boundaries` держит границы слоёв)
 - Пакетный менеджер: pnpm
 
-Дальше по плану: sqlx + SQLite, reqwest, scraper, argon2.
+Дальше по плану: reqwest, scraper, адаптеры источников, ридер и прогресс.
 
 ## Структура
 
@@ -42,25 +42,31 @@
 src/
   app/                     запуск: index.tsx (initSettings -> initI18n -> render), AppProvider (BrowserRouter, QueryClient, AuthProvider), AppRouter, RequireAuth, styles/index.css
   shell/                   navbar/ (шапка, пользователь, язык, тема), sidebar/ (меню), layout/
-  pages/                   экраны: home, title, reader, watch, changelog, settings, login, register
-  api/                     client.ts (request/apiUrl/ApiError), auth.tsx (хуки, AuthProvider), index.ts (области API)
-  ui/                      shadcn/ и общие компоненты: PageHeader.tsx, PlaceholderPage.tsx, AuthShell.tsx
-  lib/                     utils.ts (cn), settings.ts, routes.ts, authErrors.ts, i18n/
+  pages/                   экраны: catalog, title, library, reader, watch, changelog, settings, login, register
+  api/                     client.ts (request/apiUrl/ApiError/jsonMutation), auth.tsx, catalog.ts, library.ts, errors.ts (useErrorText), index.ts (области API)
+  ui/                      shadcn/ и общие компоненты: PageHeader.tsx, PlaceholderPage.tsx, AuthShell.tsx, TitleForm.tsx, CoverImage.tsx, Pagination.tsx, Select.tsx, Textarea.tsx
+  lib/                     utils.ts (cn), settings.ts, routes.ts, catalog.ts (типы и статусы), apiErrors.ts, i18n/
 public/theme.js            тема до первой отрисовки; внешний файл для CSP
 server/
   Cargo.toml
-  migrations/              0001_auth.sql: users, invites, sessions
+  migrations/              0001_auth.sql: users, invites, sessions; 0002_catalog.sql: каталог, источники, главы, библиотека, прогресс
   src/
-    main.rs                конфиг, БД, bootstrap админа, tracing, запуск
+    main.rs                конфиг, БД, DataDir, bootstrap админа, tracing, запуск
     app.rs                 Router, rate limit, слои Origin/session
     auth/                  handlers, service, password, session, middleware, limiter
-    config.rs              BIND_ADDR, STATIC_DIR, DATABASE_URL, auth env
+    catalog/               service (каталог, тайтл, валидация), handlers, cover (загрузка/выдача)
+    library/               service (библиотека пользователя), handlers
+    config.rs              BIND_ADDR, STATIC_DIR, DATABASE_URL, DATA_DIR, auth env
     db.rs                  пул SQLite (WAL), миграции при старте
-    state.rs               AppState: конфиг, пул, семафор Argon2, лимитер входа
+    state.rs               AppState: конфиг, пул, семафоры Argon2 и картинок, лимитер входа
     error.rs               AppError -> формат ошибок API
+    extract.rs             ApiJson/ApiQuery/ApiPath: ошибки разбора тоже { code, message }
+    pagination.rs          общие правила page/page_size для списков
     static_files.rs        ServeDir + SPA fallback + заголовки кэша
   tests/http.rs            health, API 401/404, SPA fallback
   tests/auth.rs            вход, инвайты, сессии, rate limit
+  tests/catalog.rs         тайтлы, поиск, пагинация, обложки, права admin
+  tests/library.rs         библиотека, оценки, изоляция пользователей
 dist/                      билд фронтенда (в git не коммитится)
 ```
 
@@ -107,7 +113,8 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - Цвета бери из токенов темы (`bg-primary`, `text-muted-foreground`), а не задавай вручную: так работает смена темы.
 - Алиас `@/` задан в трёх местах: `paths` в `tsconfig.json`, `resolve.alias` в `vite.config.ts` и `aliases` в `components.json`. Меняй их вместе, иначе `shadcn add` без ошибки создаст файлы не в той папке.
 - `tsconfig.json` один, `baseUrl` не нужен: в TypeScript 6 он устарел. Документация shadcn для Vite описывает другую схему (`tsconfig.app.json`, `baseUrl`), её не применяй.
-- Вызов бэкенда может завершиться ошибкой, всегда показывай её. Транспорт отдаёт `ApiError`, текст берётся из `error.message`.
+- Вызов бэкенда может завершиться ошибкой, всегда показывай её. Транспорт отдаёт `ApiError`, текст берётся из `error.message`; для известных кодов используй `useErrorText` (`api/errors.ts`), он переводит их через `lib/apiErrors.ts`.
+- Каталог, тайтл и библиотека ходят через `api.catalog` и `api.library`; строковые статусы и типы (`manga|anime|book`, статусы тайтла и библиотеки) — константы в `lib/catalog.ts`, не дублируй их литералами.
 - Строки интерфейса не пиши в компонентах: добавляй ключи в `lib/i18n/locales/en.ts` и `ru.ts` и бери их через `useT()`. Настройки читай через `useSetting()`, пиши через `settings.set()`; прямой `localStorage` — только в `lib/settings.ts`, `shell/navbar/ThemeToggle.tsx` и `public/theme.js`.
 - Пункты меню и статические маршруты задаются таблицей `shell/sidebar/sections.ts`; параметрические экраны (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) живут отдельным списком `PARAM_ROUTES` в `AppRouter`.
 - `Button` из Base UI без `type` рендерится как `type="button"` и форму не отправляет: кнопке отправки нужен явный `type="submit"`.
@@ -115,21 +122,23 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 
 ## Сервер
 
-- HTTP-обработчики тонкие, логика — в сервисах и репозиториях. Ошибки API — в формате `{ code, message }` (`server/src/error.rs`, `AppError` -> `IntoResponse`).
+- HTTP-обработчики тонкие, логика — в сервисах и репозиториях. Ошибки API — в формате `{ code, message }` (`server/src/error.rs`, `AppError` -> `IntoResponse`). Для JSON/Query/Path бери `ApiJson`/`ApiQuery`/`ApiPath` из `extract.rs`: стандартные экстракторы axum отвечают plain text.
 - Неизвестный `/api/*` без сессии — JSON 401, с сессией — JSON 404; отсутствующий `/assets/*` — 404. `index.html` получают только навигационные запросы (`Sec-Fetch-Mode: navigate` или `Accept: text/html`). `GET /api/titles/{id}` и прочие пути с точками в идентификаторах работают.
 - Публичные API-пути перечислены явно в `auth/middleware.rs` (`/api/health`, `/api/auth/*`); остальное под `/api` требует сессию. Мутации проверяют `Origin` и `Sec-Fetch-Site`; браузерная cookie `sid` — `HttpOnly`, `SameSite=Lax`, `Secure` по `COOKIE_SECURE`.
 - Пароли — Argon2id в `spawn_blocking` с семафором; в БД только хеш. Сессия — 32 случайных байта, в БД SHA-256; idle 30 дней, абсолютный срок 90. Вход ограничен по IP (`tower_governor`) и по username (счётчик в памяти).
-- Конфиг — из env: `BIND_ADDR` (по умолчанию `127.0.0.1:3000`), `STATIC_DIR` (`dist`), `DATABASE_URL` (`sqlite://data/cion.db`), `REGISTRATION_MODE` (`invite|closed`), `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG`; в dev `.env` читает `dotenvy`, пример — `.env.example`.
-- Миграции — `server/migrations/`, `sqlx::migrate!` при старте. Схема auth: `users`, `invites`, `sessions`; время — unix seconds (INTEGER).
+- Каталог и библиотека: `GET /api/catalog` (поиск по `titles.name_lower` — Unicode-копия названия, `%`/`_` экранируются; фильтр `kind`, пагинация), `GET /api/titles/{id}` -> `{ title, library }`; `POST /api/titles`, `PUT /api/titles/{id}`, `POST /api/titles/{id}/cover` — admin. Библиотека: `GET /api/library?page=&page_size=`, `PUT/DELETE /api/library/{title_id}` для текущего пользователя. Пагинация общая — `pagination::resolve`.
+- Обложки: multipart `file` до 5 МиБ, JPEG/PNG/WebP/GIF, `image::Limits` в `spawn_blocking` с семафором; два WebP (`full`, `thumb`) в `DATA_DIR/covers/{id}/`, атомарная запись tmp + rename. `GET /api/titles/{id}/cover?size=thumb|full` с `ETag` и `Cache-Control: private`; UI добавляет `v={updated_at}`.
+- Конфиг — из env: `BIND_ADDR` (по умолчанию `127.0.0.1:3000`), `STATIC_DIR` (`dist`), `DATABASE_URL` (`sqlite://data/cion.db`), `DATA_DIR` (`data`), `REGISTRATION_MODE` (`invite|closed`), `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG`; в dev `.env` читает `dotenvy`, пример — `.env.example`.
+- Миграции — `server/migrations/`, `sqlx::migrate!` при старте. Схема: `users`, `invites`, `sessions`; каталог и пользовательские данные — `sources`, `titles`, `source_entries`, `chapters`, `chapter_aliases`, `source_priorities`, `pages`, `chapter_texts`, `library`, `progress`, `chapter_reads`; время — unix seconds (INTEGER).
 - Статику отдаёт `ServeDir` с диска; `rust-embed` не используем, иначе правка UI требует пересборки Rust.
-- Тесты API — `tower::ServiceExt::oneshot` по `Router` (`server/tests/http.rs`); временные каталоги и SQLite — в тестах, не в проде.
+- Тесты API — `tower::ServiceExt::oneshot` по `Router` (`server/tests/`); временные каталоги, SQLite и `DATA_DIR` — в тестах, не в проде.
 - В production-коде нет `unwrap` / `expect` / `panic!`; причина `unsafe` — в WHY-комментарии.
 
 ## Подводные камни
 
 - Для dev нужны оба процесса: без `pnpm dev:server` прокси API отвечает ошибкой.
 - Первый администратор создаётся только на пустой таблице `users` из `ADMIN_USERNAME`/`ADMIN_PASSWORD`. После bootstrap переменные убери: пароль остаётся в env и больше не нужен.
-- `DATABASE_URL` по умолчанию `sqlite://data/cion.db`; каталог `data/` создаётся сам и в git не попадает. Миграции применяются при каждом старте.
+- `DATABASE_URL` по умолчанию `sqlite://data/cion.db`, `DATA_DIR` — `data`; каталоги создаются сами и в git не попадают. Миграции применяются при каждом старте; `data/covers/` хранит обложки.
 - В dev разрешены Origin `http://localhost:1420`/`127.0.0.1:1420` и те же на `:3000`. Release-сборка без `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS` отклоняет все мутации (403) — это fail closed, а не забытая настройка. В проде также `COOKIE_SECURE=true`.
 - Rate limit входа хранится в памяти процесса и сбрасывается при перезапуске; для одного self-host инстанса этого достаточно.
 - Сервер раздаёт статику из `dist/`: чтобы проверить SPA на `:3000`, сначала выполни `pnpm build`. После пересборки UI сервер перезапускать не нужно.

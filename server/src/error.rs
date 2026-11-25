@@ -26,12 +26,16 @@ pub enum AppError {
     #[error("{message}")]
     Conflict { code: &'static str, message: String },
     #[error("{message}")]
+    NotFound { code: &'static str, message: String },
+    #[error("{message}")]
     RateLimited {
         message: String,
         retry_after_secs: u64,
     },
     #[error("database error")]
     Database(#[from] sqlx::Error),
+    #[error("io error")]
+    Io(#[from] std::io::Error),
     #[error("password hashing error")]
     PasswordHash,
     #[error("random source error")]
@@ -64,6 +68,13 @@ impl AppError {
         }
     }
 
+    pub fn not_found(code: &'static str, message: impl Into<String>) -> Self {
+        Self::NotFound {
+            code,
+            message: message.into(),
+        }
+    }
+
     pub fn invalid_credentials() -> Self {
         Self::InvalidCredentials {
             message: "invalid username or password".to_owned(),
@@ -89,6 +100,7 @@ impl IntoResponse for AppError {
             Self::Forbidden { code, message } => (StatusCode::FORBIDDEN, code, message, None),
             Self::BadRequest { code, message } => (StatusCode::BAD_REQUEST, code, message, None),
             Self::Conflict { code, message } => (StatusCode::CONFLICT, code, message, None),
+            Self::NotFound { code, message } => (StatusCode::NOT_FOUND, code, message, None),
             Self::RateLimited {
                 message,
                 retry_after_secs,
@@ -100,6 +112,15 @@ impl IntoResponse for AppError {
             ),
             Self::Database(error) => {
                 tracing::error!(%error, "database error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "internal server error".to_owned(),
+                    None,
+                )
+            }
+            Self::Io(error) => {
+                tracing::error!(%error, "io error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",

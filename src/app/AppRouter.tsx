@@ -1,8 +1,9 @@
 import type { ReactElement } from "react";
 import { Navigate, Route, Routes } from "react-router";
 
+import { CatalogPage } from "@/pages/catalog";
 import { ChangelogPage } from "@/pages/changelog";
-import { HomePage } from "@/pages/home";
+import { LibraryPage } from "@/pages/library";
 import { LoginPage } from "@/pages/login";
 import { ReaderPage } from "@/pages/reader";
 import { RegisterPage } from "@/pages/register";
@@ -15,6 +16,7 @@ import { RequireAuth } from "./RequireAuth";
 
 // Ключ - раздел из SECTIONS: рассинхрон не скомпилируется
 const PAGES: Record<Exclude<SectionPath, "/">, ReactElement> = {
+  "/library": <LibraryPage />,
   "/changelog": <ChangelogPage />,
   "/settings": <SettingsPage />,
 };
@@ -38,7 +40,7 @@ export function AppRouter() {
 
       <Route element={<RequireAuth />}>
         <Route element={<Layout />}>
-          <Route index element={<HomePage />} />
+          <Route index element={<CatalogPage />} />
           {Object.entries(PAGES).map(([path, element]) => (
             <Route key={path} path={path} element={element} />
           ))}

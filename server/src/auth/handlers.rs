@@ -10,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     auth::{
         service,
-        session::{self, CurrentUser, Role},
+        session::{self, CurrentUser},
     },
     error::AppError,
+    extract::ApiJson,
     state::AppState,
 };
 
@@ -53,7 +54,7 @@ pub struct InviteListResponse {
 
 pub async fn register(
     State(state): State<AppState>,
-    Json(request): Json<RegisterRequest>,
+    ApiJson(request): ApiJson<RegisterRequest>,
 ) -> Result<Response, AppError> {
     let (user, token) =
         service::register(&state, request.username, request.password, request.invite).await?;
@@ -64,7 +65,7 @@ pub async fn register(
 
 pub async fn login(
     State(state): State<AppState>,
-    Json(request): Json<LoginRequest>,
+    ApiJson(request): ApiJson<LoginRequest>,
 ) -> Result<Response, AppError> {
     let (user, token) = service::login(&state, request.username, request.password).await?;
     let jar = CookieJar::new().add(session::session_cookie(token, state.config.cookie_secure));
@@ -89,7 +90,7 @@ pub async fn list_invites(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
 ) -> Result<Json<InviteListResponse>, AppError> {
-    require_admin(&user)?;
+    user.require_admin()?;
     let items = service::list_invites(&state).await?;
     Ok(Json(InviteListResponse { items }))
 }
@@ -97,9 +98,9 @@ pub async fn list_invites(
 pub async fn create_invite(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
-    Json(request): Json<CreateInviteRequest>,
+    ApiJson(request): ApiJson<CreateInviteRequest>,
 ) -> Result<Response, AppError> {
-    require_admin(&user)?;
+    user.require_admin()?;
     let (code, expires_at) =
         service::create_invite(&state, user.id, request.expires_in_days).await?;
 
@@ -108,12 +109,4 @@ pub async fn create_invite(
         Json(CreateInviteResponse { code, expires_at }),
     )
         .into_response())
-}
-
-fn require_admin(user: &CurrentUser) -> Result<(), AppError> {
-    if user.role == Role::Admin {
-        Ok(())
-    } else {
-        Err(AppError::forbidden("forbidden", "admin role required"))
-    }
 }

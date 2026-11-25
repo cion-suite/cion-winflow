@@ -1,6 +1,6 @@
 # План перевода cion-reader на сервер
 
-- **Статус:** принят; фазы 0–2 выполнены, дальше фаза 3
+- **Статус:** принят; фазы 0–3 выполнены, дальше фаза 4
 - **Дата:** 2026-11-24
 - **Решение:** [0001-server-architecture.md](decisions/0001-server-architecture.md)
 - **Дополнение:** [0002-source-abstraction.md](decisions/0002-source-abstraction.md) — гетерогенные источники
@@ -121,7 +121,7 @@ sessions(id, token_hash UNIQUE, user_id, created_at, expires_at, last_seen_at)
 
 sources(id, code UNIQUE, name, base_url, enabled, config_json,
         descriptor_version, config_error, last_checked_at, last_error, created_at)
-titles(id, kind, name, alt_names_json, authors_json, genres_json, description,
+titles(id, kind, name, name_lower, alt_names_json, authors_json, genres_json, description,
        status, year, lang, rating, cover_path, origin_source_id, preferred_source_id,
        preferred_source_updated_at, created_at, updated_at)
 source_entries(id, title_id, source_id, kind, external_id, external_url, raw_json,
@@ -173,9 +173,9 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 - **Отключённый источник.** Записи `source_entries` и главы остаются в БД, тайтл и библиотека читаются. Чтение контента из отключённого источника — `source_disabled` (503), а не 500. Селектор пропускает выключенные источники и пересчитывает `preferred_source`; `is_primary` автоматически не переписывается.
 - **Сессии.** `last_seen_at` обновлять не чаще раза в 5–15 минут (условный `UPDATE ... WHERE last_seen_at < now - 300`), иначе каждый запрос пишет в единственную SQLite-базу.
 
-Индексы и ограничения: `UNIQUE(source_id, kind, external_id)`, `UNIQUE(source_entry_id, external_id)`, `UNIQUE(chapter_id, idx)`, частичный `UNIQUE(title_id) WHERE is_primary = 1`, `UNIQUE(title_id, alias_key)`, `UNIQUE(kind, lang, source_id)`, `UNIQUE(kind, lang, rank)`, `pages(chapter_id)`, `source_entries(title_id)`, `chapters(source_entry_id, chapter_key)`, `chapters(source_entry_id, volume, number_milli, ordinal_site)`, `chapters(source_entry_id, availability)`, `chapter_aliases(title_id, canonical_key)`, `chapter_texts` по PK, `source_priorities(kind, lang, rank)`, `progress(user_id, updated_at)`, `jobs(status, run_after)`.
+Индексы и ограничения: `UNIQUE(source_id, kind, external_id)`, `UNIQUE(source_entry_id, external_id)`, `UNIQUE(chapter_id, idx)`, частичный `UNIQUE(title_id) WHERE is_primary = 1`, `UNIQUE(title_id, alias_key)`, `UNIQUE(kind, lang, source_id)`, `UNIQUE(kind, lang, rank)`, `pages(chapter_id)`, `source_entries(title_id)`, `chapters(source_entry_id, chapter_key)`, `chapters(source_entry_id, volume, number_milli, ordinal_site)`, `chapters(source_entry_id, availability)`, `chapter_aliases(title_id, canonical_key)`, `chapter_texts` по PK, `source_priorities(kind, lang, rank)`, `progress(user_id, updated_at)`, `jobs(status, run_after)`, `titles(name_lower)`, `titles(kind)`.
 
-Поиск: на первом этапе — `LIKE` по `lower(name)` с экранированием `%` и `_`. FTS5 подключать позже, когда `alt_names` будут храниться склеенным текстом (JSON-массив FTS5 индексирует плохо), а пользовательский ввод будет экранироваться от синтаксиса `MATCH`.
+Поиск: на первом этапе — `LIKE` по `name_lower` с экранированием `%` и `_`. `name_lower` — Unicode-lowercase копия `name`, которую заполняет приложение: SQLite `lower()` понимает только ASCII, и поиск по кириллице иначе не работал бы. FTS5 подключать позже, когда `alt_names` будут храниться склеенным текстом (JSON-массив FTS5 индексирует плохо), а пользовательский ввод будет экранироваться от синтаксиса `MATCH`.
 
 ## 6. API
 
@@ -675,14 +675,14 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - [x] вынести инлайновый скрипт темы из `index.html` в `public/theme.js` (CSP);
 - [x] удалить `src-tauri/`, `tauri*` скрипты, `@tauri-apps/*`, Tauri-правила из ESLint; из `.claude/rules/build.md` убрать `pnpm tauri`, `run-vs.mjs` и `--manifest-path` на `src-tauri`, удалить `.claude/scripts/run-vs.mjs` (`vs.mjs` остаётся — `run-cargo.mjs` берёт из него `findVcvars`/`quote`);
 - [x] обновить `.gitignore` (`server/target`, `data/`, `.env*`), `README`, `CLAUDE.md`;
-- [x] решить судьбу шаблонных экранов: демо-разделы `network`, `apps`, `utils`, `system` и их mock-данные удалены, остались `home`, `changelog`, `settings`; `sections.ts`, `AppRouter`, i18n обновлены синхронно;
+- [x] решить судьбу шаблонных экранов: демо-разделы `network`, `apps`, `utils`, `system` и их mock-данные удалены, остались `home`, `changelog`, `settings` (в фазе 3 `home` заменён каталогом); `sections.ts`, `AppRouter`, i18n обновлены синхронно;
 - [x] параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) держать вне `SectionPath`/`sectionForPath`: отдельный список `PARAM_ROUTES` в `AppRouter`, активный пункт меню — по префиксу пути, меню остаётся статическим; `chapterKey` кодируется через `encodeURIComponent` в `src/lib/routes.ts`;
 - [x] добавить `dev:server` в `package.json`;
 - [x] обновить `.claude/commands/notes.md` и `.claude/scripts/notes.mjs` под `server/`; новый `server/Cargo.lock` коммитится.
 
 Критерий: приложение открывается в браузере на `:1420` через Vite, `/api/health` отвечает через прокси; после `pnpm build` сервер отдаёт SPA и API на `:3000`; в `src/` нет `@tauri-apps`; навигация использует чистые URL.
 
-### Фаза 2 — БД, авторизация, инвайты
+### Фаза 2 — БД, авторизация, инвайты (выполнено)
 
 - [x] sqlx + SQLite, миграции, `SqliteConnectOptions` (WAL, `foreign_keys`, `busy_timeout`, `create_if_missing`);
 - [x] таблицы `users`, `invites`, `sessions`;
@@ -694,15 +694,17 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 
 Критерий: регистрация по одноразовому инвайту, вход, сохранение сессии после перезагрузки, выход; в режиме `closed` регистрация возвращает 403; пароли — Argon2; cookie с нужными флагами.
 
-### Фаза 3 — каталог и библиотека без источников
+### Фаза 3 — каталог и библиотека без источников (выполнено)
 
-- таблицы `sources`, `source_priorities`, `titles`, `source_entries`, `chapters`, `chapter_aliases`, `pages`, `chapter_texts`, `library`, `progress`, `chapter_reads` — сразу в итоговой форме из §5, чтобы фазы 4–6 не делали `ALTER`; `jobs` добавляется в фазе 7;
-- `titles.origin_source_id`/`preferred_source_id`, статистика `source_entries`, `chapters.availability`/`page_count` создаются сразу — фаза 5 только заполняет их;
-- `titles.kind` с CHECK; создание и правка тайтла принимают `kind`, смена `kind` при наличии привязанных источников — 409;
-- админские эндпоинты создания/правки тайтла и загрузки обложки;
-- библиотека: добавить, статус, оценка, удалить;
-- каталог, поиск, экраны `catalog`, `title`, `library`;
-- заменить/удалить шаблонные экраны и пункты меню.
+- [x] таблицы `sources`, `source_priorities`, `titles`, `source_entries`, `chapters`, `chapter_aliases`, `pages`, `chapter_texts`, `library`, `progress`, `chapter_reads` — сразу в итоговой форме из §5, чтобы фазы 4–6 не делали `ALTER`; `jobs` добавляется в фазе 7;
+- [x] `titles.origin_source_id`/`preferred_source_id`, статистика `source_entries`, `chapters.availability`/`page_count` создаются сразу — фаза 5 только заполняет их;
+- [x] `titles.kind` с CHECK; создание и правка тайтла принимают `kind`, смена `kind` при наличии привязанных источников — 409;
+- [x] админские эндпоинты создания/правки тайтла и загрузки обложки;
+- [x] библиотека: добавить, статус, оценка, удалить;
+- [x] каталог, поиск, экраны `catalog`, `title`, `library`;
+- [x] заменить/удалить шаблонные экраны и пункты меню.
+
+Дополнительно: `titles.name_lower` (Unicode-поиск), обложки — два WebP-размера в `DATA_DIR/covers/<id>/` с ETag, общая пагинация каталога и библиотеки, тесты `tests/catalog.rs` и `tests/library.rs`.
 
 Критерий: тайтл создаётся вручную, добавляется в библиотеку, поиск находит его по названию; статус и оценка сохраняются; в меню нет демо-разделов.
 

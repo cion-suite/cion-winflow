@@ -26,6 +26,17 @@ pub enum Role {
     User,
 }
 
+impl CurrentUser {
+    /// Админские эндпоинты вызывают это до работы с БД.
+    pub fn require_admin(&self) -> Result<(), AppError> {
+        if self.role == Role::Admin {
+            Ok(())
+        } else {
+            Err(AppError::forbidden("forbidden", "admin role required"))
+        }
+    }
+}
+
 impl Role {
     pub fn as_str(self) -> &'static str {
         match self {

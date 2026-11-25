@@ -47,7 +47,7 @@ const nearest = t => {
 // -- инвентарь репозитория
 
 const { dirname, basename } = path.posix;
-// Имя слайса в тексте - путь от `src/`: `pages/home`
+// Имя слайса в тексте - путь от `src/`: `pages/catalog`
 const short = t => t.slice('src/'.length);
 // `kit/table` в `kit/table-extra` - не упоминание
 const mention = t => new RegExp(`(?<![\\w./@-])(?:(?:src|@)/)?${short(t)}(?![\\w-])`);

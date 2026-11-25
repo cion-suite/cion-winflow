@@ -2,10 +2,10 @@ use std::{net::IpAddr, sync::Arc};
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     middleware,
     response::{IntoResponse, Response},
-    routing::{MethodRouter, get, post},
+    routing::{MethodRouter, get, post, put},
 };
 use serde::Serialize;
 use tower_governor::{GovernorError, GovernorLayer, governor::GovernorConfigBuilder};
@@ -13,7 +13,9 @@ use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 
 use crate::{
     auth::{self, limiter::ClientIpKeyExtractor},
-    error::{self, AppError},
+    catalog, error,
+    error::AppError,
+    library,
     state::AppState,
     static_files::serve_static,
 };
@@ -61,6 +63,24 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/admin/invites",
             get(auth::handlers::list_invites).post(auth::handlers::create_invite),
+        )
+        .route("/catalog", get(catalog::handlers::list_catalog))
+        .route("/titles", post(catalog::handlers::create_title))
+        .route(
+            "/titles/{id}",
+            get(catalog::handlers::get_title).put(catalog::handlers::update_title),
+        )
+        .route(
+            "/titles/{id}/cover",
+            // Дефолтные 2 МиБ не пропустят 5-мегабайтный файл
+            get(catalog::cover::get_cover)
+                .post(catalog::cover::upload_cover)
+                .layer(DefaultBodyLimit::max(catalog::cover::BODY_LIMIT)),
+        )
+        .route("/library", get(library::handlers::list_library))
+        .route(
+            "/library/{title_id}",
+            put(library::handlers::upsert_library).delete(library::handlers::remove_library),
         )
         .fallback(error::api_not_found)
         // Последний слой — внешний: Origin проверяется до сессии

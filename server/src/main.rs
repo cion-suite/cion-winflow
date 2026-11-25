@@ -17,6 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_env()?;
     let pool = db::connect(&config.database_url).await?;
+    tokio::fs::create_dir_all(&config.data_dir).await?;
 
     if let Some(admin) = config.admin_bootstrap.clone() {
         if auth::bootstrap_admin(&pool, &admin).await? {

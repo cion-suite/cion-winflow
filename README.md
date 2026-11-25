@@ -2,7 +2,7 @@
 
 Приватный self-hosted агрегатор манги, аниме и книг: один каталог, одна библиотека и один прогресс для себя и небольшого круга читателей.
 
-**Текущее состояние.** Работают сервер `server/` на Rust (axum), SQLite с миграциями, вход по инвайту и сессии в HttpOnly-cookie. Экраны входа и регистрации защищают остальное приложение; `/api/health`, статика `dist/` и SPA-fallback на месте. Каталог, источники и ридер — следующие фазы. План — [docs/planned-now.md](docs/planned-now.md), причины решения — [docs/decisions/0001-server-architecture.md](docs/decisions/0001-server-architecture.md).
+**Текущее состояние.** Работают сервер `server/` на Rust (axum), SQLite с миграциями, вход по инвайту и сессии в HttpOnly-cookie. Каталог с поиском и пагинацией, карточка тайтла, библиотека со статусом и оценкой, ручное создание тайтлов и загрузка обложек для администратора. Источники и ридер — следующие фазы. План — [docs/planned-now.md](docs/planned-now.md), причины решения — [docs/decisions/0001-server-architecture.md](docs/decisions/0001-server-architecture.md).
 
 ## Что будет в приложении
 
@@ -15,7 +15,7 @@
 ## Стек
 
 - Фронтенд: React 19, TypeScript 6, Vite 8, shadcn/ui (Base UI), Tailwind CSS 4, TanStack Query 5, React Router 8, i18next.
-- Бэкенд: Rust 2024, axum 0.8, tokio, tower-http; sqlx + SQLite, reqwest, scraper — по фазам плана.
+- Бэкенд: Rust 2024, axum 0.8, tokio, tower-http; sqlx + SQLite, image, reqwest, scraper — по фазам плана.
 
 ## Быстрый старт
 
@@ -44,7 +44,7 @@ pnpm build
 pnpm dev:server
 ```
 
-Откройте http://127.0.0.1:3000 — сервер отдаст SPA и `/api/health`. Конфиг сервера: `BIND_ADDR`, `STATIC_DIR`, `DATABASE_URL`, `REGISTRATION_MODE`, `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG` (пример в `.env.example`).
+Откройте http://127.0.0.1:3000 — сервер отдаст SPA и `/api/health`. Конфиг сервера: `BIND_ADDR`, `STATIC_DIR`, `DATABASE_URL`, `DATA_DIR`, `REGISTRATION_MODE`, `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG` (пример в `.env.example`).
 
 ## Проверки
 

@@ -1,9 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
 
-import { useAuth, useRegisterMutation } from "@/api";
-import { ApiError } from "@/api/client";
-import { authErrorKey } from "@/lib/authErrors";
+import { useAuth, useErrorText, useRegisterMutation } from "@/api";
 import { useT } from "@/lib/i18n";
 import { AuthShell } from "@/ui/AuthShell";
 import { Button } from "@/ui/shadcn/button";
@@ -17,12 +15,9 @@ export function RegisterPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [invite, setInvite] = useState("");
+  const errorText = useErrorText(register.error);
 
   if (user) return <Navigate to="/" replace />;
-
-  const error = register.error;
-  const errorKey = error instanceof ApiError ? authErrorKey(error.code) : null;
-  const errorText = error ? (errorKey ? t(errorKey) : error.message) : null;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();

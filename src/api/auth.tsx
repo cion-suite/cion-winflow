@@ -8,7 +8,7 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiError, request } from "./client";
+import { ApiError, jsonMutation, request } from "./client";
 
 export type Role = "admin" | "user";
 
@@ -34,11 +34,7 @@ type RegisterInput = Credentials & {
 export const ME_QUERY_KEY = ["me"] as const;
 
 function postJson<T>(path: string, body: unknown): Promise<T> {
-  return request<T>(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  return request<T>(path, jsonMutation(body));
 }
 
 /** 401 — это «гость», а не ошибка: экран решает RequireAuth. */

@@ -23,6 +23,15 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+/** RequestInit для JSON-мутации: одинаковый заголовок во всех областях API. */
+export function jsonMutation(body: unknown, method: "POST" | "PUT" = "POST"): RequestInit {
+  return {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
 async function errorFrom(response: Response): Promise<ApiError> {
   let payload: ApiErrorPayload | null = null;
   try {

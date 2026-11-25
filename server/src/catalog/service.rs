@@ -1,0 +1,514 @@
+use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+
+use crate::{auth::session::now_unix, error::AppError, pagination, state::AppState};
+
+pub const KINDS: [&str; 3] = ["manga", "anime", "book"];
+pub const TITLE_STATUSES: [&str; 4] = ["ongoing", "completed", "hiatus", "cancelled"];
+
+const MAX_NAME_CHARS: usize = 300;
+const MAX_LIST_ITEMS: usize = 50;
+const MAX_LIST_ITEM_CHARS: usize = 200;
+const MAX_DESCRIPTION_CHARS: usize = 20_000;
+const MAX_QUERY_CHARS: usize = 200;
+
+/// Полная замена тайтла: PUT присылает все поля, отсутствующие списки
+/// и опциональные поля означают «пусто».
+#[derive(Debug, Deserialize)]
+pub struct TitleInput {
+    pub name: String,
+    pub kind: String,
+    #[serde(default)]
+    pub alt_names: Vec<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub genres: Vec<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub year: Option<i64>,
+    pub lang: Option<String>,
+    pub rating: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CatalogParams {
+    pub q: Option<String>,
+    pub kind: Option<String>,
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TitleDto {
+    pub id: i64,
+    pub kind: String,
+    pub name: String,
+    pub alt_names: Vec<String>,
+    pub authors: Vec<String>,
+    pub genres: Vec<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub year: Option<i64>,
+    pub lang: Option<String>,
+    pub rating: Option<f64>,
+    pub has_cover: bool,
+    pub origin_source_id: Option<i64>,
+    pub preferred_source_id: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TitleSummaryDto {
+    pub id: i64,
+    pub kind: String,
+    pub name: String,
+    pub year: Option<i64>,
+    pub status: Option<String>,
+    pub rating: Option<f64>,
+    pub has_cover: bool,
+    /// Меняется при загрузке обложки: клиент использует как cache-buster.
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LibraryState {
+    pub status: String,
+    pub score: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TitleResponse {
+    pub title: TitleDto,
+    pub library: Option<LibraryState>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CatalogPage {
+    pub items: Vec<TitleSummaryDto>,
+    pub total: i64,
+    pub page: i64,
+    pub page_size: i64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TitleRow {
+    id: i64,
+    kind: String,
+    name: String,
+    alt_names_json: String,
+    authors_json: String,
+    genres_json: String,
+    description: Option<String>,
+    status: Option<String>,
+    year: Option<i64>,
+    lang: Option<String>,
+    rating: Option<f64>,
+    cover_path: Option<String>,
+    origin_source_id: Option<i64>,
+    preferred_source_id: Option<i64>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl From<TitleRow> for TitleDto {
+    fn from(row: TitleRow) -> Self {
+        Self {
+            id: row.id,
+            kind: row.kind,
+            name: row.name,
+            alt_names: decode_list(&row.alt_names_json, "alt_names"),
+            authors: decode_list(&row.authors_json, "authors"),
+            genres: decode_list(&row.genres_json, "genres"),
+            description: row.description,
+            status: row.status,
+            year: row.year,
+            lang: row.lang,
+            rating: row.rating,
+            has_cover: row.cover_path.is_some(),
+            origin_source_id: row.origin_source_id,
+            preferred_source_id: row.preferred_source_id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TitleSummaryRow {
+    id: i64,
+    kind: String,
+    name: String,
+    year: Option<i64>,
+    status: Option<String>,
+    rating: Option<f64>,
+    has_cover: bool,
+    updated_at: i64,
+}
+
+impl From<TitleSummaryRow> for TitleSummaryDto {
+    fn from(row: TitleSummaryRow) -> Self {
+        Self {
+            id: row.id,
+            kind: row.kind,
+            name: row.name,
+            year: row.year,
+            status: row.status,
+            rating: row.rating,
+            has_cover: row.has_cover,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+pub async fn list_catalog(
+    pool: &SqlitePool,
+    params: CatalogParams,
+) -> Result<CatalogPage, AppError> {
+    let (page, page_size) = pagination::resolve(params.page, params.page_size)?;
+
+    let kind = match params.kind.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(kind) => Some(validate_kind(kind)?),
+    };
+
+    let pattern = match params.q.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(query) => {
+            if query.chars().count() > MAX_QUERY_CHARS {
+                return Err(AppError::bad_request(
+                    "validation",
+                    format!("query must be at most {MAX_QUERY_CHARS} characters"),
+                ));
+            }
+            Some(format!("%{}%", escape_like(&query.to_lowercase())))
+        }
+    };
+
+    let total = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM titles \
+         WHERE (? IS NULL OR kind = ?) \
+           AND (? IS NULL OR name_lower LIKE ? ESCAPE '\\')",
+    )
+    .bind(kind.as_deref())
+    .bind(kind.as_deref())
+    .bind(pattern.as_deref())
+    .bind(pattern.as_deref())
+    .fetch_one(pool)
+    .await?;
+
+    let offset = pagination::offset(page, page_size);
+    let rows = sqlx::query_as::<_, TitleSummaryRow>(
+        "SELECT id, kind, name, year, status, rating, \
+                cover_path IS NOT NULL AS has_cover, updated_at \
+         FROM titles \
+         WHERE (? IS NULL OR kind = ?) \
+           AND (? IS NULL OR name_lower LIKE ? ESCAPE '\\') \
+         ORDER BY name_lower, id \
+         LIMIT ? OFFSET ?",
+    )
+    .bind(kind.as_deref())
+    .bind(kind.as_deref())
+    .bind(pattern.as_deref())
+    .bind(pattern.as_deref())
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(CatalogPage {
+        items: rows.into_iter().map(TitleSummaryDto::from).collect(),
+        total,
+        page,
+        page_size,
+    })
+}
+
+pub async fn get_title(
+    pool: &SqlitePool,
+    user_id: i64,
+    title_id: i64,
+) -> Result<TitleResponse, AppError> {
+    let title = find_title(pool, title_id).await?;
+    let library = find_library_state(pool, user_id, title_id).await?;
+
+    Ok(TitleResponse {
+        title: TitleDto::from(title),
+        library,
+    })
+}
+
+pub async fn create_title(state: &AppState, input: TitleInput) -> Result<TitleDto, AppError> {
+    let title = validate_title(input)?;
+    let now = now_unix();
+
+    let id = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO titles (kind, name, name_lower, alt_names_json, authors_json, genres_json, \
+                             description, status, year, lang, rating, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(&title.kind)
+    .bind(&title.name)
+    .bind(&title.name_lower)
+    .bind(&title.alt_names_json)
+    .bind(&title.authors_json)
+    .bind(&title.genres_json)
+    .bind(title.description.as_deref())
+    .bind(title.status.as_deref())
+    .bind(title.year)
+    .bind(title.lang.as_deref())
+    .bind(title.rating)
+    .bind(now)
+    .bind(now)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let row = find_title(&state.pool, id).await?;
+    Ok(TitleDto::from(row))
+}
+
+pub async fn update_title(
+    state: &AppState,
+    title_id: i64,
+    input: TitleInput,
+) -> Result<TitleDto, AppError> {
+    let current = find_title(&state.pool, title_id).await?;
+    let title = validate_title(input)?;
+
+    if title.kind != current.kind {
+        let entries: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM source_entries WHERE title_id = ?")
+                .bind(title_id)
+                .fetch_one(&state.pool)
+                .await?;
+        if entries > 0 {
+            return Err(AppError::conflict(
+                "kind_locked",
+                "cannot change kind while source entries are attached",
+            ));
+        }
+    }
+
+    sqlx::query(
+        "UPDATE titles SET kind = ?, name = ?, name_lower = ?, alt_names_json = ?, \
+                           authors_json = ?, genres_json = ?, description = ?, status = ?, \
+                           year = ?, lang = ?, rating = ?, \
+                           updated_at = max(?, updated_at + 1) \
+         WHERE id = ?",
+    )
+    .bind(&title.kind)
+    .bind(&title.name)
+    .bind(&title.name_lower)
+    .bind(&title.alt_names_json)
+    .bind(&title.authors_json)
+    .bind(&title.genres_json)
+    .bind(title.description.as_deref())
+    .bind(title.status.as_deref())
+    .bind(title.year)
+    .bind(title.lang.as_deref())
+    .bind(title.rating)
+    .bind(now_unix())
+    .bind(title_id)
+    .execute(&state.pool)
+    .await?;
+
+    let row = find_title(&state.pool, title_id).await?;
+    Ok(TitleDto::from(row))
+}
+
+async fn find_title(pool: &SqlitePool, title_id: i64) -> Result<TitleRow, AppError> {
+    let row = sqlx::query_as::<_, TitleRow>(
+        "SELECT id, kind, name, alt_names_json, authors_json, genres_json, description, status, \
+                year, lang, rating, cover_path, origin_source_id, preferred_source_id, \
+                created_at, updated_at \
+         FROM titles WHERE id = ?",
+    )
+    .bind(title_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or_else(|| AppError::not_found("title_not_found", "title not found"))
+}
+
+async fn find_library_state(
+    pool: &SqlitePool,
+    user_id: i64,
+    title_id: i64,
+) -> Result<Option<LibraryState>, AppError> {
+    let row = sqlx::query_as::<_, (String, Option<i64>)>(
+        "SELECT status, score FROM library WHERE user_id = ? AND title_id = ?",
+    )
+    .bind(user_id)
+    .bind(title_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|(status, score)| LibraryState { status, score }))
+}
+
+struct ValidatedTitle {
+    kind: String,
+    name: String,
+    name_lower: String,
+    alt_names_json: String,
+    authors_json: String,
+    genres_json: String,
+    description: Option<String>,
+    status: Option<String>,
+    year: Option<i64>,
+    lang: Option<String>,
+    rating: Option<f64>,
+}
+
+fn validate_title(input: TitleInput) -> Result<ValidatedTitle, AppError> {
+    let name = input.name.trim().to_owned();
+    if name.is_empty() {
+        return Err(validation("name must not be empty"));
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(validation(format!(
+            "name must be at most {MAX_NAME_CHARS} characters"
+        )));
+    }
+
+    let kind = validate_kind(&input.kind)?;
+
+    let alt_names = normalize_list("alt_names", input.alt_names)?;
+    let authors = normalize_list("authors", input.authors)?;
+    let genres = normalize_list("genres", input.genres)?;
+
+    let description = input
+        .description
+        .map(|description| description.trim().to_owned())
+        .filter(|description| !description.is_empty());
+    if let Some(description) = &description
+        && description.chars().count() > MAX_DESCRIPTION_CHARS
+    {
+        return Err(validation(format!(
+            "description must be at most {MAX_DESCRIPTION_CHARS} characters"
+        )));
+    }
+
+    let status = match input.status.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(status) => {
+            let status = status.to_lowercase();
+            if !TITLE_STATUSES.contains(&status.as_str()) {
+                return Err(validation(format!(
+                    "status must be one of: {}",
+                    TITLE_STATUSES.join(", ")
+                )));
+            }
+            Some(status)
+        }
+    };
+
+    if let Some(year) = input.year
+        && !(1800..=2200).contains(&year)
+    {
+        return Err(validation("year must be between 1800 and 2200"));
+    }
+
+    let lang = match input.lang.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(lang) => {
+            let lang = lang.to_lowercase();
+            let valid = (2..=8).contains(&lang.chars().count())
+                && lang
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic() || character == '-');
+            if !valid {
+                return Err(validation(
+                    "lang must be 2 to 8 latin letters or hyphens, for example `ru`",
+                ));
+            }
+            Some(lang)
+        }
+    };
+
+    if let Some(rating) = input.rating
+        && !(0.0..=10.0).contains(&rating)
+    {
+        return Err(validation("rating must be between 0 and 10"));
+    }
+
+    Ok(ValidatedTitle {
+        kind,
+        name_lower: name.to_lowercase(),
+        name,
+        alt_names_json: json_list(&alt_names),
+        authors_json: json_list(&authors),
+        genres_json: json_list(&genres),
+        description,
+        status,
+        year: input.year,
+        lang,
+        rating: input.rating,
+    })
+}
+
+fn validate_kind(kind: &str) -> Result<String, AppError> {
+    let kind = kind.trim().to_lowercase();
+    if KINDS.contains(&kind.as_str()) {
+        Ok(kind)
+    } else {
+        Err(validation(format!(
+            "kind must be one of: {}",
+            KINDS.join(", ")
+        )))
+    }
+}
+
+fn normalize_list(field: &str, values: Vec<String>) -> Result<Vec<String>, AppError> {
+    if values.len() > MAX_LIST_ITEMS {
+        return Err(validation(format!(
+            "{field} may contain at most {MAX_LIST_ITEMS} entries"
+        )));
+    }
+
+    let mut normalized = Vec::with_capacity(values.len());
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if value.chars().count() > MAX_LIST_ITEM_CHARS {
+            return Err(validation(format!(
+                "each {field} entry must be at most {MAX_LIST_ITEM_CHARS} characters"
+            )));
+        }
+        normalized.push(value.to_owned());
+    }
+    Ok(normalized)
+}
+
+fn json_list(values: &[String]) -> String {
+    // Value::to_string не возвращает Result: ветки ошибки для Vec<String> нет
+    serde_json::Value::from(values.to_vec()).to_string()
+}
+
+fn decode_list(raw: &str, field: &'static str) -> Vec<String> {
+    match serde_json::from_str(raw) {
+        Ok(values) => values,
+        Err(error) => {
+            tracing::warn!(%error, field, "malformed title JSON column; using empty list");
+            Vec::new()
+        }
+    }
+}
+
+fn escape_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
+fn validation(message: impl Into<String>) -> AppError {
+    AppError::bad_request("validation", message)
+}

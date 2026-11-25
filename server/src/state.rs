@@ -12,6 +12,8 @@ pub struct AppState {
     pub pool: SqlitePool,
     /// Ограничивает одновременные Argon2-операции, чтобы они не выедали CPU.
     pub password_semaphore: Arc<Semaphore>,
+    /// Ограничивает одновременное декодирование и перекодирование картинок.
+    pub image_semaphore: Arc<Semaphore>,
     pub login_limiter: Arc<LoginLimiter>,
 }
 
@@ -21,6 +23,7 @@ impl AppState {
             config,
             pool,
             password_semaphore: Arc::new(Semaphore::new(2)),
+            image_semaphore: Arc::new(Semaphore::new(2)),
             login_limiter: Arc::new(LoginLimiter::default()),
         }
     }

@@ -1,5 +1,10 @@
 import type { ComponentType, SVGProps } from "react";
-import { HomeIcon, ScrollTextIcon, SettingsIcon } from "lucide-react";
+import {
+  BookMarkedIcon,
+  LibraryBigIcon,
+  ScrollTextIcon,
+  SettingsIcon,
+} from "lucide-react";
 
 export type SectionGroup = "overview" | "footer";
 
@@ -17,7 +22,8 @@ export const SIDEBAR_GROUPS = [
 ] as const satisfies readonly { id: SectionGroup; i18nKey: string }[];
 
 const ROWS = [
-  { path: "/", i18nKey: "nav.home", icon: HomeIcon, group: "overview" },
+  { path: "/", i18nKey: "nav.catalog", icon: LibraryBigIcon, group: "overview" },
+  { path: "/library", i18nKey: "nav.library", icon: BookMarkedIcon, group: "overview" },
   { path: "/changelog", i18nKey: "nav.changelog", icon: ScrollTextIcon, group: "footer" },
   { path: "/settings", i18nKey: "nav.settings", icon: SettingsIcon, group: "footer" },
 ] as const satisfies readonly Section[];

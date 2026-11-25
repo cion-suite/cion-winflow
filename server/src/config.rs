@@ -12,6 +12,8 @@ pub struct Config {
     pub bind_addr: SocketAddr,
     pub static_dir: PathBuf,
     pub database_url: String,
+    /// Каталог данных: обложки, кэш изображений, аватары.
+    pub data_dir: PathBuf,
     pub registration_mode: RegistrationMode,
     /// Origins, которым разрешены мутирующие запросы (CSRF).
     pub allowed_origins: Vec<String>,
@@ -72,6 +74,9 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("dist"));
         let database_url =
             env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://data/cion.db".to_owned());
+        let data_dir = env::var_os("DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("data"));
 
         let registration_mode = match env::var("REGISTRATION_MODE")
             .unwrap_or_else(|_| "invite".to_owned())
@@ -98,6 +103,7 @@ impl Config {
             bind_addr,
             static_dir,
             database_url,
+            data_dir,
             registration_mode,
             allowed_origins,
             cookie_secure,
@@ -113,6 +119,7 @@ impl Default for Config {
             bind_addr: SocketAddr::from(([127, 0, 0, 1], 3000)),
             static_dir: PathBuf::from("dist"),
             database_url: "sqlite://data/cion.db".to_owned(),
+            data_dir: PathBuf::from("data"),
             registration_mode: RegistrationMode::Invite,
             allowed_origins: DEV_ORIGINS
                 .iter()

@@ -1,9 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
 
-import { useAuth, useLoginMutation } from "@/api";
-import { ApiError } from "@/api/client";
-import { authErrorKey } from "@/lib/authErrors";
+import { useAuth, useErrorText, useLoginMutation } from "@/api";
 import { useT } from "@/lib/i18n";
 import { AuthShell } from "@/ui/AuthShell";
 import { Button } from "@/ui/shadcn/button";
@@ -21,13 +19,11 @@ export function LoginPage() {
   const location = useLocation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const errorText = useErrorText(login.error);
 
   if (user) return <Navigate to="/" replace />;
 
   const from = (location.state as LoginLocationState | null)?.from ?? "/";
-  const error = login.error;
-  const errorKey = error instanceof ApiError ? authErrorKey(error.code) : null;
-  const errorText = error ? (errorKey ? t(errorKey) : error.message) : null;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();

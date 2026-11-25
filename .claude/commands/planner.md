@@ -126,7 +126,7 @@ Completion steps (после каждой фазы)
 ### Phase 1: <заголовок>
 - **What:** ...
 - **Where:** `src/pages/catalog/index.tsx` (modify)
-- **How:** ... (образец: `src/pages/home/index.tsx`)
+- **How:** ... (образец: `src/pages/catalog/index.tsx`)
 - **Reuse:** `useT` - `src/lib/i18n`; `PageHeader` - `src/ui/PageHeader.tsx`
 - **Depends on:** -
 

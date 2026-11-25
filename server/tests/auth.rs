@@ -1,12 +1,15 @@
 mod common;
 
-use axum::http::{Method, StatusCode, header};
+use axum::{
+    body::Body,
+    http::{Method, Request, StatusCode, header},
+};
 use serde_json::json;
 
 use cion_reader::config::{Config, RegistrationMode};
 
 use common::{
-    ADMIN_PASSWORD, ADMIN_USERNAME, TestApp, USER_PASSWORD, body_json, get, json_request,
+    ADMIN_PASSWORD, ADMIN_USERNAME, ORIGIN, TestApp, USER_PASSWORD, body_json, get, json_request,
     password_hash, session_token, with_cookie, with_origin, with_peer, without_origin,
 };
 
@@ -296,6 +299,35 @@ async fn bootstrap_admin_runs_only_on_empty_database() {
     .await
     .expect("bootstrap");
     assert!(!created);
+}
+
+#[tokio::test]
+async fn malformed_json_is_api_error_envelope() {
+    let app = TestApp::new().await;
+
+    let request = with_peer(
+        Request::builder()
+            .method(Method::POST)
+            .uri("/api/auth/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ORIGIN, ORIGIN)
+            .header("sec-fetch-site", "same-origin")
+            .body(Body::from("not json"))
+            .expect("request"),
+        "127.0.0.1",
+    );
+    let response = app.request(request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "validation");
+
+    let response = app
+        .request(json_request(Method::POST, "/api/auth/login", &json!({})))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "validation");
 }
 
 #[tokio::test]

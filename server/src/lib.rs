@@ -1,7 +1,11 @@
 pub mod app;
 pub mod auth;
+pub mod catalog;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod extract;
+pub mod library;
+pub mod pagination;
 pub mod state;
 pub mod static_files;

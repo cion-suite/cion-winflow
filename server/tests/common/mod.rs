@@ -33,6 +33,7 @@ pub struct TestApp {
     // TempDir удаляет каталоги только при drop: держим их живыми
     _db_dir: TempDir,
     _static_dir: TempDir,
+    _data_dir: TempDir,
 }
 
 impl TestApp {
@@ -61,12 +62,17 @@ impl TestApp {
         );
         let pool = db::connect(&database_url).await.expect("database");
 
+        // Обложки и будущий кэш пишутся во временный каталог, не в data/
+        let data_dir = tempfile::tempdir().expect("data dir");
+        config.data_dir = data_dir.path().to_path_buf();
+
         let state = AppState::new(config, pool.clone());
         Self {
             pool,
             router: router(state),
             _db_dir: db_dir,
             _static_dir: static_dir,
+            _data_dir: data_dir,
         }
     }
 
@@ -135,6 +141,32 @@ impl TestApp {
         assert_eq!(response.status(), StatusCode::CREATED, "register user");
         session_token(&response)
     }
+
+    /// Регистрирует ещё одного пользователя, когда администратор уже создан.
+    pub async fn register_extra_user(&self, username: &str) -> String {
+        let admin_cookie = self.login_admin().await;
+        let invite = self.create_invite(&admin_cookie).await;
+        let response = self.register(username, USER_PASSWORD, &invite).await;
+        assert_eq!(response.status(), StatusCode::CREATED, "register user");
+        session_token(&response)
+    }
+
+    /// Создаёт тайтл от имени администратора и возвращает его id.
+    pub async fn create_title(&self, admin_cookie: &str, name: &str, kind: &str) -> i64 {
+        let response = self
+            .request(with_cookie(
+                json_request(
+                    Method::POST,
+                    "/api/titles",
+                    &json!({ "name": name, "kind": kind }),
+                ),
+                admin_cookie,
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::CREATED, "create title");
+        let body = body_json(response).await;
+        body["title"]["id"].as_i64().expect("title id")
+    }
 }
 
 pub fn json_request(method: Method, uri: &str, body: &Value) -> Request<Body> {
@@ -155,6 +187,39 @@ pub fn get(uri: &str) -> Request<Body> {
         .uri(uri)
         .body(Body::empty())
         .expect("request")
+}
+
+/// multipart/form-data с одним файлом: загрузка обложки.
+pub fn multipart_file_request(
+    uri: &str,
+    field: &str,
+    filename: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Request<Body> {
+    let boundary = "cion-reader-test-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(header::ORIGIN, ORIGIN)
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::from(body))
+        .expect("request");
+    with_peer(request, "127.0.0.1")
 }
 
 pub fn with_origin(mut request: Request<Body>, origin: &str) -> Request<Body> {
