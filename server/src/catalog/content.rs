@@ -227,7 +227,7 @@ pub async fn direct(state: &AppState, chapter_id: i64) -> Result<ContentResponse
                 ch.group_name, ch.language, ch.is_locked, ch.availability, \
                 ch.availability_checked_at, ch.page_count, ch.ordinal_site, ch.external_url, \
                 ch.embed_url, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
-                s.code AS source_code, s.name AS source_name, s.enabled AS source_enabled \
+                s.code AS source_code, s.name AS source_name, (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled \
          FROM chapters ch \
          JOIN source_entries e ON e.id = ch.source_entry_id \
          JOIN sources s ON s.id = e.source_id \
@@ -439,12 +439,16 @@ async fn mark_availability(
     candidate: &ChapterCandidate,
     availability: &str,
 ) -> Result<(), AppError> {
-    sqlx::query("UPDATE chapters SET availability = ?, availability_checked_at = ? WHERE id = ?")
-        .bind(availability)
-        .bind(now_unix())
-        .bind(candidate.chapter_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE chapters SET availability = ?, availability_checked_at = ?, is_locked = ? \
+         WHERE id = ?",
+    )
+    .bind(availability)
+    .bind(now_unix())
+    .bind(i64::from(availability == "locked"))
+    .bind(candidate.chapter_id)
+    .execute(pool)
+    .await?;
 
     selection::recompute_stats(pool, candidate.source_entry_id).await?;
     selection::recompute_preferred(pool, candidate.title_id).await?;

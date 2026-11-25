@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { Navigate, Route, Routes } from "react-router";
 
+import { AdminPage } from "@/pages/admin";
 import { CatalogPage } from "@/pages/catalog";
 import { ChangelogPage } from "@/pages/changelog";
 import { LibraryPage } from "@/pages/library";
@@ -17,6 +18,7 @@ import { RequireAuth } from "./RequireAuth";
 // Ключ - раздел из SECTIONS: рассинхрон не скомпилируется
 const PAGES: Record<Exclude<SectionPath, "/">, ReactElement> = {
   "/library": <LibraryPage />,
+  "/admin": <AdminPage />,
   "/changelog": <ChangelogPage />,
   "/settings": <SettingsPage />,
 };

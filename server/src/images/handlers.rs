@@ -203,7 +203,7 @@ async fn refresh_pages(
             let pages = replace_pages(&state.pool, row.chapter_id, &pages).await?;
             sqlx::query(
                 "UPDATE chapters SET availability = 'available', availability_checked_at = ?, \
-                        content_kind = 'images', page_count = ? WHERE id = ?",
+                        content_kind = 'images', page_count = ?, is_locked = 0 WHERE id = ?",
             )
             .bind(now_unix())
             .bind(i64::try_from(pages.len()).unwrap_or(i64::MAX))
@@ -244,12 +244,16 @@ async fn mark_missing(state: &AppState, row: &PageSourceRow) -> Result<(), AppEr
 }
 
 async fn mark(state: &AppState, row: &PageSourceRow, availability: &str) -> Result<(), AppError> {
-    sqlx::query("UPDATE chapters SET availability = ?, availability_checked_at = ? WHERE id = ?")
-        .bind(availability)
-        .bind(now_unix())
-        .bind(row.chapter_id)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "UPDATE chapters SET availability = ?, availability_checked_at = ?, is_locked = ? \
+         WHERE id = ?",
+    )
+    .bind(availability)
+    .bind(now_unix())
+    .bind(i64::from(availability == "locked"))
+    .bind(row.chapter_id)
+    .execute(&state.pool)
+    .await?;
     selection::recompute_stats(&state.pool, row.source_entry_id).await?;
     selection::recompute_preferred(&state.pool, row.title_id).await?;
     Ok(())

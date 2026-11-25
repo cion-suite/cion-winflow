@@ -23,6 +23,8 @@ import { Button, buttonVariants } from "@/ui/shadcn/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/ui/shadcn/card";
 import { Input } from "@/ui/shadcn/input";
 import { Skeleton } from "@/ui/shadcn/skeleton";
+import { AdminSourcePanel } from "./AdminSourcePanel";
+import { AliasesPanel } from "./AliasesPanel";
 import { LibraryPanel } from "./LibraryPanel";
 
 function chapterLabel(
@@ -151,7 +153,7 @@ export function TitlePage() {
     );
   }
 
-  const { title, library, chapters, sources } = query.data;
+  const { title, library, chapters, sources, aliases } = query.data;
   const meta = [
     t(`catalog.kinds.${title.kind}`),
     title.year === null ? null : String(title.year),
@@ -288,6 +290,15 @@ export function TitlePage() {
                             t("title.volumeLabel", { volume: chapter.volume ?? "" }),
                           )}
                         </p>
+                        {chapter.variants.length > 1 && (
+                          <p className="truncate text-xs text-muted-foreground">
+                            {t("title.variants", {
+                              variants: chapter.variants
+                                .map((variant) => variant.source_name)
+                                .join(", "),
+                            })}
+                          </p>
+                        )}
                         {chapter.availability === "missing" && (
                           <p className="text-xs text-muted-foreground">
                             {t("title.unavailable")}
@@ -326,6 +337,9 @@ export function TitlePage() {
                         {source.is_primary && (
                           <Badge variant="secondary">{t("title.primarySource")}</Badge>
                         )}
+                        {title.preferred_source_id === source.source_id && (
+                          <Badge>{t("title.preferredSource")}</Badge>
+                        )}
                         {!source.enabled && (
                           <Badge variant="outline">{t("title.sourceDisabled")}</Badge>
                         )}
@@ -346,6 +360,19 @@ export function TitlePage() {
                 ))}
               </CardContent>
             </Card>
+          )}
+
+          {isAdmin && (
+            <AdminSourcePanel
+              titleId={titleId}
+              titleKind={title.kind}
+              sources={sources}
+              preferredSourceId={title.preferred_source_id}
+            />
+          )}
+
+          {isAdmin && (
+            <AliasesPanel titleId={titleId} chapters={chapters} aliases={aliases} />
           )}
         </div>
       </div>

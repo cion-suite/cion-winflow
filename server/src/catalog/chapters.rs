@@ -14,6 +14,9 @@ use super::selection::{self, ChapterCandidate, TitleInfo};
 #[derive(Debug, Serialize)]
 pub struct TitleChapterVariantDto {
     pub chapter_id: i64,
+    /// Собственный ключ варианта: у групп перевода он совпадает,
+    /// у источников с разной нумерацией — отличается (кандидат в alias).
+    pub chapter_key: String,
     pub source_id: i64,
     pub source_code: String,
     pub source_name: String,
@@ -101,7 +104,7 @@ pub async fn title_chapters(
                 ch.group_name, ch.language, ch.is_locked, ch.availability, \
                 ch.availability_checked_at, ch.page_count, ch.ordinal_site, ch.external_url, \
                 ch.embed_url, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
-                s.code AS source_code, s.name AS source_name, s.enabled AS source_enabled \
+                s.code AS source_code, s.name AS source_name, (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled \
          FROM chapters ch \
          JOIN source_entries e ON e.id = ch.source_entry_id \
          JOIN sources s ON s.id = e.source_id \
@@ -123,12 +126,22 @@ pub async fn title_chapters(
     let mut chapters = Vec::with_capacity(groups.len());
     for (key, variants) in groups {
         let variants = selection::order(variants, title.preferred_source_id, &ranks, now);
-        let Some(selected) = variants.first() else {
+        // Свежий locked/missing preferred-источник не должен становиться
+        // «выбранным» для отображения, если есть доступный вариант.
+        let Some(selected) = selection::first_usable(&variants, now) else {
             continue;
         };
 
         let availability = group_availability(&variants, now);
-        let is_locked = variants.iter().all(|variant| variant.is_locked);
+        let effective: Vec<&ChapterCandidate> = variants
+            .iter()
+            .filter(|variant| variant.source_enabled)
+            .collect();
+        let is_locked = if effective.is_empty() {
+            variants.iter().all(|variant| variant.is_locked)
+        } else {
+            effective.iter().all(|variant| variant.is_locked)
+        };
 
         chapters.push(TitleChapterDto {
             chapter_key: key,
@@ -146,6 +159,7 @@ pub async fn title_chapters(
                 .into_iter()
                 .map(|variant| TitleChapterVariantDto {
                     chapter_id: variant.chapter_id,
+                    chapter_key: variant.chapter_key,
                     source_id: variant.source_id,
                     source_code: variant.source_code,
                     source_name: variant.source_name,
@@ -173,7 +187,7 @@ pub async fn title_chapters(
 
     let entries = sqlx::query_as::<_, EntryRow>(
         "SELECT s.id AS source_id, s.name AS source_name, s.code AS source_code, \
-                s.enabled AS source_enabled, e.id AS source_entry_id, e.is_primary, \
+                (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled, e.id AS source_entry_id, e.is_primary, \
                 e.chapter_count, e.available_count, e.locked_count, e.missing_count, \
                 e.stats_updated_at, e.last_error \
          FROM source_entries e JOIN sources s ON s.id = e.source_id \
@@ -207,17 +221,16 @@ pub async fn title_chapters(
 
 fn group_availability(variants: &[ChapterCandidate], now: i64) -> String {
     // Выключенный источник не должен делать главу «доступной» в UI
-    let effective: Vec<&ChapterCandidate> = {
-        let enabled: Vec<&ChapterCandidate> = variants
-            .iter()
-            .filter(|variant| variant.source_enabled)
-            .collect();
-        if enabled.is_empty() {
-            variants.iter().collect()
-        } else {
-            enabled
-        }
-    };
+    let effective: Vec<&ChapterCandidate> = variants
+        .iter()
+        .filter(|variant| variant.source_enabled)
+        .collect();
+
+    if effective.is_empty() {
+        // Ни одного рабочего источника: открытие вернёт source_disabled,
+        // поэтому «available» здесь был бы ложью.
+        return "unknown".to_owned();
+    }
 
     if effective
         .iter()

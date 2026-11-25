@@ -1,5 +1,6 @@
 import { Link, useLocation } from "react-router";
 
+import { useAuth } from "@/api";
 import { useT } from "@/lib/i18n";
 import {
   Sidebar,
@@ -17,16 +18,20 @@ import { SECTIONS, SIDEBAR_GROUPS, sectionForPath, type SectionGroup } from "./s
 
 function SectionMenu({ group, labelKey }: { group: SectionGroup; labelKey?: string }) {
   const t = useT();
+  const { user } = useAuth();
   const { pathname } = useLocation();
   const { setOpenMobile } = useSidebar();
   const current = sectionForPath(pathname);
+  const isAdmin = user?.role === "admin";
 
   return (
     <>
       {/* В свёрнутом до иконок сайдбаре заголовок скрывает сам SidebarGroupLabel */}
       {labelKey && <SidebarGroupLabel>{t(labelKey)}</SidebarGroupLabel>}
       <SidebarMenu>
-        {SECTIONS.filter((section) => section.group === group).map((section) => (
+        {SECTIONS.filter(
+          (section) => section.group === group && (!section.adminOnly || isAdmin),
+        ).map((section) => (
           <SidebarMenuItem key={section.path}>
             <SidebarMenuButton
               render={<Link to={section.path} onClick={() => setOpenMobile(false)} />}

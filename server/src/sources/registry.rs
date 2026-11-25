@@ -15,6 +15,7 @@ use crate::sources::{
     error::SourceError,
     http::AdapterCtx,
     remanga::{self, RemangaConfig},
+    rumix::{self, RumixConfig},
 };
 
 #[derive(Debug, sqlx::FromRow)]
@@ -24,6 +25,7 @@ struct SourceRow {
     base_url: Option<String>,
     enabled: bool,
     config_json: String,
+    config_error: Option<String>,
     last_checked_at: Option<i64>,
     last_error: Option<String>,
 }
@@ -73,7 +75,7 @@ pub struct SourceRegistry {
 impl SourceRegistry {
     pub async fn load(pool: &SqlitePool, client: Arc<Client>) -> Result<Self, AppError> {
         let rows = sqlx::query_as::<_, SourceRow>(
-            "SELECT id, code, base_url, enabled, config_json, \
+            "SELECT id, code, base_url, enabled, config_json, config_error, \
                     last_checked_at, last_error \
              FROM sources",
         )
@@ -94,7 +96,19 @@ impl SourceRegistry {
                 continue;
             };
 
+            let stored_config_error = row.config_error.clone();
             let runtime = build_runtime(row, descriptor, client.clone());
+
+            // Ошибка сборки адаптера должна быть видна и в БД: иначе
+            // preferred source может указывать на нерабочий источник.
+            if stored_config_error != runtime.config_error {
+                sqlx::query("UPDATE sources SET config_error = ? WHERE id = ?")
+                    .bind(runtime.config_error.as_deref())
+                    .bind(runtime.id)
+                    .execute(pool)
+                    .await?;
+            }
+
             let runtime = Arc::new(runtime);
             by_id.insert(runtime.id, runtime.clone());
             entries.insert(runtime.code.clone(), runtime);
@@ -190,6 +204,12 @@ fn build_adapter(
                 .map(SourceKind::Remanga)
                 .map_err(|error| error.to_string())
         }
+        rumix::CODE => {
+            let config = RumixConfig::from_value(config)?;
+            rumix::Rumix::new(ctx, config)
+                .map(SourceKind::Rumix)
+                .map_err(|error| error.to_string())
+        }
         #[cfg(debug_assertions)]
         crate::sources::fixture::CODE => crate::sources::fixture::Fixture::new(ctx)
             .map(SourceKind::Fixture)
@@ -199,7 +219,7 @@ fn build_adapter(
 }
 
 pub fn descriptors() -> Vec<&'static SourceDescriptor> {
-    let mut list = vec![&remanga::DESCRIPTOR];
+    let mut list = vec![&remanga::DESCRIPTOR, &rumix::DESCRIPTOR];
     #[cfg(debug_assertions)]
     list.push(&crate::sources::fixture::DESCRIPTOR);
     list

@@ -96,12 +96,25 @@ pub async fn save_progress(
             "chapter not found",
         ));
     }
-    let ordered = selection::order(candidates, title.preferred_source_id, &ranks, now_unix());
+    let now = now_unix();
+    let ordered = selection::order(candidates, title.preferred_source_id, &ranks, now);
+    // Сначала вариант с известным content_kind: он задаёт и поле позиции,
+    // и page_count. Если тип неизвестен везде — 409 ниже.
+    let chosen = ordered
+        .iter()
+        .find(|candidate| candidate.source_enabled && candidate.content_kind.is_some())
+        .or_else(|| {
+            ordered
+                .iter()
+                .find(|candidate| candidate.content_kind.is_some())
+        })
+        .or_else(|| selection::first_usable(&ordered, now))
+        .ok_or_else(|| AppError::not_found("chapter_not_found", "chapter not found"))?;
 
     // Тип контента берём у выбранного варианта: клиент не должен угадывать
-    let content_kind = ordered
-        .iter()
-        .find_map(|candidate| candidate.content_kind.as_deref())
+    let content_kind = chosen
+        .content_kind
+        .as_deref()
         .and_then(ContentKind::from_db)
         .ok_or_else(|| {
             AppError::conflict(
@@ -122,7 +135,7 @@ pub async fn save_progress(
                     "page must be greater than or equal to 0",
                 ));
             }
-            if let Some(page_count) = ordered.iter().find_map(|candidate| candidate.page_count)
+            if let Some(page_count) = chosen.page_count
                 && page >= page_count
             {
                 return Err(AppError::bad_request(

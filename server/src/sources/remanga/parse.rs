@@ -1,17 +1,16 @@
 //! Чистые парсеры Remanga v2. Сеть сюда не входит: всё проверяется
 //! на фикстурах, поэтому редизайн API ломает тест, а не прод.
 
-use std::collections::HashSet;
-
 use serde::Deserialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::sources::dto::{
-    ChapterKey, ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SourceChapter,
-    SourceContent, SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
+    ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SourceChapter, SourceContent,
+    SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
 };
 use crate::sources::error::SourceError;
+use crate::sources::keys::{build_chapter_key, normalize_number, number_milli};
+use crate::sources::text::{dedupe, truncate_chars};
 
 // Потолки совпадают с валидацией ручного создания тайтла в catalog::service.
 const MAX_NAME_CHARS: usize = 300;
@@ -482,56 +481,6 @@ pub fn map_status(name: Option<&str>) -> Option<TitleStatus> {
     }
 }
 
-/// `chapter_key` по §7.3: том и вид главы — префиксы, без номера — стабильный хеш.
-pub fn build_chapter_key(
-    volume: Option<u16>,
-    kind: ChapterKind,
-    number_text: Option<&str>,
-    external_id: &ExternalId,
-) -> ChapterKey {
-    let volume_segment = volume.map_or_else(String::new, |volume| format!("v{volume}:"));
-    let kind_segment = if kind == ChapterKind::Normal {
-        String::new()
-    } else {
-        format!("{}:", kind.as_str())
-    };
-
-    match number_text.filter(|number| !number.is_empty()) {
-        Some(number) => format!("{volume_segment}{kind_segment}c{number}"),
-        None => {
-            let hash = hex::encode(Sha256::digest(external_id.as_str().as_bytes()));
-            format!("{volume_segment}{kind_segment}x:h{}", &hash[..16])
-        }
-    }
-}
-
-/// «, » → «.», остаются только цифры, точка и дефис: безопасно для URL и БД.
-pub fn normalize_number(raw: &str) -> String {
-    raw.trim()
-        .replace(',', ".")
-        .chars()
-        .filter(|character| character.is_ascii_digit() || *character == '.' || *character == '-')
-        .collect()
-}
-
-/// «12.5» → 12500, «1-2» → 1000 (начало диапазона), без номера — None.
-pub fn number_milli(text: &str) -> Option<i64> {
-    let head = text.split('-').next()?.trim();
-    if head.is_empty() {
-        return None;
-    }
-    let mut parts = head.splitn(2, '.');
-    let integer = parts.next()?.parse::<i64>().ok()?;
-    let fraction = parts.next().unwrap_or("");
-    let fraction_milli = if fraction.is_empty() {
-        0
-    } else {
-        let padded = format!("{fraction}000");
-        padded.get(..3)?.parse::<i64>().ok()?
-    };
-    Some(integer * 1000 + fraction_milli)
-}
-
 fn parse_rating(value: &Value) -> Option<f32> {
     let rating = match value {
         Value::String(text) => text.trim().parse::<f32>().ok()?,
@@ -588,19 +537,6 @@ fn alt_names(secondary: &Option<String>, another: &Option<String>, main: &str) -
     names
 }
 
-fn truncate_chars(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
-        value.to_owned()
-    } else {
-        value.chars().take(max).collect()
-    }
-}
-
-fn dedupe(values: &mut Vec<String>) {
-    let mut seen = HashSet::new();
-    values.retain(|value| seen.insert(value.to_lowercase()));
-}
-
 /// Описание источника — plain text: чужой HTML в UI не рендерится.
 fn html_to_text(html: &str) -> String {
     let mut text = String::with_capacity(html.len());
@@ -655,6 +591,8 @@ fn parse_error<'a>(stage: &'static str) -> impl Fn(serde_json::Error) -> SourceE
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     const SEARCH: &str = include_str!("fixtures/search.json");

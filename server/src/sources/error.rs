@@ -23,6 +23,10 @@ pub enum SourceError {
     RateLimited { retry_after_secs: Option<u64> },
     #[error("upstream request failed (status {status:?})")]
     Http { status: Option<u16> },
+    /// Редирект без следования: адаптер сам решает, это locked, missing
+    /// или обычная ошибка. Location остаётся в варианте, но не в тексте.
+    #[error("source redirected the request")]
+    Redirect { location: String },
     #[error("cannot parse source response at `{stage}`: {detail}")]
     Parse { stage: &'static str, detail: String },
     #[error("chapter is locked at source")]
@@ -50,7 +54,7 @@ impl SourceError {
             Self::AuthRequired => "auth_required",
             Self::Blocked => "blocked",
             Self::RateLimited { .. } => "rate_limited",
-            Self::Http { .. } | Self::Network => "upstream_failed",
+            Self::Http { .. } | Self::Redirect { .. } | Self::Network => "upstream_failed",
             Self::Parse { .. } => "parse_failed",
             Self::Locked => "locked",
             Self::Disabled => "disabled",
@@ -66,6 +70,7 @@ impl SourceError {
             self,
             Self::RateLimited { .. }
                 | Self::Http { .. }
+                | Self::Redirect { .. }
                 | Self::Network
                 | Self::CircuitOpen
                 | Self::Blocked
@@ -103,7 +108,10 @@ impl From<SourceError> for AppError {
                 // Без заголовка источника клиенту нужен разумный интервал
                 Some(retry_after_secs.unwrap_or(60)),
             ),
-            SourceError::Http { .. } | SourceError::Network | SourceError::CircuitOpen => {
+            SourceError::Http { .. }
+            | SourceError::Redirect { .. }
+            | SourceError::Network
+            | SourceError::CircuitOpen => {
                 Self::bad_gateway("source_upstream_failed", "source request failed")
             }
             SourceError::Parse { .. } => {

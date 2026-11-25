@@ -1,3 +1,4 @@
+import { adminApi } from "./admin";
 import { authApi } from "./auth";
 import { catalogApi } from "./catalog";
 import { chaptersApi } from "./chapters";
@@ -6,6 +7,7 @@ import { progressApi } from "./progress";
 
 // По мере появления областей API их функции собираются здесь.
 export const api = {
+  admin: adminApi,
   auth: authApi,
   catalog: catalogApi,
   chapters: chaptersApi,
@@ -34,6 +36,7 @@ export {
 export type {
   CatalogQuery,
   CatalogResponse,
+  ChapterAlias,
   ChapterVariant,
   CoverResponse,
   LibraryState,
@@ -45,6 +48,35 @@ export type {
   TitleSource,
   TitleSummary,
 } from "./catalog";
+export {
+  useAddAliasMutation,
+  useAttachSourceMutation,
+  useDeleteAliasMutation,
+  useDetachSourceMutation,
+  useProbeSourceMutation,
+  useRefreshTitleMutation,
+  useSaveSourcePrioritiesMutation,
+  useSetPrimarySourceMutation,
+  useSourcePrioritiesQuery,
+  useSourceSearchMutation,
+  useSourcesQuery,
+  useToggleSourceMutation,
+} from "./admin";
+export type {
+  AliasListResponse,
+  AttachSourceInput,
+  AttachSourceResponse,
+  ProbeResponse,
+  RefreshEntry,
+  RefreshResponse,
+  SourceListResponse,
+  SourcePrioritiesResponse,
+  SourcePriority,
+  SourceSearchInput,
+  SourceSearchItem,
+  SourceSearchResponse,
+  SourceState,
+} from "./admin";
 export {
   chapterContentQueryKey,
   pageImageUrl,

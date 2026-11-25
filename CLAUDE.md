@@ -11,10 +11,10 @@
 
 ## Текущее состояние
 
-Фазы 0–4 плана выполнены: `server/` на axum отдаёт API и статику `dist/`, работает SQLite (sqlx, миграции при старте), вход по инвайту, сессии в HttpOnly-cookie и защищённые экраны. Есть каталог с поиском и пагинацией, карточка тайтла, библиотека со статусом и оценкой, ручное создание тайтлов и обложки для администратора. Подключён первый источник — Remanga v2: админские поиск и импорт, главы, выдача контента с fallback, прокси картинок с дисковым кэшем и `ETag`, ридер с окном страниц и сохранением прогресса. Следующая фаза — второй источник, дедупликация и приоритеты.
+Фазы 0–5 плана выполнены: `server/` на axum отдаёт API и статику `dist/`, работает SQLite (sqlx, миграции при старте), вход по инвайту, сессии в HttpOnly-cookie и защищённые экраны. Есть каталог с поиском и пагинацией, карточка тайтла, библиотека со статусом и оценкой, ручное создание тайтлов и обложки для администратора. Подключены два источника: Remanga v2 (JSON API) и RuMix (HTML): админские поиск и импорт, привязка к существующему тайтлу, приоритеты по `(kind, lang)`, preferred source, fallback по главам, ручные `chapter_aliases`, выдача контента, прокси картинок с дисковым кэшем и `ETag`, ридер с окном страниц и сохранением прогресса. Есть `/admin` (источники и приоритеты) и админ-панели на странице тайтла. Следующая фаза — видео.
 
 - Целевая архитектура, фазы и критерии готовности — [docs/planned-now.md](docs/planned-now.md).
-- Причины выбора и альтернативы — [docs/decisions/0001-server-architecture.md](docs/decisions/0001-server-architecture.md).
+- Причины выбора и альтернативы — [docs/decisions/](docs/decisions/) (0001 архитектура, 0004 Remanga, 0005 RuMix).
 
 ## Режим обучения
 
@@ -34,7 +34,7 @@
 - Проверки: ESLint 10 (`eslint-plugin-boundaries` держит границы слоёв)
 - Пакетный менеджер: pnpm
 
-Дальше по плану: второй адаптер другой формы, `source_priorities`, `chapter_aliases`, fallback между источниками.
+Дальше по плану: видео (фаза 6) — `content_kind = 'video'`, `embed_url`, плеер `watch` и CSP `frame-src`.
 
 ## Структура
 
@@ -42,26 +42,29 @@
 src/
   app/                     запуск: index.tsx (initSettings -> initI18n -> render), AppProvider (BrowserRouter, QueryClient, AuthProvider), AppRouter, RequireAuth, styles/index.css
   shell/                   navbar/ (шапка, пользователь, язык, тема), sidebar/ (меню), layout/
-  pages/                   экраны: catalog, title, library, reader, watch, changelog, settings, login, register
-  api/                     client.ts (request/apiUrl/ApiError/jsonMutation/requestKeepalive), auth.tsx, catalog.ts, chapters.ts, library.ts, progress.ts, errors.ts (useErrorText), index.ts (области API)
+  pages/                   экраны: catalog, title, library, admin, reader, watch, changelog, settings, login, register
+  api/                     client.ts (request/apiUrl/ApiError/jsonMutation/requestKeepalive), auth.tsx, catalog.ts, chapters.ts, library.ts, progress.ts, admin.ts, errors.ts (useErrorText), index.ts (области API)
   ui/                      shadcn/ и общие компоненты: PageHeader.tsx, PlaceholderPage.tsx, AuthShell.tsx, TitleForm.tsx, CoverImage.tsx, Pagination.tsx, Select.tsx, Textarea.tsx
   lib/                     utils.ts (cn), settings.ts, routes.ts, catalog.ts (типы и статусы), apiErrors.ts, i18n/
 public/theme.js            тема до первой отрисовки; внешний файл для CSP
 server/
   Cargo.toml
-  migrations/              0001_auth.sql: users, invites, sessions; 0002_catalog.sql: каталог, источники, главы, библиотека, прогресс
+  migrations/              0001_auth.sql: users, invites, sessions; 0002_catalog.sql: каталог, источники, главы, библиотека, прогресс; 0003_source_entry_per_source.sql: один entry на (title_id, source_id)
   src/
     main.rs                конфиг, БД, DataDir, bootstrap админа, tracing, запуск
     app.rs                 Router, rate limit, слои Origin/session
     auth/                  handlers, service, password, session, middleware, limiter
     catalog/               service (каталог, тайтл), handlers, cover; selection (приоритеты,
-                           fallback), chapters (группировка), content (выдача главы)
+                           fallback), chapters (группировка), content (выдача главы),
+                           links (attach/detach, primary, chapter_aliases)
     images/                cache (диск, single-flight), handlers (прокси страниц и обложек)
     library/               service (библиотека пользователя), handlers
     progress.rs            прогресс по каноническому chapter_key
-    source_admin/          service (источники, конфиг, поиск, импорт, probe), handlers
-    sources/               dto, descriptor, config, error, http (SSRF, circuit breaker),
-                           registry, contract, remanga/ (api, parse, fixtures), fixture.rs
+    source_admin/          service (источники, конфиг, поиск, импорт, probe, refresh),
+                           priorities (kind/lang), handlers
+    sources/               dto, descriptor, config, error, http (SSRF, circuit breaker,
+                           POST-форма), keys (общий chapter_key), registry, contract,
+                           remanga/ (JSON API), rumix/ (HTML), fixture.rs
     config.rs              BIND_ADDR, STATIC_DIR, DATABASE_URL, DATA_DIR, auth env
     db.rs                  пул SQLite (WAL), миграции при старте
     state.rs               AppState: конфиг, пул, реестр источников, HTTP-клиенты, кэш
@@ -74,6 +77,8 @@ server/
   tests/catalog.rs         тайтлы, поиск, пагинация, обложки, права admin
   tests/library.rs         библиотека, оценки, изоляция пользователей
   tests/sources.rs         источники, импорт, контент, прогресс, кэш картинок, fallback
+  tests/multi_source.rs    два источника, приоритеты, preferred, alias, группы, attach/detach
+  tests/live_rumix.rs      live-проверка RuMix (ignored)
 dist/                      билд фронтенда (в git не коммитится)
 ```
 
@@ -117,6 +122,8 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - Авторизация: `useAuth()` даёт `user`, `isLoading`, `error`; защищённые экраны обёрнуты в `<RequireAuth>` в `AppRouter`, гость уходит на `/login`. 401 от запросов чистит кэш React Query и возвращает на вход. `/login` и `/register` живут вне `Layout`.
 - Параметрические маршруты: `/title/:id` — в `Layout`; `/reader/:titleId/:chapterKey` и `/watch/:titleId/:chapterKey` — вне `Layout`, во весь экран, но под `RequireAuth`. Они не входят в `SectionPath`; ссылки собирай через `src/lib/routes.ts`, чтобы `chapterKey` кодировался.
 - Читалка ходит только в canonical `/content` (никогда в `/api/chapters/{id}/content`), картинки берёт через `pageImageUrl` (`/api/pages/{id}/image`), прогресс — через `useProgressQuery`/`useSaveProgressMutation`; flush при закрытии вкладки — `requestKeepalive` (PUT, не `sendBeacon`). Смена главы пересоздаёт состояние через `key`. Прогресс восстанавливай по каноническому `content.chapter_key`, а не по ключу из URL.
+- Админка: `/admin` — приоритеты `(kind, lang)`, состояние источников, `base_url`, enable/disable, probe; пункт меню скрыт для не-админа, но сервер всё равно требует роль. На странице тайтла `AdminSourcePanel` делает поиск/привязку/отвязку источника, primary и refresh, `AliasesPanel` — alias-ключи. Обычному пользователю эти панели не монтируются, иначе админские хуки дадут 403.
+- `GET /api/titles/{id}` отдаёт `aliases`; у варианта главы есть собственный `chapter_key` (может отличаться от canonical). Выбранный вариант — первый доступный, а не свежий locked preferred. После attach/detach/primary/alias/refresh инвалидируй `title`, `catalog`, `chapter-content` и `progress` тайтла.
 - Компоненты shadcn не ставятся как библиотека: их код копируется в `src/ui/shadcn/` и принадлежит проекту. Перед написанием своего компонента проверь, нет ли готового в shadcn.
 - Цвета бери из токенов темы (`bg-primary`, `text-muted-foreground`), а не задавай вручную: так работает смена темы.
 - Алиас `@/` задан в трёх местах: `paths` в `tsconfig.json`, `resolve.alias` в `vite.config.ts` и `aliases` в `components.json`. Меняй их вместе, иначе `shadcn add` без ошибки создаст файлы не в той папке.
@@ -136,9 +143,14 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - Пароли — Argon2id в `spawn_blocking` с семафором; в БД только хеш. Сессия — 32 случайных байта, в БД SHA-256; idle 30 дней, абсолютный срок 90. Вход ограничен по IP (`tower_governor`) и по username (счётчик в памяти).
 - Каталог и библиотека: `GET /api/catalog` (поиск по `titles.name_lower` — Unicode-копия названия, `%`/`_` экранируются; фильтр `kind`, пагинация), `GET /api/titles/{id}` -> `{ title, library }`; `POST /api/titles`, `PUT /api/titles/{id}`, `POST /api/titles/{id}/cover` — admin. Библиотека: `GET /api/library?page=&page_size=`, `PUT/DELETE /api/library/{title_id}` для текущего пользователя. Пагинация общая — `pagination::resolve`.
 - Обложки: multipart `file` до 5 МиБ, JPEG/PNG/WebP/GIF, `image::Limits` в `spawn_blocking` с семафором; два WebP (`full`, `thumb`) в `DATA_DIR/covers/{id}/`, атомарная запись tmp + rename. `GET /api/titles/{id}/cover?size=thumb|full` с `ETag` и `Cache-Control: private`; UI добавляет `v={updated_at}`.
-- Источники: дескриптор — данные (`sources/descriptor.rs`), dispatch — `enum SourceKind`, реестр собирается из таблицы `sources` в `AppState.sources` (`Arc<RwLock<SourceRegistry>>`) и пересобирается после `PUT`; guard не держится через `.await`. Адаптеры не знают о БД. Битый конфиг отключает только свой источник. Первый адаптер — `sources/remanga/`: `external_id` тайтла — `dir`, главы — числовой `id`, `chapters()` сначала читает `branches` из title. Парсеры — чистые функции с фикстурами и `contract_suite`.
+- Источники: дескриптор — данные (`sources/descriptor.rs`), dispatch — `enum SourceKind`, реестр собирается из таблицы `sources` в `AppState.sources` (`Arc<RwLock<SourceRegistry>>`) и пересобирается после `PUT`; guard не держится через `.await`. Адаптеры не знают о БД. Битый конфиг отключает только свой источник и персистится в `sources.config_error`; preferred его пропускает. Remanga — `sources/remanga/` (JSON API, `external_id` тайтла — `dir`, главы — числовой `id`, `branches`). RuMix — `sources/rumix/` (HTML, `external_id` — slug, главы — `data-id`, поиск POST-формой, `base_url` — origin сайта, UA обязан начинаться с `Mozilla/5.0`, картинки подписаны, 18+ через `?mtr=true`). `chapter_key` строит общий `sources/keys.rs`. Парсеры — чистые функции с фикстурами и `contract_suite`.
+- Приоритеты: `source_priorities(kind, lang, source_id, rank)`, ранг 0-based, `lang='*'` — запасной **только если для языка тайтла нет ни одной строки** (наборы не смешиваются). `GET/PUT /api/admin/source-priorities` заменяет список целиком и пересчитывает preferred у всех тайтлов типа. `recompute_preferred` учитывает effective enabled (`enabled`, `base_url IS NOT NULL`, `config_error IS NULL`), затем `chapter_count`, rank, `is_primary`, `id`; пересчёт также после `save_config`, `update_title(lang)`, detach и attach (заполняет `titles.lang`, если NULL).
+- Alias и fallback: `candidates()` включает главы с canonical-ключом **и** alias-варианты, поэтому fallback видит связанную главу другого источника. Цепочки alias запрещены; при отвязке удаляются alias, чей alias-ключ исчез (canonical-only alias сохраняется как стабильный ключ прогресса). `GET /api/titles/{id}` отдаёт `aliases` и raw `chapter_key` варианта; для отображения выбирается первый доступный вариант рабочего источника. `is_locked` синхронизируется с availability при mark/успешном refresh страниц.
+- Инвариант источников: один `source_entry` на `(title_id, source_id)` (уникальный индекс 0003); повторная привязка другого `external_id` того же источника к тому же тайтлу — 409 `source_already_attached`.
+- Админские связи: `POST/DELETE /api/titles/{id}/sources`, `PUT /api/titles/{id}/primary-source` (`{ source_entry_id }`), `GET/POST/DELETE /api/titles/{id}/chapter-aliases`, `POST /api/admin/refresh/{title_id}` (per-entry статус, сеть до транзакции). `PUT /api/sources/{code}` без `base_url` сохраняет прежний origin.
 - Импорт: `POST /api/sources/{code}/import` (`{ external_id, kind, title_id? }`) заново получает метаданные, главы пишет upsert в транзакции; `chapter_key` фиксируется при первом импорте, расхождение — в `source_entries.last_error`. После импорта считаются статистики и `titles.preferred_source_id`.
 - Контент главы: `GET /api/titles/{title_id}/chapters/{chapter_key}/content` выбирает вариант и делает fallback (`source_locked` 403, `source_not_found` 404, временные — 502/503); известные страницы отдаются из БД без сети. `GET /api/chapters/{id}/content` — прямой вариант. Прогресс: `GET/PUT /api/progress/{title_id}`, alias → canonical, поле позиции проверяется по `content_kind`.
+- `SourceError::Redirect` (3xx без следования): RuMix различает платную главу (`/internal/purchase/...` → `Locked`) и запланированную (`NotFound`); остальные 3xx — 502. Общий `get_text` редиректы не выполняет.
 - Картинки: `GET /api/pages/{id}/image` и `GET /api/sources/{code}/cover?ref=`. Кэш `DATA_DIR/cache/images/<aa>/<sha256>` по ключу `(source_entry_id, external chapter id, idx)`, атомарная запись, single-flight, магические байты (JPEG/PNG/WebP/GIF), `ETag`, `nosniff`, `private`. При `401/403/410` до двух перезапросов списка страниц, затем глава помечается `locked`.
 - SSRF: общий DNS-резолвер отбрасывает private/loopback/link-local/CGNAT/ULA/IPv4-mapped, редиректы клиентов выключены, allowlist хостов проверяется до запроса. URL источника — только из реестра; `external_id` валидируется. `SSRF_ALLOW_LOOPBACK` включается только интеграционными тестами с локальным сервером.
 - Конфиг — из env: `BIND_ADDR` (по умолчанию `127.0.0.1:3000`), `STATIC_DIR` (`dist`), `DATABASE_URL` (`sqlite://data/cion.db`), `DATA_DIR` (`data`), `REGISTRATION_MODE` (`invite|closed`), `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG`; в dev `.env` читает `dotenvy`, пример — `.env.example`.
@@ -159,7 +171,9 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - `Cargo.lock` (в `server/`) и `pnpm-lock.yaml` коммитятся. `node_modules`, `dist`, `server/target`, `data/`, `.env*` (кроме `.env.example`) игнорируются.
 - CSP пока не задаётся: это фаза 8 (заголовки сервера или Caddy). Инлайновый скрипт темы уже вынесен в `public/theme.js`, чтобы позже не требовать `'unsafe-inline'`; в dev строгий CSP отключён ради Vite/React Refresh.
 - Ключ темы `theme` читают и `public/theme.js`, и `ThemeToggle.tsx`; меняй их вместе.
-- Источник нужно завести и включить через `PUT /api/sources/{code}` (`base_url`, `enabled`) до поиска и импорта. У Remanga `base_url` — API-хост `https://api.remanga.org`, а не сайт; `dir` тайтла содержит `<...>` и обслуживается только закодированным в пути. Импорт полного тайтла — это серия запросов по 30 глав, он может занять секунды.
+- Источник нужно завести и включить через `PUT /api/sources/{code}` (`base_url`, `enabled`) до поиска и импорта. У Remanga `base_url` — API-хост `https://api.remanga.org`, а не сайт; `dir` тайтла содержит `<...>` и обслуживается только закодированным в пути. У RuMix `base_url` — сайт `https://rumix.me` (не `http://` и не `www`); без UA с префиксом `Mozilla/5.0` сайт отвечает 402, поэтому в конфиге есть `user_agent`. Импорт полного тайтла — это серия запросов, он может занять секунды.
+- RuMix не помечает платные главы в списке: `content()` получает 302 на `/internal/purchase/` и возвращает `source_locked`, после чего fallback идёт в другой источник. На импорте такие главы остаются `unknown` (ленивое определение). Картинки на `*.rumix.me` подписаны и протухают — прокси перезапрашивает `content()` при 401/403/410.
+- `source_priorities` заменяется целиком: `PUT` с `source_codes` в нужном порядке. Ранг в API 0-based. После сохранения preferred пересчитывается, но `is_primary` не меняется. Alias — один hop: canonical не может сам быть alias, alias не может быть canonical другой связи; иначе 409 `alias_chain`.
 - `page` в прогрессе — 0-based индекс `pages.idx`, не человеческий номер страницы. `PUT /api/progress/{title_id}` до первого открытия главы с `content_kind = NULL` вернёт 409 `content_kind_unknown`.
 - Тестовый адаптер `fixture` компилируется только в `debug_assertions`; в release его нет. `SSRF_ALLOW_LOOPBACK=true` существует только для тестов с локальным HTTP-сервером.
 

@@ -109,18 +109,27 @@ pub async fn candidates(
     title_id: i64,
     chapter_key: &str,
 ) -> Result<Vec<ChapterCandidate>, AppError> {
+    // Alias-варианты обязаны участвовать в fallback: иначе связанная
+    // вручную глава другого источника не попадёт в выборку и критерий
+    // «locked-глава открывается из другого источника» не выполнится.
     let rows = sqlx::query_as::<_, ChapterCandidate>(
         "SELECT ch.id AS chapter_id, ch.chapter_key, ch.external_id, ch.number_text, \
                 ch.number_milli, ch.volume, ch.chapter_kind, ch.content_kind, ch.name, \
                 ch.group_name, ch.language, ch.is_locked, ch.availability, \
                 ch.availability_checked_at, ch.page_count, ch.ordinal_site, ch.external_url, \
                 ch.embed_url, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
-                s.code AS source_code, s.name AS source_name, s.enabled AS source_enabled \
+                s.code AS source_code, s.name AS source_name, (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled \
          FROM chapters ch \
          JOIN source_entries e ON e.id = ch.source_entry_id \
          JOIN sources s ON s.id = e.source_id \
-         WHERE e.title_id = ? AND ch.chapter_key = ? AND ch.removed_at IS NULL",
+         WHERE e.title_id = ? AND ch.removed_at IS NULL \
+           AND (ch.chapter_key = ? OR ch.chapter_key IN ( \
+                 SELECT alias_key FROM chapter_aliases \
+                 WHERE title_id = ? AND canonical_key = ? \
+           ))",
     )
+    .bind(title_id)
+    .bind(chapter_key)
     .bind(title_id)
     .bind(chapter_key)
     .fetch_all(pool)
@@ -153,22 +162,31 @@ pub async fn load_priorities(
     lang: Option<&str>,
 ) -> Result<HashMap<i64, i64>, AppError> {
     let language = lang.unwrap_or("*");
-    let rows = sqlx::query_as::<_, (i64, i64, String)>(
-        "SELECT source_id, rank, lang FROM source_priorities WHERE kind = ? AND lang IN (?, '*') \
-         ORDER BY CASE WHEN lang = ? THEN 0 ELSE 1 END, rank",
+
+    // Набор языка тайтла полностью заменяет '*' — иначе rank'и из разных
+    // наборов смешивались бы и '*' мог обогнать язык-специфичный источник.
+    let rows = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT source_id, rank FROM source_priorities \
+         WHERE kind = ? AND lang = ? ORDER BY rank",
     )
     .bind(kind)
-    .bind(language)
     .bind(language)
     .fetch_all(pool)
     .await?;
 
-    let mut ranks = HashMap::new();
-    for (source_id, rank, _) in rows {
-        // Первое вхождение — либо язык тайтла, либо '*' (запасной набор)
-        ranks.entry(source_id).or_insert(rank);
+    if !rows.is_empty() {
+        return Ok(rows.into_iter().collect());
     }
-    Ok(ranks)
+
+    let fallback = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT source_id, rank FROM source_priorities \
+         WHERE kind = ? AND lang = '*' ORDER BY rank",
+    )
+    .bind(kind)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(fallback.into_iter().collect())
 }
 
 pub fn rank_of(ranks: &HashMap<i64, i64>, source_id: i64) -> i64 {
@@ -194,6 +212,17 @@ pub fn order(
         )
     });
     list
+}
+
+/// Вариант для отображения и проверки прогресса: рабочий источник и
+/// доступность важнее preferred; при полном отсутствии — первый.
+pub fn first_usable(list: &[ChapterCandidate], now: i64) -> Option<&ChapterCandidate> {
+    list.iter()
+        .find(|candidate| {
+            candidate.source_enabled && view(candidate, now) != AvailabilityView::Unavailable
+        })
+        .or_else(|| list.iter().find(|candidate| candidate.source_enabled))
+        .or_else(|| list.first())
 }
 
 pub async fn recompute_stats(
@@ -241,6 +270,39 @@ pub async fn recompute_stats(
     Ok(stats)
 }
 
+/// Пересчитывает preferred у всех тайтлов, где участвует источник.
+/// Нужно после включения/выключения источника и смены его доступности.
+pub async fn recompute_titles_for_source(
+    pool: &SqlitePool,
+    source_id: i64,
+) -> Result<(), AppError> {
+    let title_ids = sqlx::query_scalar::<_, i64>(
+        "SELECT DISTINCT title_id FROM source_entries WHERE source_id = ?",
+    )
+    .bind(source_id)
+    .fetch_all(pool)
+    .await?;
+
+    for title_id in title_ids {
+        recompute_preferred(pool, title_id).await?;
+    }
+    Ok(())
+}
+
+/// Пересчитывает preferred у всех тайтлов типа: приоритеты задаются
+/// на (kind, lang), поэтому смена списка может затронуть любой язык.
+pub async fn recompute_titles_for_kind(pool: &SqlitePool, kind: &str) -> Result<(), AppError> {
+    let title_ids = sqlx::query_scalar::<_, i64>("SELECT id FROM titles WHERE kind = ?")
+        .bind(kind)
+        .fetch_all(pool)
+        .await?;
+
+    for title_id in title_ids {
+        recompute_preferred(pool, title_id).await?;
+    }
+    Ok(())
+}
+
 /// Максимальный `chapter_count`; ничья — приоритет, `is_primary`, id.
 /// Источник без доступных глав не выбирается, пока есть доступные.
 pub async fn recompute_preferred(
@@ -253,7 +315,8 @@ pub async fn recompute_preferred(
     let entries = sqlx::query_as::<_, (i64, i64, i64, bool)>(
         "SELECT e.source_id, e.chapter_count, e.available_count, e.is_primary \
          FROM source_entries e JOIN sources s ON s.id = e.source_id \
-         WHERE e.title_id = ? AND s.enabled = 1",
+         WHERE e.title_id = ? AND s.enabled = 1 AND s.base_url IS NOT NULL \
+           AND s.config_error IS NULL",
     )
     .bind(title_id)
     .fetch_all(pool)

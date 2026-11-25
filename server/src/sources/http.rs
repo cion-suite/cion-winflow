@@ -208,11 +208,31 @@ impl AdapterCtx {
     }
 }
 
-/// Забирает JSON-текст метаданных с двумя ретраями на сеть и 5xx.
+/// Забирает текст метаданных с двумя ретраями на сеть и 5xx.
 pub async fn get_text(
     ctx: &AdapterCtx,
     url: Url,
     headers: &[(&str, &str)],
+) -> Result<String, SourceError> {
+    send_text(ctx, url, headers, None).await
+}
+
+/// POST-форма для источников, у которых поиск не GET (например, RuMix).
+/// Ответ читается теми же лимитами, ретраями и circuit breaker.
+pub async fn post_form_text(
+    ctx: &AdapterCtx,
+    url: Url,
+    headers: &[(&str, &str)],
+    form: &[(&str, &str)],
+) -> Result<String, SourceError> {
+    send_text(ctx, url, headers, Some(form)).await
+}
+
+async fn send_text(
+    ctx: &AdapterCtx,
+    url: Url,
+    headers: &[(&str, &str)],
+    form: Option<&[(&str, &str)]>,
 ) -> Result<String, SourceError> {
     if !ctx.breaker.allow() {
         return Err(SourceError::CircuitOpen);
@@ -226,7 +246,10 @@ pub async fn get_text(
 
     let mut last_status = None;
     for attempt in 0..MAX_ATTEMPTS {
-        let mut request = ctx.client.get(url.clone());
+        let mut request = match form {
+            Some(form) => ctx.client.post(url.clone()).form(form),
+            None => ctx.client.get(url.clone()),
+        };
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -241,6 +264,18 @@ pub async fn get_text(
                         stage: "body",
                         detail: "response is not UTF-8".to_owned(),
                     });
+                }
+
+                // Редиректы не следуем: источник может уводить на оплату
+                // или на страницу тайтла, и адаптер должен различить это.
+                if status.is_redirection() {
+                    let location = response
+                        .headers()
+                        .get(reqwest::header::LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    return Err(SourceError::Redirect { location });
                 }
 
                 let code = status.as_u16();

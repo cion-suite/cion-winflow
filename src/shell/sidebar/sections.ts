@@ -4,6 +4,7 @@ import {
   LibraryBigIcon,
   ScrollTextIcon,
   SettingsIcon,
+  ShieldIcon,
 } from "lucide-react";
 
 export type SectionGroup = "overview" | "footer";
@@ -14,6 +15,8 @@ export type Section = {
   i18nKey: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   group: SectionGroup;
+  /** Пункт виден только администратору; сервер всё равно проверяет роль. */
+  adminOnly?: boolean;
 };
 
 /** Группы с заголовком. Футер (`footer`) остаётся без заголовка. */
@@ -24,6 +27,13 @@ export const SIDEBAR_GROUPS = [
 const ROWS = [
   { path: "/", i18nKey: "nav.catalog", icon: LibraryBigIcon, group: "overview" },
   { path: "/library", i18nKey: "nav.library", icon: BookMarkedIcon, group: "overview" },
+  {
+    path: "/admin",
+    i18nKey: "nav.admin",
+    icon: ShieldIcon,
+    group: "overview",
+    adminOnly: true,
+  },
   { path: "/changelog", i18nKey: "nav.changelog", icon: ScrollTextIcon, group: "footer" },
   { path: "/settings", i18nKey: "nav.settings", icon: SettingsIcon, group: "footer" },
 ] as const satisfies readonly Section[];

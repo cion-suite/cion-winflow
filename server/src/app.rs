@@ -5,7 +5,7 @@ use axum::{
     extract::{DefaultBodyLimit, State},
     middleware,
     response::{IntoResponse, Response},
-    routing::{MethodRouter, get, post, put},
+    routing::{MethodRouter, delete, get, post, put},
 };
 use serde::Serialize;
 use tower_governor::{GovernorError, GovernorLayer, governor::GovernorConfigBuilder};
@@ -76,6 +76,35 @@ pub fn router(state: AppState) -> Router {
             get(catalog::cover::get_cover)
                 .post(catalog::cover::upload_cover)
                 .layer(DefaultBodyLimit::max(catalog::cover::BODY_LIMIT)),
+        )
+        .route(
+            "/titles/{id}/sources",
+            post(catalog::handlers::attach_source),
+        )
+        .route(
+            "/titles/{id}/sources/{entry_id}",
+            delete(catalog::handlers::detach_source),
+        )
+        .route(
+            "/titles/{id}/primary-source",
+            put(catalog::handlers::set_primary_source),
+        )
+        .route(
+            "/titles/{title_id}/chapter-aliases",
+            get(catalog::handlers::list_aliases).post(catalog::handlers::add_alias),
+        )
+        .route(
+            "/titles/{title_id}/chapter-aliases/{alias_key}",
+            delete(catalog::handlers::delete_alias),
+        )
+        .route(
+            "/admin/source-priorities",
+            get(source_admin::handlers::list_priorities)
+                .put(source_admin::handlers::replace_priorities),
+        )
+        .route(
+            "/admin/refresh/{title_id}",
+            post(source_admin::handlers::refresh_title),
         )
         .route("/library", get(library::handlers::list_library))
         .route(

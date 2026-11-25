@@ -3,7 +3,11 @@ use sqlx::SqlitePool;
 
 use crate::{
     auth::session::now_unix,
-    catalog::{chapters, selection},
+    catalog::{
+        chapters,
+        links::{self, AliasDto},
+        selection,
+    },
     error::AppError,
     pagination,
     state::AppState,
@@ -91,6 +95,8 @@ pub struct TitleResponse {
     /// Только БД: сетевых запросов к источникам здесь нет.
     pub chapters: Vec<chapters::TitleChapterDto>,
     pub sources: Vec<chapters::TitleSourceDto>,
+    /// Ручные связи ключей глав: alias -> canonical.
+    pub aliases: Vec<AliasDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -248,12 +254,14 @@ pub async fn get_title(
         preferred_source_id: title.preferred_source_id,
     };
     let chapters = chapters::title_chapters(pool, &info).await?;
+    let aliases = links::load_aliases(pool, title_id).await?;
 
     Ok(TitleResponse {
         title: TitleDto::from(title),
         library,
         chapters: chapters.chapters,
         sources: chapters.sources,
+        aliases,
     })
 }
 
@@ -330,6 +338,12 @@ pub async fn update_title(
     .bind(title_id)
     .execute(&state.pool)
     .await?;
+
+    // lang задаёт набор source_priorities: после смены языка preferred
+    // нужно выбрать заново, иначе останется решение старого набора.
+    if title.lang != current.lang {
+        selection::recompute_preferred(&state.pool, title_id).await?;
+    }
 
     let row = find_title(&state.pool, title_id).await?;
     Ok(TitleDto::from(row))

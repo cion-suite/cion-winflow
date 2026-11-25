@@ -142,7 +142,9 @@ pub async fn upsert_source(
         "INSERT INTO sources (code, name, base_url, enabled, config_json, descriptor_version, created_at) \
          VALUES (?, ?, ?, ?, '{}', ?, ?) \
          ON CONFLICT (code) DO UPDATE SET \
-             name = excluded.name, base_url = excluded.base_url, enabled = excluded.enabled",
+             name = excluded.name, \
+             base_url = COALESCE(excluded.base_url, sources.base_url), \
+             enabled = excluded.enabled",
     )
     .bind(descriptor.code)
     .bind(descriptor.name)
@@ -154,6 +156,16 @@ pub async fn upsert_source(
     .await?;
 
     state.reload_sources().await?;
+
+    // Включение/выключение источника меняет preferred у всех его тайтлов:
+    // селектор пропускает disabled-источники. Строка только что вставлена
+    // или обновлена выше, поэтому fetch_one здесь не может быть пустым.
+    let source_id = sqlx::query_scalar::<_, i64>("SELECT id FROM sources WHERE code = ?")
+        .bind(descriptor.code)
+        .fetch_one(&state.pool)
+        .await?;
+    selection::recompute_titles_for_source(&state.pool, source_id).await?;
+
     let registry = state.sources.read().await;
     Ok(state_dto(
         descriptor,
@@ -225,6 +237,13 @@ pub async fn save_config(
     .await?;
 
     state.reload_sources().await?;
+
+    // Починка битого конфига возвращает источник в пул preferred.
+    let source_id = sqlx::query_scalar::<_, i64>("SELECT id FROM sources WHERE code = ?")
+        .bind(descriptor.code)
+        .fetch_one(&state.pool)
+        .await?;
+    selection::recompute_titles_for_source(&state.pool, source_id).await?;
 
     Ok(ConfigSaveResponse {
         warnings: validated.warnings,
@@ -366,6 +385,24 @@ pub async fn import(
                         "title kind does not match the imported kind",
                     ));
                 }
+
+                // preferred_source_id — source_id, поэтому два разных title
+                // одного источника у одного тайтла неоднозначны.
+                let already_attached = sqlx::query_scalar::<_, i64>(
+                    "SELECT 1 FROM source_entries WHERE title_id = ? AND source_id = ?",
+                )
+                .bind(title_id)
+                .bind(source_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
+                if already_attached {
+                    return Err(AppError::conflict(
+                        "source_already_attached",
+                        "source is already attached to this title",
+                    ));
+                }
+
                 (title_id, false)
             }
             None => (
@@ -420,6 +457,16 @@ pub async fn import(
             entry_id
         }
     };
+
+    // Ручной тайтл мог быть создан без языка; привязка источника заполняет
+    // его, иначе сохранённый набор priorities для manga/ru не применится.
+    if let Some(lang) = source_title.lang.as_deref() {
+        sqlx::query("UPDATE titles SET lang = COALESCE(lang, ?) WHERE id = ?")
+            .bind(lang)
+            .bind(title_id)
+            .execute(&mut *tx)
+            .await?;
+    }
 
     sqlx::query("UPDATE titles SET origin_source_id = ? WHERE id = ? AND origin_source_id IS NULL")
         .bind(source_id)
@@ -530,7 +577,7 @@ async fn create_title(
     .map_err(AppError::from)
 }
 
-async fn upsert_chapters(
+pub(crate) async fn upsert_chapters(
     tx: &mut Transaction<'_, Sqlite>,
     entry_id: i64,
     now: i64,
@@ -757,4 +804,145 @@ fn field_schema(field: &ConfigField) -> Value {
     }
 
     schema
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshEntryDto {
+    pub source_entry_id: i64,
+    pub code: String,
+    pub status: &'static str,
+    pub imported_chapters: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshResponse {
+    pub title_id: i64,
+    pub entries: Vec<RefreshEntryDto>,
+    pub preferred_source_id: Option<i64>,
+}
+
+/// Обновляет главы всех источников тайтла. Сеть идёт до транзакции,
+/// ошибка одного источника не отменяет остальные.
+pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshResponse, AppError> {
+    let title_kind = sqlx::query_scalar::<_, String>("SELECT kind FROM titles WHERE id = ?")
+        .bind(title_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
+    let kind = MediaKind::from_db(&title_kind).ok_or(AppError::Internal)?;
+
+    let entries = sqlx::query_as::<_, (i64, i64, String, String)>(
+        "SELECT e.id, e.source_id, e.external_id, s.code \
+         FROM source_entries e JOIN sources s ON s.id = e.source_id \
+         WHERE e.title_id = ? ORDER BY e.id",
+    )
+    .bind(title_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut results = Vec::with_capacity(entries.len());
+    for (entry_id, source_id, external_id, code) in entries {
+        let runtime = {
+            let registry = state.sources.read().await;
+            registry.runtime_by_id(source_id)
+        };
+        let Some(runtime) = runtime else {
+            let message = "source is not registered".to_owned();
+            store_sync_error(&state.pool, entry_id, &message).await?;
+            results.push(failed(entry_id, code, message));
+            continue;
+        };
+
+        let version = runtime.descriptor.version;
+        let adapter = match runtime.adapter() {
+            Ok(adapter) => adapter.clone(),
+            Err(error) => {
+                let message = short_error(&error);
+                store_sync_error(&state.pool, entry_id, &message).await?;
+                results.push(failed(entry_id, code, message));
+                continue;
+            }
+        };
+        drop(runtime);
+
+        let external_id = match crate::sources::ExternalId::new(external_id) {
+            Ok(external_id) => external_id,
+            Err(error) => {
+                let message = short_error(&error);
+                store_sync_error(&state.pool, entry_id, &message).await?;
+                results.push(failed(entry_id, code, message));
+                continue;
+            }
+        };
+
+        match adapter.chapters(kind, &external_id).await {
+            Ok(chapters) => {
+                let now = now_unix();
+                let mut tx = state.pool.begin().await?;
+                // last_error очищаем до upsert: расхождение chapter_key
+                // пишется внутри и не должно быть затёрто успехом refresh.
+                sqlx::query(
+                    "UPDATE source_entries SET last_synced_at = ?, last_error = NULL, \
+                            adapter_version = ? WHERE id = ?",
+                )
+                .bind(now)
+                .bind(i64::from(version))
+                .bind(entry_id)
+                .execute(&mut *tx)
+                .await?;
+                let imported = upsert_chapters(&mut tx, entry_id, now, chapters).await?;
+                tx.commit().await?;
+
+                selection::recompute_stats(&state.pool, entry_id).await?;
+                results.push(RefreshEntryDto {
+                    source_entry_id: entry_id,
+                    code,
+                    status: "ok",
+                    imported_chapters: imported,
+                    error: None,
+                });
+            }
+            Err(error) => {
+                let message = short_error(&error);
+                tracing::warn!(entry_id, code = %code, %message, "source refresh failed");
+                store_sync_error(&state.pool, entry_id, &message).await?;
+                results.push(failed(entry_id, code, message));
+            }
+        }
+    }
+
+    let preferred_source_id = selection::recompute_preferred(&state.pool, title_id).await?;
+    Ok(RefreshResponse {
+        title_id,
+        entries: results,
+        preferred_source_id,
+    })
+}
+
+fn failed(source_entry_id: i64, code: String, error: String) -> RefreshEntryDto {
+    RefreshEntryDto {
+        source_entry_id,
+        code,
+        status: "error",
+        imported_chapters: 0,
+        error: Some(error),
+    }
+}
+
+fn short_error(error: &SourceError) -> String {
+    error.to_string().chars().take(200).collect()
+}
+
+async fn store_sync_error(
+    pool: &sqlx::SqlitePool,
+    entry_id: i64,
+    message: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE source_entries SET last_error = ? WHERE id = ?")
+        .bind(message)
+        .bind(entry_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

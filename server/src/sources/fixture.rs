@@ -28,6 +28,21 @@ pub fn reset_calls() {
 
 pub const CODE: &str = "fixture";
 
+/// Второй внешний id нужен тестам политики «один entry на источник».
+pub const ALT_TITLE_ID: &str = "fixture-title-2";
+
+fn known_title(external_id: &ExternalId) -> bool {
+    matches!(external_id.as_str(), "fixture-title" | ALT_TITLE_ID)
+}
+
+fn title_name(external_id: &ExternalId) -> &'static str {
+    if external_id.as_str() == ALT_TITLE_ID {
+        "Fixture Title 2"
+    } else {
+        "Fixture Title"
+    }
+}
+
 pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
     code: CODE,
     name: "Fixture",
@@ -86,14 +101,14 @@ impl Fixture {
         external_id: &ExternalId,
     ) -> Result<SourceTitle, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
-        if external_id.as_str() != "fixture-title" {
+        if !known_title(external_id) {
             return Err(SourceError::NotFound);
         }
 
         Ok(SourceTitle {
             external_id: external_id.clone(),
             kind: MediaKind::Manga,
-            name: "Fixture Title".to_owned(),
+            name: title_name(external_id).to_owned(),
             alt_names: vec!["Fixture Alt".to_owned()],
             description: Some("Fixture description".to_owned()),
             cover_ref: Some("/cover.jpg".to_owned()),
@@ -114,7 +129,7 @@ impl Fixture {
         external_id: &ExternalId,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
-        if external_id.as_str() != "fixture-title" {
+        if !known_title(external_id) {
             return Err(SourceError::NotFound);
         }
 

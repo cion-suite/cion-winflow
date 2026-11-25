@@ -41,6 +41,8 @@ export type LibraryState = {
 
 export type ChapterVariant = {
   chapter_id: number;
+  /** Собственный ключ варианта: может отличаться от canonical. */
+  chapter_key: string;
   source_id: number;
   source_code: string;
   source_name: string;
@@ -82,12 +84,18 @@ export type TitleSource = {
   last_error: string | null;
 };
 
+export type ChapterAlias = {
+  alias_key: string;
+  canonical_key: string;
+};
+
 export type TitleResponse = {
   title: Title;
   library: LibraryState | null;
   /** Только БД: сервер не ходит в источники при показе тайтла. */
   chapters: TitleChapter[];
   sources: TitleSource[];
+  aliases: ChapterAlias[];
 };
 
 export type TitlePayload = {

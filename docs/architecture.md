@@ -10,8 +10,8 @@
 |---|---|---|
 | `app/` | запуск: `index.tsx`, провайдеры, маршрутизатор, глобальные стили | `AppProvider.tsx`, `AppRouter.tsx`, `styles/index.css` |
 | `shell/` | оболочка окна: то, что не принадлежит ни одному экрану | `layout/`, `navbar/` (шапка, язык, тема), `sidebar/` |
-| `pages/<имя>/` | экраны, по папке на экран | `catalog/`, `title/`, `library/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
-| `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `progress.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
+| `pages/<имя>/` | экраны, по папке на экран | `catalog/`, `title/`, `library/`, `admin/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
+| `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `progress.ts`, `admin.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
 | `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `Pagination.tsx`, `Select.tsx`, `Textarea.tsx` |
 | `lib/` | утилиты, хуки и типы без UI | `utils.ts`, `settings.ts`, `routes.ts`, `catalog.ts`, `apiErrors.ts`, `i18n/` |
 
@@ -45,7 +45,7 @@
 
 | Группа | Заголовок | Экраны |
 |---|---|---|
-| `overview` | Обзор | Каталог (`/`), Библиотека (`/library`) |
+| `overview` | Обзор | Каталог (`/`), Библиотека (`/library`), Админка (`/admin`, только admin) |
 | `footer` | без заголовка | Что нового, Настройки |
 
 `SidebarGroupLabel` сам скрывает заголовок, когда сайдбар свёрнут до иконок. Свернуть сайдбар можно кнопкой в шапке или `Ctrl+B`; состояние сохраняется в настройках.
@@ -68,7 +68,8 @@
 ## Каталог и библиотека
 
 - **Каталог** (`pages/catalog/`) — `GET /api/catalog?q=&kind=&page=&page_size=`, ответ `{ items, total, page, page_size }`. `q` ищется по колонке `titles.name_lower` (Unicode-lowercase копия названия: SQLite `lower()` понимает только ASCII), `%` и `_` экранируются; `kind` — `manga|anime|book`. Администратор видит кнопку «Добавить тайтл» с формой `POST /api/titles`.
-- **Тайтл** (`pages/title/`) — `GET /api/titles/{id}` отдаёт `{ title, library, chapters, sources }`, где `library` — запись текущего пользователя или `null`, `chapters` — сгруппированные по каноническому `chapter_key` главы с выбранным вариантом, `sources` — статистика источников. Запрос читает только БД и не ходит в источники. Администратор может править тайтл (`PUT /api/titles/{id}`, полная замена полей) и загружать обложку. Сменить `kind` при привязанных `source_entries` нельзя — 409 `kind_locked`.
+- **Тайтл** (`pages/title/`) — `GET /api/titles/{id}` отдаёт `{ title, library, chapters, sources, aliases }`, где `library` — запись текущего пользователя или `null`, `chapters` — сгруппированные по каноническому `chapter_key` главы с выбранным доступным вариантом и всеми вариантами групп, `sources` — статистика источников, `aliases` — ручные связи ключей. Запрос читает только БД и не ходит в источники. Администратор может править тайтл (`PUT /api/titles/{id}`, полная замена полей), загружать обложку, привязывать/отвязывать источники, назначать primary, обновлять главы и связывать alias-ключи (`AdminSourcePanel`/`AliasesPanel`). Сменить `kind` при привязанных `source_entries` нельзя — 409 `kind_locked`.
+- **Админка** (`pages/admin/`) — `GET /api/sources` (состояние адаптеров, настройка `base_url`, enable/disable, probe) и приоритеты `GET/PUT /api/admin/source-priorities` по `(kind, lang)`; порядок меняется кнопками, сохранение заменяет список целиком.
 - **Библиотека** (`pages/library/`) — `GET /api/library?page=&page_size=` возвращает `{ items, total, page, page_size }` с краткой карточкой тайтла; `PUT /api/library/{title_id}` (`{ status, score }`) вставляет или обновляет запись, `DELETE` убирает. Статусы: `planned|in_progress|completed|on_hold|dropped`, оценка — 1..10 или `null`. Библиотека у каждого пользователя своя.
 - **Обложки.** `POST /api/titles/{id}/cover` (multipart, поле `file`, до 5 МиБ, тело до 6 МиБ) принимает JPEG/PNG/WebP/GIF, декодирует с лимитами в `spawn_blocking`, ресайзит в `full` (1200×1800) и `thumb` (320×480) и сохраняет WebP в `DATA_DIR/covers/{id}/`. `GET /api/titles/{id}/cover?size=thumb|full` отдаёт файл с `ETag` и `Cache-Control: private, max-age=86400`; UI добавляет `v={updated_at}` как cache-buster. Оригинал не сохраняется и не отдаётся.
 - **Типы и статусы** общие для формы и API — строковые константы в `lib/catalog.ts`. Форма тайтла (`ui/TitleForm.tsx`) не знает об API: получает значения и колбэк.
@@ -79,7 +80,7 @@
 - **Ридер** (`pages/reader/`) — маршрут `/reader/:titleId/:chapterKey` живёт вне `Layout`: окно страниц считается по накопленным высотам (`width`/`height` из источника), соседние страницы префетчатся, клавиатура листает главу. Смена главы пересоздаёт состояние через `key`. Прогресс сохраняется с дебаунсом, а при `visibilitychange`/`pagehide` и размонтировании — через `fetch(..., { keepalive: true })`.
 - **Прогресс** — `GET/PUT /api/progress/{title_id}`; `PUT` принимает `chapter_key` и одно поле позиции (`page` для картинок, `seconds` для видео, `scroll` для текста). Сервер резолвит alias → canonical и проверяет поле по `content_kind` выбранного варианта. `page` — 0-based индекс `pages.idx`.
 - **Изображения** — браузер не ходит на чужие сайты: `GET /api/pages/{id}/image` и `GET /api/sources/{code}/cover?ref=` резолвят стабильную ссылку через адаптер, проверяют allowlist хостов, кэшируют байты на диске и отдают с `ETag`, `nosniff` и `Cache-Control: private`.
-- **Источники** — админские `GET /api/sources`, `PUT /api/sources/{code}`, `PUT /api/sources/{code}/config`, `POST .../search`, `POST .../import`, `POST .../probe`. Первый адаптер — Remanga v2; `external_id` тайтла — `dir`, главы — числовой `id`. Импорт идёт `search → import → chapters`, страницы — лениво при первом `/content`.
+- **Источники** — админские `GET /api/sources`, `PUT /api/sources/{code}`, `PUT /api/sources/{code}/config`, `POST .../search`, `POST .../import`, `POST .../probe`. Remanga v2 — JSON API (`external_id` тайтла — `dir`, главы — числовой `id`). RuMix — HTML на движке Grouple (`external_id` — slug, главы — `data-id`, поиск POST-формой, картинки по подписанным URL, платная глава — 302 на покупку). Импорт идёт `search → import → chapters`, страницы — лениво при первом `/content`. Привязка к существующему тайтлу — `POST /api/titles/{id}/sources`.
 
 ## Настройки
 
@@ -144,19 +145,22 @@ server/
     0001_auth.sql     users, invites, sessions
     0002_catalog.sql  sources, titles, source_entries, chapters, aliases,
                       pages, chapter_texts, library, progress, chapter_reads
+    0003_source_entry_per_source.sql  один source_entry на (title_id, source_id)
   src/
     main.rs          конфиг, БД, DataDir, bootstrap админа, tracing, запуск
     app.rs           Router: health, auth, catalog, titles, library, rate limit, слои
     auth/            handlers, service, password, session, middleware, limiter
     catalog/         service (каталог, тайтл), handlers, cover; selection (приоритеты
-                     и fallback), chapters (группировка глав), content (выдача главы)
+                     и fallback), chapters (группировка глав), content (выдача главы),
+                     links (attach/detach, primary, chapter_aliases)
     images/          cache (диск, single-flight), handlers (прокси страниц и обложек)
     library/         service (библиотека пользователя), handlers
     progress.rs      чтение и запись прогресса по chapter_key
-    source_admin/    service (реестр, конфиг, поиск, импорт, probe), handlers
-    sources/         dto, descriptor, config, error, http (SSRF-клиент, circuit breaker),
-                     registry, contract (тесты), remanga/ (api, parse, config, fixtures),
-                     fixture.rs (источник-заглушка только в debug)
+    source_admin/    service (реестр, конфиг, поиск, импорт, probe, refresh),
+                     priorities (kind/lang), handlers
+    sources/         dto, descriptor, config, error, http (SSRF-клиент, circuit breaker,
+                     POST-форма), keys (общий chapter_key), registry, contract (тесты),
+                     remanga/ (JSON API), rumix/ (HTML), fixture.rs (debug-заглушка)
     config.rs        env и допустимые origin
     db.rs            пул SQLite (WAL), миграции при старте
     state.rs         AppState: конфиг, пул, реестр источников, HTTP-клиенты, кэш, семафоры
@@ -169,7 +173,9 @@ server/
   tests/catalog.rs   тайтлы, поиск, пагинация, обложки, права admin
   tests/library.rs   библиотека, оценки, изоляция пользователей
   tests/sources.rs   источники, импорт, главы, прогресс, кэш картинок, fallback
+  tests/multi_source.rs  два источника, приоритеты, preferred, alias, группы, attach/detach
   tests/live_remanga.rs  live-проверка API Remanga (ignored, `pnpm test -- --ignored`)
+  tests/live_rumix.rs    live-проверка HTML RuMix (ignored)
 ```
 
 - `GET /api/health` отдаёт `{ "status": "ok", "version": "..." }` без сессии и проверяет БД (`SELECT 1`); ошибка БД — 500.
@@ -187,7 +193,9 @@ server/
 - `index.html` получают только навигационные запросы: `Sec-Fetch-Mode: navigate` или `Accept: text/html`. Путь вида `/reader/1/c12.5` не считается файлом по расширению и работает.
 - Отсутствующий `/assets/*` — 404 даже при навигации: ошибка деплоя не маскируется.
 - `dist/assets/*` отдаются с `public, max-age=31536000, immutable`, остальное — `no-cache`.
-- Источники: `sources` — реестр скомпилированных адаптеров, `PUT /api/sources/{code}` заводит `base_url` и `enabled`, `PUT .../config` мержит и валидирует `config_json` (422 со списком полей), `POST .../search`, `POST .../import`, `POST .../probe`. Адаптеры не знают о БД; `AppState.sources` — `Arc<RwLock<SourceRegistry>>`, guard не держится через `.await`. Битый конфиг отключает только свой источник.
+- Источники: `sources` — реестр скомпилированных адаптеров, `PUT /api/sources/{code}` заводит `base_url` и `enabled` (отсутствующий `base_url` не стирает прежний), `PUT .../config` мержит и валидирует `config_json` (422 со списком полей), `POST .../search`, `POST .../import`, `POST .../probe`. Адаптеры не знают о БД; `AppState.sources` — `Arc<RwLock<SourceRegistry>>`, guard не держится через `.await`. Битый конфиг отключает только свой источник и персистится в `sources.config_error`.
+- Связи тайтла (admin): `POST/DELETE /api/titles/{id}/sources`, `PUT /api/titles/{id}/primary-source`, `GET/POST/DELETE /api/titles/{id}/chapter-aliases`, `POST /api/admin/refresh/{title_id}`. Alias — один hop, цепочки запрещены; при отвязке висячие alias удаляются. `POST refresh` возвращает per-entry статус, сеть идёт до транзакции.
+- Приоритеты (admin): `GET/PUT /api/admin/source-priorities?kind=&lang=`; ранг 0-based, список заменяется целиком, после сохранения preferred пересчитывается у всех тайтлов типа. Набор языка тайтла полностью заменяет `*`. Effective enabled = `enabled AND base_url IS NOT NULL AND config_error IS NULL`; такие источники не участвуют в preferred, статистике страницы и выбранном варианте. Один `source_entry` на `(title_id, source_id)`.
 - Импорт: адаптер заново получает метаданные по `external_id`, затем главы; запись — upsert в транзакции. `chapter_key` фиксируется при первом импорте (расхождение — в `source_entries.last_error`). После импорта считаются `chapter_count`/`available_count`/`locked_count`/`missing_count` и `titles.preferred_source_id`.
 - Выдача главы: `GET /api/titles/{title_id}/chapters/{chapter_key}/content` сам выбирает вариант и делает fallback; `locked`/`missing` кешируются по TTL (6/24 ч), временные ошибки не меняют доступность. `GET /api/chapters/{id}/content` — прямой вариант без fallback.
 - Картинки: `GET /api/pages/{id}/image` и `GET /api/sources/{code}/cover?ref=`; ключ кэша страницы — `(source_entry_id, external chapter id, idx)`, запись атомарная, одновременные запросы дедуплицируются. SQLite-статусы `401/403/410` запускают до двух перезапросов списка страниц; затем глава помечается `locked`.

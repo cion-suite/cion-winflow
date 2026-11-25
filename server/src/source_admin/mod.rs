@@ -2,4 +2,5 @@
 //! probe. HTTP-слой тонкий, логика — в `service`.
 
 pub mod handlers;
+pub mod priorities;
 pub mod service;

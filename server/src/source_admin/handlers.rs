@@ -7,10 +7,13 @@ use serde_json::Value;
 use crate::{
     auth::session::CurrentUser,
     error::AppError,
-    extract::{ApiJson, ApiPath},
-    source_admin::service::{
-        self, ConfigSaveResponse, ImportInput, ImportResponse, ProbeResponse, SearchInput,
-        SearchResponse, SourceInput, SourceListResponse, SourceStateDto,
+    extract::{ApiJson, ApiPath, ApiQuery},
+    source_admin::{
+        priorities::{self, PrioritiesInput, PrioritiesQuery, PrioritiesResponse},
+        service::{
+            self, ConfigSaveResponse, ImportInput, ImportResponse, ProbeResponse, RefreshResponse,
+            SearchInput, SearchResponse, SourceInput, SourceListResponse, SourceStateDto,
+        },
     },
     state::AppState,
 };
@@ -70,4 +73,31 @@ pub async fn probe(
 ) -> Result<Json<ProbeResponse>, AppError> {
     user.require_admin()?;
     Ok(Json(service::probe(&state, &code).await?))
+}
+
+pub async fn list_priorities(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiQuery(query): ApiQuery<PrioritiesQuery>,
+) -> Result<Json<PrioritiesResponse>, AppError> {
+    user.require_admin()?;
+    Ok(Json(priorities::list(&state, query).await?))
+}
+
+pub async fn replace_priorities(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiJson(input): ApiJson<PrioritiesInput>,
+) -> Result<Json<PrioritiesResponse>, AppError> {
+    user.require_admin()?;
+    Ok(Json(priorities::replace(&state, input).await?))
+}
+
+pub async fn refresh_title(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(title_id): ApiPath<i64>,
+) -> Result<Json<RefreshResponse>, AppError> {
+    user.require_admin()?;
+    Ok(Json(service::refresh_title(&state, title_id).await?))
 }
