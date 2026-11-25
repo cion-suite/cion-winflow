@@ -3,12 +3,15 @@ import { Navigate, Route, Routes } from "react-router";
 
 import { ChangelogPage } from "@/pages/changelog";
 import { HomePage } from "@/pages/home";
+import { LoginPage } from "@/pages/login";
 import { ReaderPage } from "@/pages/reader";
+import { RegisterPage } from "@/pages/register";
 import { SettingsPage } from "@/pages/settings";
 import { TitlePage } from "@/pages/title";
 import { WatchPage } from "@/pages/watch";
 import { Layout } from "@/shell/layout/Layout";
 import type { SectionPath } from "@/shell/sidebar";
+import { RequireAuth } from "./RequireAuth";
 
 // Ключ - раздел из SECTIONS: рассинхрон не скомпилируется
 const PAGES: Record<Exclude<SectionPath, "/">, ReactElement> = {
@@ -29,15 +32,21 @@ const PARAM_ROUTES = [
 export function AppRouter() {
   return (
     <Routes>
-      <Route element={<Layout />}>
-        <Route index element={<HomePage />} />
-        {Object.entries(PAGES).map(([path, element]) => (
-          <Route key={path} path={path} element={element} />
-        ))}
-        {PARAM_ROUTES.map(({ path, element }) => (
-          <Route key={path} path={path} element={element} />
-        ))}
-        <Route path="*" element={<Navigate to="/" replace />} />
+      {/* Экраны входа живут вне Layout: сайдбар и шапка гостю не нужны */}
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+
+      <Route element={<RequireAuth />}>
+        <Route element={<Layout />}>
+          <Route index element={<HomePage />} />
+          {Object.entries(PAGES).map(([path, element]) => (
+            <Route key={path} path={path} element={element} />
+          ))}
+          {PARAM_ROUTES.map(({ path, element }) => (
+            <Route key={path} path={path} element={element} />
+          ))}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
       </Route>
     </Routes>
   );

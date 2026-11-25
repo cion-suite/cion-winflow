@@ -10,7 +10,7 @@ use axum::{
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
 
-use crate::app::AppState;
+use crate::state::AppState;
 
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const NO_CACHE: &str = "no-cache";

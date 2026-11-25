@@ -1,8 +1,13 @@
+use std::net::SocketAddr;
+
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-use cion_reader::app::{self, AppState};
+use cion_reader::app;
+use cion_reader::auth;
 use cion_reader::config::Config;
+use cion_reader::db;
+use cion_reader::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,6 +16,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
     let config = Config::from_env()?;
+    let pool = db::connect(&config.database_url).await?;
+
+    if let Some(admin) = config.admin_bootstrap.clone() {
+        if auth::bootstrap_admin(&pool, &admin).await? {
+            tracing::warn!(
+                username = %admin.username,
+                "bootstrap admin created; unset ADMIN_USERNAME/ADMIN_PASSWORD"
+            );
+        } else {
+            tracing::info!("bootstrap admin skipped: users already exist");
+        }
+    }
+
     let index = config.static_dir.join("index.html");
     if !index.is_file() {
         tracing::warn!(
@@ -19,7 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let app = app::router(AppState::new(config.clone()));
+    let state = AppState::new(config.clone(), pool);
+    let app = app::router(state);
     let listener = TcpListener::bind(config.bind_addr).await?;
     tracing::info!(
         addr = %listener.local_addr()?,
@@ -27,7 +46,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "cion-reader server started"
     );
 
-    axum::serve(listener, app).await?;
+    // ConnectInfo нужен rate limit по IP клиента
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

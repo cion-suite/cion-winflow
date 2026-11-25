@@ -11,7 +11,7 @@
 
 ## Текущее состояние
 
-Каркас сервера готов (фаза 1 плана): `server/` на axum отдаёт `/api/health`, статику `dist/` и SPA-fallback; фронтенд работает в браузере, транспорт — `fetch`, навигация — чистые URL. Авторизация, БД, каталог, источники и ридер — следующие фазы.
+Фазы 0–2 плана выполнены: `server/` на axum отдаёт API и статику `dist/`, работает SQLite (sqlx, миграции при старте), вход по инвайту, сессии в HttpOnly-cookie и защищённые экраны. Фронтенд ходит в API через `fetch`, навигация — чистые URL. Каталог, источники и ридер — следующие фазы.
 
 - Целевая архитектура, фазы и критерии готовности — [docs/planned-now.md](docs/planned-now.md).
 - Причины выбора и альтернативы — [docs/decisions/0001-server-architecture.md](docs/decisions/0001-server-architecture.md).
@@ -40,22 +40,27 @@
 
 ```
 src/
-  app/                     запуск: index.tsx (initSettings -> initI18n -> render), AppProvider (BrowserRouter, QueryClient), AppRouter, styles/index.css
-  shell/                   navbar/ (шапка, язык, тема), sidebar/ (меню), layout/
-  pages/                   экраны: home, title, reader, watch, changelog, settings
-  api/                     client.ts (request/apiUrl/ApiError), index.ts (области API)
-  ui/                      shadcn/ и общие компоненты: PageHeader.tsx, PlaceholderPage.tsx
-  lib/                     utils.ts (cn), settings.ts, routes.ts, i18n/
+  app/                     запуск: index.tsx (initSettings -> initI18n -> render), AppProvider (BrowserRouter, QueryClient, AuthProvider), AppRouter, RequireAuth, styles/index.css
+  shell/                   navbar/ (шапка, пользователь, язык, тема), sidebar/ (меню), layout/
+  pages/                   экраны: home, title, reader, watch, changelog, settings, login, register
+  api/                     client.ts (request/apiUrl/ApiError), auth.tsx (хуки, AuthProvider), index.ts (области API)
+  ui/                      shadcn/ и общие компоненты: PageHeader.tsx, PlaceholderPage.tsx, AuthShell.tsx
+  lib/                     utils.ts (cn), settings.ts, routes.ts, authErrors.ts, i18n/
 public/theme.js            тема до первой отрисовки; внешний файл для CSP
 server/
   Cargo.toml
+  migrations/              0001_auth.sql: users, invites, sessions
   src/
-    main.rs                конфиг, tracing, запуск
-    app.rs                 Router, /api/health, слои
-    config.rs              BIND_ADDR, STATIC_DIR
-    error.rs               формат ошибок API
+    main.rs                конфиг, БД, bootstrap админа, tracing, запуск
+    app.rs                 Router, rate limit, слои Origin/session
+    auth/                  handlers, service, password, session, middleware, limiter
+    config.rs              BIND_ADDR, STATIC_DIR, DATABASE_URL, auth env
+    db.rs                  пул SQLite (WAL), миграции при старте
+    state.rs               AppState: конфиг, пул, семафор Argon2, лимитер входа
+    error.rs               AppError -> формат ошибок API
     static_files.rs        ServeDir + SPA fallback + заголовки кэша
-  tests/http.rs            health, API 404, SPA fallback
+  tests/http.rs            health, API 401/404, SPA fallback
+  tests/auth.rs            вход, инвайты, сессии, rate limit
 dist/                      билд фронтенда (в git не коммитится)
 ```
 
@@ -95,6 +100,8 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - Все экраны лежат в `src/pages/<имя>/`. Экран импортируется только из роутера `src/app/AppRouter.tsx`.
 - `fetch` есть только в `src/api/client.ts`; там же `request<T>`, `apiUrl` и `ApiError`. `src/api` импортируют `pages`, `shell` и `app`, но не `ui`.
 - Путь для `request` задаётся относительно префикса API: `request("/health")` -> `/api/health`. Ошибки сервера — `{ code, message }`; сетевой сбой — `ApiError` со `status: 0`.
+- Снаружи `src/api` импортируется только через `@/api` (хуки, `AuthProvider`) и `@/api/client` (`request`, `ApiError`) — это проверяет `eslint-plugin-boundaries`.
+- Авторизация: `useAuth()` даёт `user`, `isLoading`, `error`; защищённые экраны обёрнуты в `<RequireAuth>` в `AppRouter`, гость уходит на `/login`. 401 от запросов чистит кэш React Query и возвращает на вход. `/login` и `/register` живут вне `Layout`.
 - Параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) живут в `AppRouter` отдельным списком и не входят в `SectionPath`; ссылки собирай через `src/lib/routes.ts`, чтобы `chapterKey` кодировался.
 - Компоненты shadcn не ставятся как библиотека: их код копируется в `src/ui/shadcn/` и принадлежит проекту. Перед написанием своего компонента проверь, нет ли готового в shadcn.
 - Цвета бери из токенов темы (`bg-primary`, `text-muted-foreground`), а не задавай вручную: так работает смена темы.
@@ -108,9 +115,12 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 
 ## Сервер
 
-- HTTP-обработчики тонкие, логика — в сервисах и репозиториях. Ошибки API — в формате `{ code, message }` (`server/src/error.rs`); `AppError` появится с первыми доменными ошибками.
-- Неизвестный `/api/*` возвращает JSON 404, отсутствующий `/assets/*` — 404; `index.html` получают только навигационные запросы (`Sec-Fetch-Mode: navigate` или `Accept: text/html`). `GET /api/titles/{id}` и прочие пути с точками в идентификаторах работают.
-- Конфиг — из env: `BIND_ADDR` (по умолчанию `127.0.0.1:3000`), `STATIC_DIR` (по умолчанию `dist`), `RUST_LOG`; в dev `.env` читает `dotenvy`, пример — `.env.example`.
+- HTTP-обработчики тонкие, логика — в сервисах и репозиториях. Ошибки API — в формате `{ code, message }` (`server/src/error.rs`, `AppError` -> `IntoResponse`).
+- Неизвестный `/api/*` без сессии — JSON 401, с сессией — JSON 404; отсутствующий `/assets/*` — 404. `index.html` получают только навигационные запросы (`Sec-Fetch-Mode: navigate` или `Accept: text/html`). `GET /api/titles/{id}` и прочие пути с точками в идентификаторах работают.
+- Публичные API-пути перечислены явно в `auth/middleware.rs` (`/api/health`, `/api/auth/*`); остальное под `/api` требует сессию. Мутации проверяют `Origin` и `Sec-Fetch-Site`; браузерная cookie `sid` — `HttpOnly`, `SameSite=Lax`, `Secure` по `COOKIE_SECURE`.
+- Пароли — Argon2id в `spawn_blocking` с семафором; в БД только хеш. Сессия — 32 случайных байта, в БД SHA-256; idle 30 дней, абсолютный срок 90. Вход ограничен по IP (`tower_governor`) и по username (счётчик в памяти).
+- Конфиг — из env: `BIND_ADDR` (по умолчанию `127.0.0.1:3000`), `STATIC_DIR` (`dist`), `DATABASE_URL` (`sqlite://data/cion.db`), `REGISTRATION_MODE` (`invite|closed`), `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG`; в dev `.env` читает `dotenvy`, пример — `.env.example`.
+- Миграции — `server/migrations/`, `sqlx::migrate!` при старте. Схема auth: `users`, `invites`, `sessions`; время — unix seconds (INTEGER).
 - Статику отдаёт `ServeDir` с диска; `rust-embed` не используем, иначе правка UI требует пересборки Rust.
 - Тесты API — `tower::ServiceExt::oneshot` по `Router` (`server/tests/http.rs`); временные каталоги и SQLite — в тестах, не в проде.
 - В production-коде нет `unwrap` / `expect` / `panic!`; причина `unsafe` — в WHY-комментарии.
@@ -118,6 +128,10 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 ## Подводные камни
 
 - Для dev нужны оба процесса: без `pnpm dev:server` прокси API отвечает ошибкой.
+- Первый администратор создаётся только на пустой таблице `users` из `ADMIN_USERNAME`/`ADMIN_PASSWORD`. После bootstrap переменные убери: пароль остаётся в env и больше не нужен.
+- `DATABASE_URL` по умолчанию `sqlite://data/cion.db`; каталог `data/` создаётся сам и в git не попадает. Миграции применяются при каждом старте.
+- В dev разрешены Origin `http://localhost:1420`/`127.0.0.1:1420` и те же на `:3000`. Release-сборка без `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS` отклоняет все мутации (403) — это fail closed, а не забытая настройка. В проде также `COOKIE_SECURE=true`.
+- Rate limit входа хранится в памяти процесса и сбрасывается при перезапуске; для одного self-host инстанса этого достаточно.
 - Сервер раздаёт статику из `dist/`: чтобы проверить SPA на `:3000`, сначала выполни `pnpm build`. После пересборки UI сервер перезапускать не нужно.
 - `typescript-eslint` требует TypeScript ниже 6.1: не обновляй `typescript` до 7, пока этот диапазон не расширят.
 - `Cargo.lock` (в `server/`) и `pnpm-lock.yaml` коммитятся. `node_modules`, `dist`, `server/target`, `data/`, `.env*` (кроме `.env.example`) игнорируются.

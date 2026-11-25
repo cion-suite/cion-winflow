@@ -1,6 +1,6 @@
 # План перевода cion-reader на сервер
 
-- **Статус:** принят, выполняется
+- **Статус:** принят; фазы 0–2 выполнены, дальше фаза 3
 - **Дата:** 2026-11-24
 - **Решение:** [0001-server-architecture.md](decisions/0001-server-architecture.md)
 - **Дополнение:** [0002-source-abstraction.md](decisions/0002-source-abstraction.md) — гетерогенные источники
@@ -684,13 +684,13 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 
 ### Фаза 2 — БД, авторизация, инвайты
 
-- sqlx + SQLite, миграции, `SqliteConnectOptions` (WAL, `foreign_keys`, `busy_timeout`, `create_if_missing`);
-- таблицы `users`, `invites`, `sessions`;
-- регистрация по инвайту с атомарным захватом, вход, выход, `GET /api/me`, middleware сессии;
-- bootstrap первого администратора (CLI или env при пустой БД);
-- `REGISTRATION_MODE=invite|closed`, rate limit login/register;
-- экраны `login`/`register`, защищённые маршруты, `AuthProvider`; logout и 401 очищают кэш React Query (`queryClient.clear()`), иначе на общем браузере виден кэш прошлого пользователя; 401 не ретраить, а уводить на login;
-- тесты: без cookie → 401, чужой `Origin` → 403, лимит входа, инвайт нельзя использовать дважды.
+- [x] sqlx + SQLite, миграции, `SqliteConnectOptions` (WAL, `foreign_keys`, `busy_timeout`, `create_if_missing`);
+- [x] таблицы `users`, `invites`, `sessions`;
+- [x] регистрация по инвайту с атомарным захватом, вход, выход, `GET /api/me`, middleware сессии;
+- [x] bootstrap первого администратора (env `ADMIN_USERNAME`/`ADMIN_PASSWORD` при пустой БД);
+- [x] `REGISTRATION_MODE=invite|closed`, rate limit login/register (IP + username);
+- [x] экраны `login`/`register`, защищённые маршруты, `AuthProvider`; logout и 401 очищают кэш React Query (`queryClient.clear()`); 401 не ретраится и уводит на login;
+- [x] тесты: без cookie → 401, чужой `Origin` → 403, лимит входа, инвайт нельзя использовать дважды.
 
 Критерий: регистрация по одноразовому инвайту, вход, сохранение сессии после перезагрузки, выход; в режиме `closed` регистрация возвращает 403; пароли — Argon2; cookie с нужными флагами.
 

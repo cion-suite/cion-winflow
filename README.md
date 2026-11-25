@@ -2,7 +2,7 @@
 
 Приватный self-hosted агрегатор манги, аниме и книг: один каталог, одна библиотека и один прогресс для себя и небольшого круга читателей.
 
-**Текущее состояние.** Фронтенд переехал в веб (React SPA), в репозитории появился сервер `server/` на Rust (axum): `/api/health`, конфиг из env и раздача `dist/` с SPA-fallback. Авторизация, БД, каталог, источники и ридер — следующие фазы. План — [docs/planned-now.md](docs/planned-now.md), причины решения — [docs/decisions/0001-server-architecture.md](docs/decisions/0001-server-architecture.md).
+**Текущее состояние.** Работают сервер `server/` на Rust (axum), SQLite с миграциями, вход по инвайту и сессии в HttpOnly-cookie. Экраны входа и регистрации защищают остальное приложение; `/api/health`, статика `dist/` и SPA-fallback на месте. Каталог, источники и ридер — следующие фазы. План — [docs/planned-now.md](docs/planned-now.md), причины решения — [docs/decisions/0001-server-architecture.md](docs/decisions/0001-server-architecture.md).
 
 ## Что будет в приложении
 
@@ -29,6 +29,14 @@ pnpm dev          # терминал 2: Vite на 1420
 
 Откройте http://localhost:1420 — Vite проксирует API на сервер. Правка UI не пересобирает Rust.
 
+Первый администратор создаётся один раз на пустой БД:
+
+```powershell
+$env:ADMIN_USERNAME='admin'; $env:ADMIN_PASSWORD='change-me-please'; pnpm dev:server
+```
+
+После создания войдите на http://localhost:1420/login и уберите `ADMIN_*` из окружения. Инвайты для остальных выдаёт `POST /api/admin/invites` с сессией администратора. SQLite лежит в `data/cion.db` и создаётся автоматически.
+
 Проверка прод-раздачи локально:
 
 ```powershell
@@ -36,7 +44,7 @@ pnpm build
 pnpm dev:server
 ```
 
-Откройте http://127.0.0.1:3000 — сервер отдаст SPA и `/api/health`. Конфиг сервера — `BIND_ADDR`, `STATIC_DIR`, `RUST_LOG` (пример в `.env.example`).
+Откройте http://127.0.0.1:3000 — сервер отдаст SPA и `/api/health`. Конфиг сервера: `BIND_ADDR`, `STATIC_DIR`, `DATABASE_URL`, `REGISTRATION_MODE`, `PUBLIC_ORIGIN`/`ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG` (пример в `.env.example`).
 
 ## Проверки
 
