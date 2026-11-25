@@ -53,6 +53,7 @@ export {
   useAttachSourceMutation,
   useDeleteAliasMutation,
   useDetachSourceMutation,
+  useImportSourceMutation,
   useProbeSourceMutation,
   useRefreshTitleMutation,
   useSaveSourcePrioritiesMutation,

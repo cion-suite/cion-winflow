@@ -135,6 +135,11 @@ export const adminApi = {
       "/admin/source-priorities",
       jsonMutation({ kind, lang, source_codes: sourceCodes }, "PUT"),
     ),
+  importTitle: (code: string, externalId: string, kind: MediaKind) =>
+    request<AttachSourceResponse>(
+      `${sourcePath(code)}/import`,
+      jsonMutation({ external_id: externalId, kind }),
+    ),
   attach: (titleId: number, input: AttachSourceInput) =>
     request<AttachSourceResponse>(`/titles/${titleId}/sources`, jsonMutation(input)),
   detach: (titleId: number, entryId: number) =>
@@ -230,6 +235,22 @@ function invalidateTitle(queryClient: ReturnType<typeof useQueryClient>, titleId
   // Связи и доступность меняют выбранный вариант и canonical-ключ прогресса.
   void queryClient.invalidateQueries({ queryKey: ["chapter-content", titleId] });
   void queryClient.invalidateQueries({ queryKey: progressQueryKey(titleId) });
+}
+
+export function useImportSourceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      code,
+      externalId,
+      kind,
+    }: {
+      code: string;
+      externalId: string;
+      kind: MediaKind;
+    }) => adminApi.importTitle(code, externalId, kind),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: CATALOG_QUERY_KEY }),
+  });
 }
 
 export function useAttachSourceMutation(titleId: number) {

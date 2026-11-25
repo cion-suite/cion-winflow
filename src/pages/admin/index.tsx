@@ -1,12 +1,15 @@
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { ArrowDownIcon, ArrowUpIcon, ShieldIcon } from "lucide-react";
+import { Link } from "react-router";
 
 import {
   useAuth,
   useErrorText,
+  useImportSourceMutation,
   useProbeSourceMutation,
   useSaveSourcePrioritiesMutation,
   useSourcePrioritiesQuery,
+  useSourceSearchMutation,
   useSourcesQuery,
   useToggleSourceMutation,
   type SourcePriority,
@@ -14,6 +17,7 @@ import {
 } from "@/api";
 import { MEDIA_KINDS, type MediaKind } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
+import { titlePath } from "@/lib/routes";
 import { PageHeader } from "@/ui/PageHeader";
 import { Select } from "@/ui/Select";
 import { Badge } from "@/ui/shadcn/badge";
@@ -27,6 +31,8 @@ function SourceRow({ source }: { source: SourceState }) {
   const toggle = useToggleSourceMutation();
   const probe = useProbeSourceMutation();
   const [baseUrl, setBaseUrl] = useState(source.base_url ?? "");
+  const [editing, setEditing] = useState(false);
+  const showEditor = !source.configured || editing;
   const toggleError = useErrorText(toggle.error);
   const probeError = useErrorText(probe.error);
   const probed = probe.variables === source.code ? probe.data : null;
@@ -72,29 +78,57 @@ function SourceRow({ source }: { source: SourceState }) {
         )}
       </div>
 
-      {!source.configured && (
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Input
-            value={baseUrl}
-            placeholder={t("admin.baseUrlPlaceholder")}
-            aria-label={t("admin.baseUrl")}
-            onChange={(event) => setBaseUrl(event.target.value)}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            disabled={baseUrl.trim() === "" || toggle.isPending}
-            onClick={() =>
-              toggle.mutate({ code: source.code, baseUrl: baseUrl.trim(), enabled: true })
-            }
-          >
-            {t("admin.save")}
+      {source.configured && !editing && source.base_url !== null && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-muted-foreground">{source.base_url}</p>
+          <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)}>
+            {t("admin.editUrl")}
           </Button>
         </div>
       )}
 
-      {source.configured && source.base_url !== null && (
-        <p className="text-xs text-muted-foreground">{source.base_url}</p>
+      {showEditor && (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              value={baseUrl}
+              placeholder={t("admin.baseUrlPlaceholder")}
+              aria-label={t("admin.baseUrl")}
+              onChange={(event) => setBaseUrl(event.target.value)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={baseUrl.trim() === "" || toggle.isPending}
+              onClick={() =>
+                toggle.mutate(
+                  {
+                    code: source.code,
+                    baseUrl: baseUrl.trim(),
+                    enabled: source.configured ? source.enabled : true,
+                  },
+                  { onSuccess: () => setEditing(false) },
+                )
+              }
+            >
+              {t("admin.save")}
+            </Button>
+            {source.configured && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={toggle.isPending}
+                onClick={() => {
+                  setBaseUrl(source.base_url ?? "");
+                  setEditing(false);
+                }}
+              >
+                {t("title.cancel")}
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">{t("admin.baseUrlHint")}</p>
+        </div>
       )}
       {source.config_error !== null && (
         <p className="text-xs text-destructive">
@@ -125,6 +159,149 @@ function SourceRow({ source }: { source: SourceState }) {
         </p>
       )}
     </div>
+  );
+}
+
+function ImportFromSource({ sources }: { sources: SourceState[] }) {
+  const t = useT();
+  const search = useSourceSearchMutation();
+  const importTitle = useImportSourceMutation();
+  const [code, setCode] = useState("");
+  const [kind, setKind] = useState<MediaKind>("manga");
+  const [query, setQuery] = useState("");
+
+  const searchError = useErrorText(search.error);
+  const importError = useErrorText(importTitle.error);
+
+  const available = sources.filter(
+    (source) =>
+      source.configured &&
+      source.enabled &&
+      source.capabilities.includes("search") &&
+      source.capabilities.includes("chapters"),
+  );
+  const selected = available.find((source) => source.code === code) ?? available[0];
+  const effectiveKind = selected?.kinds.includes(kind)
+    ? kind
+    : (selected?.default_kind ?? "manga");
+
+  function handleSearch(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const value = query.trim();
+    if (!selected || value === "") return;
+    search.mutate({
+      code: selected.code,
+      input: { query: value, kind: effectiveKind },
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("admin.importTitle")}</CardTitle>
+        <CardDescription>{t("admin.importHint")}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {available.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("admin.noImportSources")}</p>
+        ) : (
+          <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleSearch}>
+            <Select
+              className="sm:w-44"
+              value={selected?.code ?? ""}
+              aria-label={t("admin.source")}
+              onChange={(event) => setCode(event.target.value)}
+            >
+              {available.map((source) => (
+                <option key={source.code} value={source.code}>
+                  {source.name}
+                </option>
+              ))}
+            </Select>
+            {selected && selected.kinds.length > 1 && (
+              <Select
+                className="sm:w-36"
+                value={effectiveKind}
+                aria-label={t("title.kind")}
+                onChange={(event) => setKind(event.target.value as MediaKind)}
+              >
+                {selected.kinds.map((value) => (
+                  <option key={value} value={value}>
+                    {t(`catalog.kinds.${value}`)}
+                  </option>
+                ))}
+              </Select>
+            )}
+            <Input
+              value={query}
+              placeholder={t("admin.searchPlaceholder")}
+              aria-label={t("admin.searchPlaceholder")}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <Button type="submit" variant="outline" disabled={search.isPending}>
+              {t("admin.search")}
+            </Button>
+          </form>
+        )}
+
+        {searchError && (
+          <p role="alert" className="text-sm text-destructive">
+            {searchError}
+          </p>
+        )}
+        {importError && (
+          <p role="alert" className="text-sm text-destructive">
+            {importError}
+          </p>
+        )}
+
+        {importTitle.data && (
+          <p className="text-sm">
+            {t("admin.imported", { count: importTitle.data.imported_chapters })}{" "}
+            <Link className="underline" to={titlePath(importTitle.data.title_id)}>
+              {t("admin.openImported")}
+            </Link>
+          </p>
+        )}
+
+        {search.data && search.data.items.length === 0 && (
+          <p className="text-sm text-muted-foreground">{t("admin.importEmpty")}</p>
+        )}
+
+        {search.data && search.data.items.length > 0 && (
+          <ul className="divide-y divide-border rounded-lg border border-border">
+            {search.data.items.map((item) => (
+              <li
+                key={`${search.variables?.code}:${item.external_id}`}
+                className="flex items-center justify-between gap-3 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{item.name}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {item.external_id}
+                    {item.year !== null ? ` · ${item.year}` : ""}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={importTitle.isPending}
+                  onClick={() =>
+                    importTitle.mutate({
+                      code: search.variables?.code ?? selected?.code ?? "",
+                      externalId: item.external_id,
+                      kind: search.variables?.input.kind ?? effectiveKind,
+                    })
+                  }
+                >
+                  {t("admin.importButton")}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -258,6 +435,8 @@ function AdminContent() {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       <PageHeader title={t("admin.title")} description={t("admin.description")} />
+
+      <ImportFromSource sources={sources.data?.sources ?? []} />
 
       <Card>
         <CardHeader>
