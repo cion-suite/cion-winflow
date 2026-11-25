@@ -65,8 +65,12 @@ impl TestApp {
         // Обложки и будущий кэш пишутся во временный каталог, не в data/
         let data_dir = tempfile::tempdir().expect("data dir");
         config.data_dir = data_dir.path().to_path_buf();
+        // Тестовый источник картинок живёт на 127.0.0.1
+        config.allow_loopback_images = true;
 
-        let state = AppState::new(config, pool.clone());
+        let state = AppState::new(config, pool.clone())
+            .await
+            .expect("app state");
         Self {
             pool,
             router: router(state),

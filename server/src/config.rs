@@ -20,6 +20,8 @@ pub struct Config {
     pub cookie_secure: bool,
     /// Прокси, чей X-Forwarded-For можно доверять (Caddy на loopback в проде).
     pub trusted_proxies: Vec<IpAddr>,
+    /// Разрешить прокси картинок ходить на loopback (только для тестов).
+    pub allow_loopback_images: bool,
     /// Одноразовый bootstrap администратора при пустой таблице users.
     pub admin_bootstrap: Option<AdminBootstrap>,
 }
@@ -53,8 +55,8 @@ pub enum ConfigError {
     BindAddr(#[from] std::net::AddrParseError),
     #[error("REGISTRATION_MODE must be `invite` or `closed`, got `{0}`")]
     RegistrationMode(String),
-    #[error("COOKIE_SECURE must be true or false, got `{0}`")]
-    CookieSecure(String),
+    #[error("`{name}` must be true or false, got `{value}`")]
+    BoolEnv { name: &'static str, value: String },
     #[error("TRUSTED_PROXIES must be a comma-separated list of IP addresses: `{0}` is not an IP")]
     TrustedProxy(String),
     #[error("ADMIN_USERNAME and ADMIN_PASSWORD must be set together")]
@@ -89,7 +91,10 @@ impl Config {
             other => return Err(ConfigError::RegistrationMode(other.to_owned())),
         };
 
-        let cookie_secure = parse_bool(env::var("COOKIE_SECURE").ok())?;
+        let cookie_secure = parse_bool("COOKIE_SECURE", env::var("COOKIE_SECURE").ok())?;
+        // Тестам нужен локальный HTTP-сервер; в проде loopback запрещён
+        let allow_loopback_images =
+            parse_bool("SSRF_ALLOW_LOOPBACK", env::var("SSRF_ALLOW_LOOPBACK").ok())?;
         let trusted_proxies = parse_ip_list(env::var("TRUSTED_PROXIES").ok())?;
         let allowed_origins = allowed_origins_from_env()?;
 
@@ -108,6 +113,7 @@ impl Config {
             allowed_origins,
             cookie_secure,
             trusted_proxies,
+            allow_loopback_images,
             admin_bootstrap,
         })
     }
@@ -127,17 +133,21 @@ impl Default for Config {
                 .collect(),
             cookie_secure: false,
             trusted_proxies: Vec::new(),
+            allow_loopback_images: false,
             admin_bootstrap: None,
         }
     }
 }
 
-fn parse_bool(value: Option<String>) -> Result<bool, ConfigError> {
+fn parse_bool(name: &'static str, value: Option<String>) -> Result<bool, ConfigError> {
     match value.as_deref().map(str::trim) {
         None | Some("") => Ok(false),
         Some(value) if value.eq_ignore_ascii_case("true") || value == "1" => Ok(true),
         Some(value) if value.eq_ignore_ascii_case("false") || value == "0" => Ok(false),
-        Some(value) => Err(ConfigError::CookieSecure(value.to_owned())),
+        Some(value) => Err(ConfigError::BoolEnv {
+            name,
+            value: value.to_owned(),
+        }),
     }
 }
 

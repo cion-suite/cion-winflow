@@ -1,0 +1,770 @@
+//! Чистые парсеры Remanga v2. Сеть сюда не входит: всё проверяется
+//! на фикстурах, поэтому редизайн API ломает тест, а не прод.
+
+use std::collections::HashSet;
+
+use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use crate::sources::dto::{
+    ChapterKey, ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SourceChapter,
+    SourceContent, SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
+};
+use crate::sources::error::SourceError;
+
+// Потолки совпадают с валидацией ручного создания тайтла в catalog::service.
+const MAX_NAME_CHARS: usize = 300;
+const MAX_LIST_ITEMS: usize = 50;
+const MAX_LIST_ITEM_CHARS: usize = 200;
+const MAX_DESCRIPTION_CHARS: usize = 20_000;
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct RawNamed {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawCover {
+    #[serde(default)]
+    low: Option<String>,
+    #[serde(default)]
+    mid: Option<String>,
+    #[serde(default)]
+    high: Option<String>,
+}
+
+impl RawCover {
+    fn best(&self) -> Option<String> {
+        self.mid
+            .clone()
+            .or_else(|| self.high.clone())
+            .or_else(|| self.low.clone())
+            .filter(|path| !path.trim().is_empty())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSearchMeta {
+    #[serde(default)]
+    total_items: Option<u64>,
+    #[serde(default)]
+    total_pages: Option<u64>,
+    #[serde(default)]
+    page: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSearch {
+    #[serde(default)]
+    meta: Option<RawSearchMeta>,
+    #[serde(default)]
+    results: Vec<RawSearchItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSearchItem {
+    #[serde(default)]
+    main_name: Option<String>,
+    #[serde(default)]
+    secondary_name: Option<String>,
+    #[serde(default)]
+    another_name: Option<String>,
+    #[serde(default)]
+    dir: Option<String>,
+    #[serde(default)]
+    issue_year: Option<i16>,
+    #[serde(default)]
+    status: Option<RawNamed>,
+    #[serde(default)]
+    cover: Option<RawCover>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawCreator {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, rename = "type")]
+    kind: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBranch {
+    id: i64,
+    #[serde(default)]
+    publishers: Vec<RawNamed>,
+}
+
+/// Ветка перевода: `branch_id` для запроса глав и имя группы для вариантов.
+#[derive(Debug, Clone)]
+pub struct BranchInfo {
+    pub id: i64,
+    pub group_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTitle {
+    #[serde(default)]
+    main_name: Option<String>,
+    #[serde(default)]
+    secondary_name: Option<String>,
+    #[serde(default)]
+    another_name: Option<String>,
+    #[serde(default)]
+    dir: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    issue_year: Option<i16>,
+    #[serde(default)]
+    avg_rating: Option<Value>,
+    #[serde(default)]
+    status: Option<RawNamed>,
+    #[serde(default)]
+    cover: Option<RawCover>,
+    #[serde(default)]
+    creators: Vec<RawCreator>,
+    #[serde(default)]
+    genres: Vec<RawNamed>,
+    #[serde(default)]
+    categories: Vec<RawNamed>,
+    #[serde(default)]
+    branches: Vec<RawBranch>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct RawChapter {
+    #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
+    tome: Option<i64>,
+    #[serde(default)]
+    chapter: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    is_paid: Option<bool>,
+    #[serde(default)]
+    is_bought: Option<bool>,
+    #[serde(default)]
+    is_published: Option<bool>,
+    #[serde(default)]
+    upload_date: Option<String>,
+    #[serde(default)]
+    publishers: Vec<RawNamed>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawChaptersPage {
+    #[serde(default)]
+    next: Option<Value>,
+    #[serde(default)]
+    results: Vec<RawChapter>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawPage {
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawContent {
+    #[serde(default)]
+    is_paid: Option<bool>,
+    #[serde(default)]
+    content_type: Option<String>,
+    /// У платных глав поле может быть null, а не пустым массивом.
+    #[serde(default)]
+    pages: Option<Vec<Vec<RawPage>>>,
+}
+
+pub struct ParsedChapters {
+    pub items: Vec<SourceChapter>,
+    pub next_cursor: Option<String>,
+}
+
+pub fn parse_search(raw: &str, kind: MediaKind) -> Result<SearchPage, SourceError> {
+    let parsed: RawSearch = serde_json::from_str(raw).map_err(parse_error("search"))?;
+
+    let mut items = Vec::with_capacity(parsed.results.len());
+    for item in parsed.results {
+        let Some(dir) = item.dir.as_deref().filter(|dir| !dir.trim().is_empty()) else {
+            continue;
+        };
+        let Some(name) = item.main_name.or(item.secondary_name.clone()) else {
+            continue;
+        };
+        let external_id = ExternalId::new(dir)?;
+
+        items.push(SourceSearchItem {
+            external_id,
+            kind,
+            name: truncate_chars(name.trim(), MAX_NAME_CHARS),
+            alt_names: alt_names(&item.secondary_name, &item.another_name, &name),
+            cover_ref: item.cover.as_ref().and_then(RawCover::best),
+            year: item.issue_year,
+            status: item
+                .status
+                .as_ref()
+                .and_then(|status| map_status(status.name.as_deref())),
+            external_url: None,
+        });
+    }
+
+    let (next_cursor, total) = match &parsed.meta {
+        Some(meta) => {
+            let page = meta.page.unwrap_or(1);
+            let next = meta
+                .total_pages
+                .filter(|pages| page < *pages)
+                .map(|_| (page + 1).to_string());
+            (next, meta.total_items)
+        }
+        None => (None, None),
+    };
+
+    Ok(SearchPage {
+        items,
+        next_cursor,
+        total,
+    })
+}
+
+pub fn parse_title(raw: &str, kind: MediaKind) -> Result<SourceTitle, SourceError> {
+    let parsed: RawTitle = serde_json::from_str(raw).map_err(parse_error("title"))?;
+
+    let dir = parsed
+        .dir
+        .as_deref()
+        .filter(|dir| !dir.trim().is_empty())
+        .ok_or_else(|| SourceError::Parse {
+            stage: "title",
+            detail: "missing dir".to_owned(),
+        })?;
+    let external_id = ExternalId::new(dir)?;
+
+    let name = parsed
+        .main_name
+        .or(parsed.secondary_name.clone())
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| SourceError::Parse {
+            stage: "title",
+            detail: "missing name".to_owned(),
+        })?;
+
+    let mut genres: Vec<String> = parsed
+        .genres
+        .iter()
+        .chain(parsed.categories.iter())
+        .filter_map(|named| named.name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| truncate_chars(name, MAX_LIST_ITEM_CHARS))
+        .collect();
+    dedupe(&mut genres);
+    genres.truncate(MAX_LIST_ITEMS);
+
+    // type 1 — автор, type 4 — художник; type 3 — издатель
+    let mut authors: Vec<String> = parsed
+        .creators
+        .iter()
+        .filter(|creator| matches!(creator.kind, Some(1 | 4) | None))
+        .filter_map(|creator| creator.name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| truncate_chars(name, MAX_LIST_ITEM_CHARS))
+        .collect();
+    dedupe(&mut authors);
+    authors.truncate(MAX_LIST_ITEMS);
+
+    Ok(SourceTitle {
+        external_id,
+        kind,
+        name: truncate_chars(&name, MAX_NAME_CHARS),
+        alt_names: alt_names(&parsed.secondary_name, &parsed.another_name, &name),
+        description: parsed
+            .description
+            .as_deref()
+            .map(html_to_text)
+            .map(|text| truncate_chars(&text, MAX_DESCRIPTION_CHARS))
+            .filter(|text| !text.is_empty()),
+        cover_ref: parsed.cover.as_ref().and_then(RawCover::best),
+        authors,
+        genres,
+        status: parsed
+            .status
+            .as_ref()
+            .and_then(|status| map_status(status.name.as_deref())),
+        year: parsed
+            .issue_year
+            .filter(|year| (1800..=2200).contains(year)),
+        rating: parsed.avg_rating.as_ref().and_then(parse_rating),
+        // Язык подставит адаптер из конфига: parse_title не знает настроек
+        lang: None,
+        external_url: None,
+        raw_json: serde_json::from_str(raw).ok(),
+    })
+}
+
+/// Ветки перевода: главы Remanga запрашиваются по `branch_id`, который
+/// есть только в ответе `title`. Возвращаем id и число глав для оценки.
+pub fn parse_branches(raw: &str) -> Result<Vec<BranchInfo>, SourceError> {
+    let parsed: RawTitle = serde_json::from_str(raw).map_err(parse_error("title"))?;
+    let mut branches: Vec<BranchInfo> = parsed
+        .branches
+        .into_iter()
+        .map(|branch| {
+            let names: Vec<&str> = branch
+                .publishers
+                .iter()
+                .filter_map(|publisher| publisher.name.as_deref())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .collect();
+            BranchInfo {
+                id: branch.id,
+                group_name: (!names.is_empty())
+                    .then(|| truncate_chars(&names.join(", "), MAX_LIST_ITEM_CHARS)),
+            }
+        })
+        .collect();
+    branches.sort_by_key(|branch| branch.id);
+    branches.dedup_by_key(|branch| branch.id);
+    Ok(branches)
+}
+
+pub fn parse_chapters(
+    raw: &str,
+    language: &str,
+    group_name: Option<&str>,
+) -> Result<ParsedChapters, SourceError> {
+    let parsed: RawChaptersPage = serde_json::from_str(raw).map_err(parse_error("chapters"))?;
+
+    let mut items = Vec::with_capacity(parsed.results.len());
+    for chapter in parsed.results {
+        // Неопубликованные главы не должны просачиваться в каталог
+        if chapter.is_published == Some(false) {
+            continue;
+        }
+        let Some(id) = chapter.id else {
+            continue;
+        };
+        let external_id = ExternalId::new(id.to_string())?;
+
+        let chapter_publishers: Vec<&str> = chapter
+            .publishers
+            .iter()
+            .filter_map(|publisher| publisher.name.as_deref())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect();
+        let chapter_group = if chapter_publishers.is_empty() {
+            group_name.map(str::to_owned)
+        } else {
+            Some(truncate_chars(
+                &chapter_publishers.join(", "),
+                MAX_LIST_ITEM_CHARS,
+            ))
+        };
+
+        let number_text = chapter
+            .chapter
+            .as_deref()
+            .map(normalize_number)
+            .filter(|number| !number.is_empty());
+        let volume = chapter
+            .tome
+            .and_then(|tome| u16::try_from(tome).ok())
+            .filter(|tome| *tome > 0);
+        let chapter_kind = ChapterKind::Normal;
+        let chapter_key =
+            build_chapter_key(volume, chapter_kind, number_text.as_deref(), &external_id);
+
+        items.push(SourceChapter {
+            external_id,
+            chapter_key,
+            number_text: number_text.clone(),
+            number_milli: number_text.as_deref().and_then(number_milli),
+            volume,
+            chapter_kind,
+            // Remanga — комиксы; тип известен заранее и не требует content()
+            content_kind: Some(ContentKind::Images),
+            name: chapter
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
+            group_name: chapter_group,
+            language: Some(language.to_owned()),
+            is_locked: chapter.is_paid == Some(true) && chapter.is_bought != Some(true),
+            external_url: None,
+            published_at: chapter.upload_date.as_deref().and_then(parse_published_at),
+            raw_json: serde_json::to_value(&chapter).ok(),
+        });
+    }
+
+    let next_cursor = parsed.next.and_then(|next| match next {
+        Value::Number(number) => Some(number.to_string()),
+        Value::String(cursor) if !cursor.is_empty() => Some(cursor),
+        _ => None,
+    });
+
+    Ok(ParsedChapters { items, next_cursor })
+}
+
+pub fn parse_content(raw: &str) -> Result<SourceContent, SourceError> {
+    let parsed: RawContent = serde_json::from_str(raw).map_err(parse_error("content"))?;
+
+    if parsed.is_paid == Some(true) {
+        return Err(SourceError::Locked);
+    }
+    match parsed.content_type.as_deref() {
+        Some("comics") => {}
+        Some(content_type) => {
+            return Err(SourceError::Parse {
+                stage: "content",
+                detail: format!("unsupported content type `{content_type}`"),
+            });
+        }
+        None => {
+            return Err(SourceError::Parse {
+                stage: "content",
+                detail: "missing content type".to_owned(),
+            });
+        }
+    }
+
+    let mut pages = Vec::new();
+    for row in parsed.pages.unwrap_or_default() {
+        for page in row {
+            let Some(link) = page.link.filter(|link| !link.trim().is_empty()) else {
+                continue;
+            };
+            pages.push(SourcePage {
+                index: u32::try_from(pages.len()).unwrap_or(u32::MAX),
+                image_ref: link.clone(),
+                image_url: Some(link),
+                width: page.width,
+                height: page.height,
+            });
+        }
+    }
+
+    if pages.is_empty() {
+        return Err(SourceError::Parse {
+            stage: "content",
+            detail: "no pages".to_owned(),
+        });
+    }
+
+    Ok(SourceContent::Images { pages })
+}
+
+pub fn map_status(name: Option<&str>) -> Option<TitleStatus> {
+    match name?.trim() {
+        "Продолжается" | "Выходит" => Some(TitleStatus::Ongoing),
+        "Закончен" | "Завершён" | "Завершен" => {
+            Some(TitleStatus::Completed)
+        }
+        "Заморожен" | "Приостановлен" => Some(TitleStatus::Hiatus),
+        "Прекращен" | "Прекращён" | "Отменён" | "Отменен" => {
+            Some(TitleStatus::Cancelled)
+        }
+        _ => None,
+    }
+}
+
+/// `chapter_key` по §7.3: том и вид главы — префиксы, без номера — стабильный хеш.
+pub fn build_chapter_key(
+    volume: Option<u16>,
+    kind: ChapterKind,
+    number_text: Option<&str>,
+    external_id: &ExternalId,
+) -> ChapterKey {
+    let volume_segment = volume.map_or_else(String::new, |volume| format!("v{volume}:"));
+    let kind_segment = if kind == ChapterKind::Normal {
+        String::new()
+    } else {
+        format!("{}:", kind.as_str())
+    };
+
+    match number_text.filter(|number| !number.is_empty()) {
+        Some(number) => format!("{volume_segment}{kind_segment}c{number}"),
+        None => {
+            let hash = hex::encode(Sha256::digest(external_id.as_str().as_bytes()));
+            format!("{volume_segment}{kind_segment}x:h{}", &hash[..16])
+        }
+    }
+}
+
+/// «, » → «.», остаются только цифры, точка и дефис: безопасно для URL и БД.
+pub fn normalize_number(raw: &str) -> String {
+    raw.trim()
+        .replace(',', ".")
+        .chars()
+        .filter(|character| character.is_ascii_digit() || *character == '.' || *character == '-')
+        .collect()
+}
+
+/// «12.5» → 12500, «1-2» → 1000 (начало диапазона), без номера — None.
+pub fn number_milli(text: &str) -> Option<i64> {
+    let head = text.split('-').next()?.trim();
+    if head.is_empty() {
+        return None;
+    }
+    let mut parts = head.splitn(2, '.');
+    let integer = parts.next()?.parse::<i64>().ok()?;
+    let fraction = parts.next().unwrap_or("");
+    let fraction_milli = if fraction.is_empty() {
+        0
+    } else {
+        let padded = format!("{fraction}000");
+        padded.get(..3)?.parse::<i64>().ok()?
+    };
+    Some(integer * 1000 + fraction_milli)
+}
+
+fn parse_rating(value: &Value) -> Option<f32> {
+    let rating = match value {
+        Value::String(text) => text.trim().parse::<f32>().ok()?,
+        Value::Number(number) => number.as_f64()? as f32,
+        _ => return None,
+    };
+    // 0.0 у Remanga означает «без оценок», а не настоящий ноль
+    (rating > 0.0 && rating <= 10.0).then_some(rating)
+}
+
+fn parse_published_at(raw: &str) -> Option<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Remanga отдаёт время без смещения; считаем его UTC.
+    let with_zone = if trimmed.ends_with('Z') || trimmed.contains('+') {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}Z")
+    };
+    time::OffsetDateTime::parse(&with_zone, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|value| value.unix_timestamp())
+}
+
+fn alt_names(secondary: &Option<String>, another: &Option<String>, main: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(secondary) = secondary.as_deref() {
+        names.push(secondary.trim().to_owned());
+    }
+    if let Some(another) = another.as_deref() {
+        let another = another.trim();
+        // « / » — разделитель списка; одиночный слэш внутри названия не режем
+        let parts: Vec<&str> = if another.contains(" / ") {
+            another
+                .split(" / ")
+                .flat_map(|part| part.split('\n'))
+                .collect()
+        } else {
+            another.split('\n').collect()
+        };
+
+        for part in parts {
+            let part = part.trim();
+            if !part.is_empty() {
+                names.push(truncate_chars(part, MAX_LIST_ITEM_CHARS));
+            }
+        }
+    }
+    names.retain(|name| !name.is_empty() && name != main);
+    dedupe(&mut names);
+    names.truncate(MAX_LIST_ITEMS);
+    names
+}
+
+fn truncate_chars(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        value.to_owned()
+    } else {
+        value.chars().take(max).collect()
+    }
+}
+
+fn dedupe(values: &mut Vec<String>) {
+    let mut seen = HashSet::new();
+    values.retain(|value| seen.insert(value.to_lowercase()));
+}
+
+/// Описание источника — plain text: чужой HTML в UI не рендерится.
+fn html_to_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut chars = html.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                text.push(' ');
+            }
+            '&' if !in_tag => {
+                let mut entity = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next == ';' || entity.len() > 10 || next.is_whitespace() {
+                        break;
+                    }
+                    entity.push(next);
+                    chars.next();
+                }
+                if chars.peek() == Some(&';') {
+                    chars.next();
+                }
+                text.push_str(match entity.as_str() {
+                    "nbsp" => " ",
+                    "amp" => "&",
+                    "lt" => "<",
+                    "gt" => ">",
+                    "quot" => "\"",
+                    "#39" | "apos" => "'",
+                    _ => "",
+                });
+            }
+            character if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn parse_error<'a>(stage: &'static str) -> impl Fn(serde_json::Error) -> SourceError + 'a {
+    move |error| {
+        tracing::debug!(%error, stage, "cannot parse remanga response");
+        SourceError::Parse {
+            stage,
+            detail: "invalid json shape".to_owned(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEARCH: &str = include_str!("fixtures/search.json");
+    const TITLE: &str = include_str!("fixtures/title.json");
+    const CHAPTERS: &str = include_str!("fixtures/chapters.json");
+    const CONTENT: &str = include_str!("fixtures/content.json");
+
+    #[test]
+    fn parses_search_items_and_cursor() {
+        let page = parse_search(SEARCH, MediaKind::Manga).expect("search");
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.total, Some(194));
+        assert_eq!(page.next_cursor.as_deref(), Some("2"));
+
+        let first = &page.items[0];
+        assert_eq!(first.external_id.as_str(), "<13.10.2026>naruto_");
+        assert_eq!(first.name, "Наруто");
+        assert!(first.alt_names.contains(&"Naruto".to_owned()));
+        assert_eq!(
+            first.cover_ref.as_deref(),
+            Some("/media/titles/naruto/3b90be24a27a568a15ede3e2fd123c91.jpg")
+        );
+        assert_eq!(first.year, Some(1999));
+        assert_eq!(first.status, Some(TitleStatus::Completed));
+    }
+
+    #[test]
+    fn parses_title_metadata_as_plain_text() {
+        let title = parse_title(TITLE, MediaKind::Manga).expect("title");
+        assert_eq!(title.external_id.as_str(), "<13.10.2026>naruto_");
+        assert_eq!(title.name, "Наруто");
+        assert_eq!(title.status, Some(TitleStatus::Completed));
+        assert_eq!(title.year, Some(1999));
+        assert_eq!(title.rating, Some(9.0));
+        assert!(
+            title
+                .description
+                .as_deref()
+                .is_some_and(|text| !text.contains('<'))
+        );
+        assert!(title.authors.contains(&"Масаси Кисимото".to_owned()));
+        assert!(title.genres.contains(&"Экшен".to_owned()));
+        let branches = parse_branches(TITLE).expect("branches");
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].id, 249);
+    }
+
+    #[test]
+    fn chapter_keys_follow_the_plan() {
+        let chapters = parse_chapters(CHAPTERS, "ru", None).expect("chapters");
+        let keys: Vec<&str> = chapters
+            .items
+            .iter()
+            .map(|c| c.chapter_key.as_str())
+            .collect();
+
+        assert!(keys.contains(&"c0"), "tome 0 means no volume: {keys:?}");
+        assert!(keys.contains(&"v1:c1"));
+        assert!(keys.contains(&"v1:c1.5"));
+        assert!(keys.contains(&"v1:c1-2"));
+        // Без номера — стабильный хеш от external_id
+        assert!(keys.iter().any(|key| key.starts_with("v1:x:h")), "{keys:?}");
+
+        let fractional = chapters
+            .items
+            .iter()
+            .find(|chapter| chapter.chapter_key == "v1:c1.5")
+            .expect("fractional");
+        assert_eq!(fractional.number_milli, Some(1500));
+        assert_eq!(fractional.content_kind, Some(ContentKind::Images));
+
+        let range = chapters
+            .items
+            .iter()
+            .find(|chapter| chapter.chapter_key == "v1:c1-2")
+            .expect("range");
+        assert_eq!(range.number_milli, Some(1000));
+
+        let paid = chapters
+            .items
+            .iter()
+            .find(|chapter| chapter.chapter_key == "v1:c2")
+            .expect("paid");
+        assert!(paid.is_locked);
+    }
+
+    #[test]
+    fn parses_content_pages_in_reading_order() {
+        let content = parse_content(CONTENT).expect("content");
+        let SourceContent::Images { pages } = content else {
+            panic!("expected images");
+        };
+        assert_eq!(pages.len(), 3);
+        assert_eq!(pages[0].index, 0);
+        assert!(pages[0].image_ref.ends_with("1_re.jpg"));
+        assert_eq!(pages[0].width, Some(812));
+    }
+
+    #[test]
+    fn paid_content_is_locked() {
+        let raw = r#"{"is_paid":true,"content_type":"comics","pages":[]}"#;
+        assert!(matches!(parse_content(raw), Err(SourceError::Locked)));
+    }
+
+    #[test]
+    fn every_chapter_key_is_unique_inside_title() {
+        let chapters = parse_chapters(CHAPTERS, "ru", None).expect("chapters");
+        let mut keys = HashSet::new();
+        for chapter in chapters.items {
+            assert!(keys.insert(chapter.chapter_key), "duplicate key");
+        }
+    }
+}

@@ -12,6 +12,13 @@ pub struct ErrorBody {
     pub message: String,
 }
 
+/// Ошибка поля при валидации конфига источника (422).
+#[derive(Debug, Serialize)]
+pub struct FieldError {
+    pub path: String,
+    pub message: String,
+}
+
 /// Доменные ошибки API. Внутренние причины логируются, но не попадают в ответ.
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -31,6 +38,23 @@ pub enum AppError {
     RateLimited {
         message: String,
         retry_after_secs: u64,
+    },
+    /// Ошибка источника на стороне upstream: 502.
+    #[error("{message}")]
+    BadGateway { code: &'static str, message: String },
+    /// Источник временно недоступен: 503 с необязательным Retry-After.
+    #[error("{message}")]
+    ServiceUnavailable {
+        code: &'static str,
+        message: String,
+        retry_after_secs: Option<u64>,
+    },
+    /// Невалидный конфиг: 422 со списком полей.
+    #[error("{message}")]
+    Unprocessable {
+        code: &'static str,
+        message: String,
+        errors: Vec<FieldError>,
     },
     #[error("database error")]
     Database(#[from] sqlx::Error),
@@ -80,6 +104,37 @@ impl AppError {
             message: "invalid username or password".to_owned(),
         }
     }
+
+    pub fn bad_gateway(code: &'static str, message: impl Into<String>) -> Self {
+        Self::BadGateway {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn service_unavailable(
+        code: &'static str,
+        message: impl Into<String>,
+        retry_after_secs: Option<u64>,
+    ) -> Self {
+        Self::ServiceUnavailable {
+            code,
+            message: message.into(),
+            retry_after_secs,
+        }
+    }
+
+    pub fn unprocessable(
+        code: &'static str,
+        message: impl Into<String>,
+        errors: Vec<FieldError>,
+    ) -> Self {
+        Self::Unprocessable {
+            code,
+            message: message.into(),
+            errors,
+        }
+    }
 }
 
 impl IntoResponse for AppError {
@@ -110,6 +165,33 @@ impl IntoResponse for AppError {
                 message,
                 Some(retry_after_secs),
             ),
+            Self::BadGateway { code, message } => (StatusCode::BAD_GATEWAY, code, message, None),
+            Self::ServiceUnavailable {
+                code,
+                message,
+                retry_after_secs,
+            } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                code,
+                message,
+                retry_after_secs,
+            ),
+            Self::Unprocessable {
+                code,
+                message,
+                errors,
+            } => {
+                // Валидация конфига отдаёт список полей рядом с обычным конвертом.
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(ValidationBody {
+                        code,
+                        message,
+                        errors,
+                    }),
+                )
+                    .into_response();
+            }
             Self::Database(error) => {
                 tracing::error!(%error, "database error");
                 (
@@ -173,6 +255,13 @@ impl IntoResponse for AppError {
 
         response
     }
+}
+
+#[derive(Debug, Serialize)]
+struct ValidationBody {
+    code: &'static str,
+    message: String,
+    errors: Vec<FieldError>,
 }
 
 pub async fn api_not_found() -> Response {

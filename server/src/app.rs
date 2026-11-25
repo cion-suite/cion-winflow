@@ -15,7 +15,7 @@ use crate::{
     auth::{self, limiter::ClientIpKeyExtractor},
     catalog, error,
     error::AppError,
-    library,
+    images, library, progress, source_admin,
     state::AppState,
     static_files::serve_static,
 };
@@ -82,6 +82,38 @@ pub fn router(state: AppState) -> Router {
             "/library/{title_id}",
             put(library::handlers::upsert_library).delete(library::handlers::remove_library),
         )
+        .route(
+            "/progress/{title_id}",
+            get(progress::get_progress).put(progress::save_progress),
+        )
+        .route(
+            "/titles/{title_id}/chapters/{chapter_key}/content",
+            get(catalog::content::canonical_content),
+        )
+        .route(
+            "/chapters/{id}/content",
+            get(catalog::content::direct_content),
+        )
+        .route("/pages/{id}/image", get(images::handlers::page_image))
+        .route("/sources", get(source_admin::handlers::list_sources))
+        .route(
+            "/sources/{code}",
+            put(source_admin::handlers::upsert_source),
+        )
+        .route(
+            "/sources/{code}/config",
+            put(source_admin::handlers::save_config),
+        )
+        .route(
+            "/sources/{code}/search",
+            post(source_admin::handlers::search),
+        )
+        .route(
+            "/sources/{code}/import",
+            post(source_admin::handlers::import),
+        )
+        .route("/sources/{code}/probe", post(source_admin::handlers::probe))
+        .route("/sources/{code}/cover", get(images::handlers::source_cover))
         .fallback(error::api_not_found)
         // Последний слой — внешний: Origin проверяется до сессии
         .layer(middleware::from_fn_with_state(

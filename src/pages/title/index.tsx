@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useState } from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 
 import {
   formValuesToTitleInput,
@@ -10,17 +10,39 @@ import {
   useTitleQuery,
   useUpdateTitleMutation,
   useUploadCoverMutation,
+  type TitleChapter,
 } from "@/api";
 import type { TitleFormValues } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
+import { readerPath } from "@/lib/routes";
 import { CoverImage } from "@/ui/CoverImage";
 import { PageHeader } from "@/ui/PageHeader";
 import { TitleForm } from "@/ui/TitleForm";
-import { Button } from "@/ui/shadcn/button";
+import { Badge } from "@/ui/shadcn/badge";
+import { Button, buttonVariants } from "@/ui/shadcn/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/ui/shadcn/card";
 import { Input } from "@/ui/shadcn/input";
 import { Skeleton } from "@/ui/shadcn/skeleton";
 import { LibraryPanel } from "./LibraryPanel";
+
+function chapterLabel(
+  chapter: TitleChapter,
+  chapterWord: string,
+  specialWord: string,
+  volumeLabel: string,
+): string {
+  const number = chapter.number_text
+    ? `${chapterWord} ${chapter.number_text}`
+    : specialWord;
+  const parts = [number];
+  if (chapter.volume !== null) {
+    parts.push(volumeLabel);
+  }
+  if (chapter.name !== null) {
+    parts.push(chapter.name);
+  }
+  return parts.join(" · ");
+}
 
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -129,7 +151,7 @@ export function TitlePage() {
     );
   }
 
-  const { title, library } = query.data;
+  const { title, library, chapters, sources } = query.data;
   const meta = [
     t(`catalog.kinds.${title.kind}`),
     title.year === null ? null : String(title.year),
@@ -248,9 +270,83 @@ export function TitlePage() {
               <CardTitle>{t("title.chapters")}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground">{t("title.chaptersEmpty")}</p>
+              {chapters.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("title.chaptersEmpty")}</p>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {chapters.map((chapter) => (
+                    <li
+                      key={chapter.chapter_key}
+                      className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">
+                          {chapterLabel(
+                            chapter,
+                            t("title.chapter"),
+                            t("title.special"),
+                            t("title.volumeLabel", { volume: chapter.volume ?? "" }),
+                          )}
+                        </p>
+                        {chapter.availability === "missing" && (
+                          <p className="text-xs text-muted-foreground">
+                            {t("title.unavailable")}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {chapter.is_locked && (
+                          <Badge variant="outline">{t("title.locked")}</Badge>
+                        )}
+                        <Link
+                          to={readerPath(titleId, chapter.chapter_key)}
+                          className={buttonVariants({ variant: "outline", size: "sm" })}
+                        >
+                          {t("title.read")}
+                        </Link>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </CardContent>
           </Card>
+
+          {sources.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{t("title.sources")}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2">
+                {sources.map((source) => (
+                  <div key={source.source_entry_id} className="flex flex-col gap-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{source.name}</span>
+                        {source.is_primary && (
+                          <Badge variant="secondary">{t("title.primarySource")}</Badge>
+                        )}
+                        {!source.enabled && (
+                          <Badge variant="outline">{t("title.sourceDisabled")}</Badge>
+                        )}
+                      </div>
+                      <span className="text-muted-foreground">
+                        {t("title.sourceStats", {
+                          chapters: source.chapter_count,
+                          available: source.available_count,
+                        })}
+                      </span>
+                    </div>
+                    {source.last_error !== null && (
+                      <p className="text-xs text-destructive">
+                        {t("title.sourceError", { message: source.last_error })}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </div>

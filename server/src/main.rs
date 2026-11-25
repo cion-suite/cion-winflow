@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let state = AppState::new(config.clone(), pool);
+    let state = AppState::new(config.clone(), pool).await?;
     let app = app::router(state);
     let listener = TcpListener::bind(config.bind_addr).await?;
     tracing::info!(

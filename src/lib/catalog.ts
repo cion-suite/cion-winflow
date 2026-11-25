@@ -6,6 +6,12 @@ export type MediaKind = (typeof MEDIA_KINDS)[number];
 export const TITLE_STATUSES = ["ongoing", "completed", "hiatus", "cancelled"] as const;
 export type TitleStatus = (typeof TITLE_STATUSES)[number];
 
+export const AVAILABILITIES = ["unknown", "available", "locked", "missing"] as const;
+export type Availability = (typeof AVAILABILITIES)[number];
+
+export const CONTENT_KINDS = ["images", "video", "text"] as const;
+export type ContentKind = (typeof CONTENT_KINDS)[number];
+
 export const LIBRARY_STATUSES = [
   "planned",
   "in_progress",

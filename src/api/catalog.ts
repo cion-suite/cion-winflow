@@ -3,6 +3,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import {
   joinList,
   splitList,
+  type Availability,
+  type ContentKind,
   type LibraryStatus,
   type MediaKind,
   type TitleFormValues,
@@ -37,9 +39,55 @@ export type LibraryState = {
   score: number | null;
 };
 
+export type ChapterVariant = {
+  chapter_id: number;
+  source_id: number;
+  source_code: string;
+  source_name: string;
+  group_name: string | null;
+  language: string | null;
+  availability: Availability;
+  is_locked: boolean;
+  content_kind: ContentKind | null;
+  page_count: number | null;
+};
+
+export type TitleChapter = {
+  chapter_key: string;
+  number_text: string | null;
+  number_milli: number | null;
+  volume: number | null;
+  chapter_kind: string;
+  name: string | null;
+  content_kind: ContentKind | null;
+  page_count: number | null;
+  availability: Availability;
+  is_locked: boolean;
+  selected_chapter_id: number;
+  variants: ChapterVariant[];
+};
+
+export type TitleSource = {
+  source_id: number;
+  source_entry_id: number;
+  code: string;
+  name: string;
+  enabled: boolean;
+  is_primary: boolean;
+  chapter_count: number;
+  available_count: number;
+  locked_count: number;
+  missing_count: number;
+  stats_updated_at: number | null;
+  last_error: string | null;
+};
+
 export type TitleResponse = {
   title: Title;
   library: LibraryState | null;
+  /** Только БД: сервер не ходит в источники при показе тайтла. */
+  chapters: TitleChapter[];
+  sources: TitleSource[];
 };
 
 export type TitlePayload = {

@@ -27,7 +27,6 @@ const PAGES: Record<Exclude<SectionPath, "/">, ReactElement> = {
  */
 const PARAM_ROUTES = [
   { path: "/title/:id", element: <TitlePage /> },
-  { path: "/reader/:titleId/:chapterKey", element: <ReaderPage /> },
   { path: "/watch/:titleId/:chapterKey", element: <WatchPage /> },
 ] as const satisfies readonly { path: string; element: ReactElement }[];
 
@@ -49,6 +48,9 @@ export function AppRouter() {
           ))}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
+
+        {/* Читалка — во весь экран, без сайдбара и шапки */}
+        <Route path="/reader/:titleId/:chapterKey" element={<ReaderPage />} />
       </Route>
     </Routes>
   );

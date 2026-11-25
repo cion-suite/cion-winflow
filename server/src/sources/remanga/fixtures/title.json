@@ -1,0 +1,35 @@
+{
+  "meta": { "is_subscribed_cards": false, "can_upload_chapters": false },
+  "id": 314,
+  "secondary_name": "Naruto",
+  "main_name": "Наруто",
+  "another_name": "-ナルト- / 火影忍者 / NARUTO―ナルト― / Наруто / ناروتو",
+  "type": { "id": 1, "name": "Манга" },
+  "age_limit": { "id": 0, "name": "Для всех" },
+  "status": { "id": 1, "name": "Закончен" },
+  "translate_status": { "id": 1, "name": "Закончен" },
+  "dir": "<13.10.2026>naruto_",
+  "description": "<p>Несколько лет тому назад деревню, скрытую в листве (Коноха), атаковал Девятихвостый демон-лис.</p><p>Наруто Узумаки &mdash; мальчик, в котором запечатан демон.</p>",
+  "issue_year": 1999,
+  "avg_rating": "9.0",
+  "cover": {
+    "low": "/media/titles/naruto/b73f82b8e39d93d74820a386a0778f76.jpg",
+    "mid": "/media/titles/naruto/3b90be24a27a568a15ede3e2fd123c91.jpg",
+    "high": "/media/titles/naruto/cc0c0a4c71306e2955760cec3958f27e.jpg"
+  },
+  "creators": [
+    { "id": 23, "name": "Bilibili Comics", "type": 3 },
+    { "id": 7, "name": "Масаси Кисимото", "type": 1 }
+  ],
+  "genres": [
+    { "id": 2, "name": "Экшен", "dir": "ekshen" },
+    { "id": 9, "name": "Приключения", "dir": "priklyucheniya" }
+  ],
+  "categories": [
+    { "id": 30, "name": "Ниндзя", "dir": "nindzja" }
+  ],
+  "count_chapters": 703,
+  "branches": [
+    { "id": 249, "count_chapters": 703, "publishers": [] }
+  ]
+}

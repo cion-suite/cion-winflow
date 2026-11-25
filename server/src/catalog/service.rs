@@ -1,7 +1,13 @@
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use crate::{auth::session::now_unix, error::AppError, pagination, state::AppState};
+use crate::{
+    auth::session::now_unix,
+    catalog::{chapters, selection},
+    error::AppError,
+    pagination,
+    state::AppState,
+};
 
 pub const KINDS: [&str; 3] = ["manga", "anime", "book"];
 pub const TITLE_STATUSES: [&str; 4] = ["ongoing", "completed", "hiatus", "cancelled"];
@@ -82,6 +88,9 @@ pub struct LibraryState {
 pub struct TitleResponse {
     pub title: TitleDto,
     pub library: Option<LibraryState>,
+    /// Только БД: сетевых запросов к источникам здесь нет.
+    pub chapters: Vec<chapters::TitleChapterDto>,
+    pub sources: Vec<chapters::TitleSourceDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -232,10 +241,19 @@ pub async fn get_title(
 ) -> Result<TitleResponse, AppError> {
     let title = find_title(pool, title_id).await?;
     let library = find_library_state(pool, user_id, title_id).await?;
+    let info = selection::TitleInfo {
+        id: title.id,
+        kind: title.kind.clone(),
+        lang: title.lang.clone(),
+        preferred_source_id: title.preferred_source_id,
+    };
+    let chapters = chapters::title_chapters(pool, &info).await?;
 
     Ok(TitleResponse {
         title: TitleDto::from(title),
         library,
+        chapters: chapters.chapters,
+        sources: chapters.sources,
     })
 }
 

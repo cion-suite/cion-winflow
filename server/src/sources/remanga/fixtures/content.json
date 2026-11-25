@@ -1,0 +1,49 @@
+{
+  "id": 314807,
+  "tome": 27,
+  "chapter": "108.5",
+  "name": "",
+  "score": 752,
+  "upload_date": "2020-04-25T12:27:58.336687",
+  "is_paid": false,
+  "title_id": 381,
+  "branch_id": 314,
+  "index": 120,
+  "is_published": true,
+  "server": {
+    "id": 5,
+    "name": "img3",
+    "link": "https://img3.reimg.org/",
+    "fallback_link": "https://img3.reimg2.org/"
+  },
+  "pages": [
+    [
+      {
+        "id": 1,
+        "link": "https://img3.reimg2.org/images/381/27-108.5/1_re.jpg",
+        "height": 1150,
+        "width": 812,
+        "count_comments": 8
+      }
+    ],
+    [
+      {
+        "id": 2,
+        "link": "https://img3.reimg2.org/images/381/27-108.5/2_re.jpg",
+        "height": 1300,
+        "width": 912,
+        "count_comments": 21
+      }
+    ],
+    [
+      {
+        "id": 3,
+        "link": "https://img3.reimg2.org/images/381/27-108.5/3_re.jpg",
+        "height": 1359,
+        "width": 1800,
+        "count_comments": 0
+      }
+    ]
+  ],
+  "content_type": "comics"
+}

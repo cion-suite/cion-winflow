@@ -14,13 +14,14 @@ dotenvy = "0.15"
 getrandom = "0.3"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset", "json", "gzip"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 thiserror = "2"
-time = "0.3"
-tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "sync"] }
+time = { version = "0.3", features = ["parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync"] }
 tower = { version = "0.5", features = ["util"] }
 tower_governor = { version = "0.8", default-features = false, features = ["axum"] }
 tower-http = { version = "0.6", features = ["compression-gzip", "fs", "trace"] }

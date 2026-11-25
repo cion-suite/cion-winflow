@@ -1,0 +1,59 @@
+{
+  "meta": { "total_items": 194, "total_pages": 10, "page": 1 },
+  "results": [
+    {
+      "id": 314,
+      "main_name": "Наруто",
+      "secondary_name": "Naruto",
+      "type": { "id": 1, "name": "Манга" },
+      "status": { "id": 1, "name": "Закончен" },
+      "translate_status": { "id": 1, "name": "Закончен" },
+      "dir": "<13.10.2026>naruto_",
+      "issue_year": 1999,
+      "avg_rating": "9.0",
+      "total_votes": 1382518,
+      "total_views": 4081889,
+      "count_bookmarks": 12640,
+      "count_moments": 64,
+      "is_licensed": false,
+      "another_name": "-ナルト- / 火影忍者 / NARUTO―ナルト― / Наруто / ناروتو",
+      "cover": {
+        "low": "/media/titles/naruto/b73f82b8e39d93d74820a386a0778f76.jpg",
+        "mid": "/media/titles/naruto/3b90be24a27a568a15ede3e2fd123c91.jpg",
+        "high": "/media/titles/naruto/cc0c0a4c71306e2955760cec3958f27e.jpg"
+      },
+      "count_chapters": 703,
+      "is_yaoi": false,
+      "is_erotic": false,
+      "bookmark_type": null,
+      "is_forbidden": false
+    },
+    {
+      "id": 6483,
+      "main_name": "Наруто (Цветная версия)",
+      "secondary_name": "Naruto (Digital Colored Comics)",
+      "type": { "id": 1, "name": "Манга" },
+      "status": { "id": 1, "name": "Закончен" },
+      "translate_status": { "id": 1, "name": "Закончен" },
+      "dir": "<13.10.2026>naruto--digital-colored-comics_",
+      "issue_year": 2012,
+      "avg_rating": "9.3",
+      "total_votes": 14903,
+      "total_views": 220188,
+      "count_bookmarks": 1770,
+      "count_moments": 3,
+      "is_licensed": false,
+      "another_name": "Naruto Digital Colored",
+      "cover": {
+        "low": "/media/titles/naruto-colored/low.jpg",
+        "mid": "/media/titles/naruto-colored/mid.jpg",
+        "high": "/media/titles/naruto-colored/high.jpg"
+      },
+      "count_chapters": 304,
+      "is_yaoi": false,
+      "is_erotic": false,
+      "bookmark_type": null,
+      "is_forbidden": false
+    }
+  ]
+}

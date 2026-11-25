@@ -11,7 +11,7 @@
 | `app/` | запуск: `index.tsx`, провайдеры, маршрутизатор, глобальные стили | `AppProvider.tsx`, `AppRouter.tsx`, `styles/index.css` |
 | `shell/` | оболочка окна: то, что не принадлежит ни одному экрану | `layout/`, `navbar/` (шапка, язык, тема), `sidebar/` |
 | `pages/<имя>/` | экраны, по папке на экран | `catalog/`, `title/`, `library/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
-| `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `library.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
+| `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `progress.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
 | `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `Pagination.tsx`, `Select.tsx`, `Textarea.tsx` |
 | `lib/` | утилиты, хуки и типы без UI | `utils.ts`, `settings.ts`, `routes.ts`, `catalog.ts`, `apiErrors.ts`, `i18n/` |
 
@@ -68,10 +68,18 @@
 ## Каталог и библиотека
 
 - **Каталог** (`pages/catalog/`) — `GET /api/catalog?q=&kind=&page=&page_size=`, ответ `{ items, total, page, page_size }`. `q` ищется по колонке `titles.name_lower` (Unicode-lowercase копия названия: SQLite `lower()` понимает только ASCII), `%` и `_` экранируются; `kind` — `manga|anime|book`. Администратор видит кнопку «Добавить тайтл» с формой `POST /api/titles`.
-- **Тайтл** (`pages/title/`) — `GET /api/titles/{id}` отдаёт `{ title, library }`, где `library` — запись текущего пользователя или `null`. Администратор может править тайтл (`PUT /api/titles/{id}`, полная замена полей) и загружать обложку. Сменить `kind` при привязанных `source_entries` нельзя — 409 `kind_locked`. Главы появятся в фазе источников.
+- **Тайтл** (`pages/title/`) — `GET /api/titles/{id}` отдаёт `{ title, library, chapters, sources }`, где `library` — запись текущего пользователя или `null`, `chapters` — сгруппированные по каноническому `chapter_key` главы с выбранным вариантом, `sources` — статистика источников. Запрос читает только БД и не ходит в источники. Администратор может править тайтл (`PUT /api/titles/{id}`, полная замена полей) и загружать обложку. Сменить `kind` при привязанных `source_entries` нельзя — 409 `kind_locked`.
 - **Библиотека** (`pages/library/`) — `GET /api/library?page=&page_size=` возвращает `{ items, total, page, page_size }` с краткой карточкой тайтла; `PUT /api/library/{title_id}` (`{ status, score }`) вставляет или обновляет запись, `DELETE` убирает. Статусы: `planned|in_progress|completed|on_hold|dropped`, оценка — 1..10 или `null`. Библиотека у каждого пользователя своя.
 - **Обложки.** `POST /api/titles/{id}/cover` (multipart, поле `file`, до 5 МиБ, тело до 6 МиБ) принимает JPEG/PNG/WebP/GIF, декодирует с лимитами в `spawn_blocking`, ресайзит в `full` (1200×1800) и `thumb` (320×480) и сохраняет WebP в `DATA_DIR/covers/{id}/`. `GET /api/titles/{id}/cover?size=thumb|full` отдаёт файл с `ETag` и `Cache-Control: private, max-age=86400`; UI добавляет `v={updated_at}` как cache-buster. Оригинал не сохраняется и не отдаётся.
 - **Типы и статусы** общие для формы и API — строковые константы в `lib/catalog.ts`. Форма тайтла (`ui/TitleForm.tsx`) не знает об API: получает значения и колбэк.
+
+## Главы, ридер и прогресс
+
+- **Главы** — `GET /api/titles/{title_id}/chapters/{chapter_key}/content`: сервер сам выбирает вариант по preferred source → доступность → приоритет → `is_primary` → `ordinal_site`, делает fallback и возвращает `{ chapter_id, chapter_key, number_text, name, content_kind, source, content, fallback? }`. Для картинок `content.pages[]` содержит внутренние `image_url` вида `/pages/{id}/image`. Повторное открытие уже известной главы отдаёт страницы из БД без сетевого запроса. `GET /api/chapters/{id}/content` — прямой вариант без fallback для отладки.
+- **Ридер** (`pages/reader/`) — маршрут `/reader/:titleId/:chapterKey` живёт вне `Layout`: окно страниц считается по накопленным высотам (`width`/`height` из источника), соседние страницы префетчатся, клавиатура листает главу. Смена главы пересоздаёт состояние через `key`. Прогресс сохраняется с дебаунсом, а при `visibilitychange`/`pagehide` и размонтировании — через `fetch(..., { keepalive: true })`.
+- **Прогресс** — `GET/PUT /api/progress/{title_id}`; `PUT` принимает `chapter_key` и одно поле позиции (`page` для картинок, `seconds` для видео, `scroll` для текста). Сервер резолвит alias → canonical и проверяет поле по `content_kind` выбранного варианта. `page` — 0-based индекс `pages.idx`.
+- **Изображения** — браузер не ходит на чужие сайты: `GET /api/pages/{id}/image` и `GET /api/sources/{code}/cover?ref=` резолвят стабильную ссылку через адаптер, проверяют allowlist хостов, кэшируют байты на диске и отдают с `ETag`, `nosniff` и `Cache-Control: private`.
+- **Источники** — админские `GET /api/sources`, `PUT /api/sources/{code}`, `PUT /api/sources/{code}/config`, `POST .../search`, `POST .../import`, `POST .../probe`. Первый адаптер — Remanga v2; `external_id` тайтла — `dir`, главы — числовой `id`. Импорт идёт `search → import → chapters`, страницы — лениво при первом `/content`.
 
 ## Настройки
 
@@ -103,8 +111,10 @@ pages/<экран>/index.tsx → api/<область>.ts → api/client.ts → /
 |---|---|
 | `api/client.ts` | `request<T>(path, init)`: путь относительно префикса API; `apiUrl(path)` для `<img src>` и ссылок; `jsonMutation(body, method)` для JSON-мутаций; `ApiError` с `status` и `code` |
 | `api/auth.tsx` | `AuthProvider`, `useAuth`, хуки входа/регистрации/выхода |
-| `api/catalog.ts` | Каталог, тайтл, создание/правка, загрузка обложки, `titleCoverUrl` |
+| `api/catalog.ts` | Каталог, тайтл с главами и источниками, создание/правка, загрузка обложки, `titleCoverUrl` |
+| `api/chapters.ts` | `useChapterContentQuery`, `pageImageUrl`, типы страниц и fallback |
 | `api/library.ts` | Библиотека пользователя: список, upsert, удаление |
+| `api/progress.ts` | `useProgressQuery`, `useSaveProgressMutation`, `progressApi.flush` (keepalive) |
 | `api/errors.ts` | `useErrorText`: `ApiError.code` -> ключ i18n (`lib/apiErrors.ts`) |
 | `api/<область>.ts` | Хуки области: `useQuery` для чтения, `useMutation` для изменений |
 | `api/index.ts` | Собирает области в объект `api` и реэкспортирует публичные хуки и типы |
@@ -138,12 +148,19 @@ server/
     main.rs          конфиг, БД, DataDir, bootstrap админа, tracing, запуск
     app.rs           Router: health, auth, catalog, titles, library, rate limit, слои
     auth/            handlers, service, password, session, middleware, limiter
-    catalog/         service (каталог, тайтл, валидация), handlers, cover (загрузка/выдача)
+    catalog/         service (каталог, тайтл), handlers, cover; selection (приоритеты
+                     и fallback), chapters (группировка глав), content (выдача главы)
+    images/          cache (диск, single-flight), handlers (прокси страниц и обложек)
     library/         service (библиотека пользователя), handlers
+    progress.rs      чтение и запись прогресса по chapter_key
+    source_admin/    service (реестр, конфиг, поиск, импорт, probe), handlers
+    sources/         dto, descriptor, config, error, http (SSRF-клиент, circuit breaker),
+                     registry, contract (тесты), remanga/ (api, parse, config, fixtures),
+                     fixture.rs (источник-заглушка только в debug)
     config.rs        env и допустимые origin
     db.rs            пул SQLite (WAL), миграции при старте
-    state.rs         AppState: конфиг, пул, семафоры Argon2 и картинок, лимитер входа
-    error.rs         AppError -> { code, message } (+ 404-вариант)
+    state.rs         AppState: конфиг, пул, реестр источников, HTTP-клиенты, кэш, семафоры
+    error.rs         AppError -> { code, message } (+ 404/422/502/503-варианты)
     extract.rs       ApiJson/ApiQuery/ApiPath: ошибки извлечения тоже { code, message }
     pagination.rs    page/page_size: значения по умолчанию и потолок
     static_files.rs  ServeDir, SPA fallback, заголовки кэша
@@ -151,6 +168,8 @@ server/
   tests/auth.rs      вход, инвайты, сессии, rate limit
   tests/catalog.rs   тайтлы, поиск, пагинация, обложки, права admin
   tests/library.rs   библиотека, оценки, изоляция пользователей
+  tests/sources.rs   источники, импорт, главы, прогресс, кэш картинок, fallback
+  tests/live_remanga.rs  live-проверка API Remanga (ignored, `pnpm test -- --ignored`)
 ```
 
 - `GET /api/health` отдаёт `{ "status": "ok", "version": "..." }` без сессии и проверяет БД (`SELECT 1`); ошибка БД — 500.
@@ -168,7 +187,12 @@ server/
 - `index.html` получают только навигационные запросы: `Sec-Fetch-Mode: navigate` или `Accept: text/html`. Путь вида `/reader/1/c12.5` не считается файлом по расширению и работает.
 - Отсутствующий `/assets/*` — 404 даже при навигации: ошибка деплоя не маскируется.
 - `dist/assets/*` отдаются с `public, max-age=31536000, immutable`, остальное — `no-cache`.
-- Конфиг из env: `BIND_ADDR` (по умолчанию `127.0.0.1:3000`), `STATIC_DIR` (`dist`), `DATABASE_URL`, `DATA_DIR` (`data`), `REGISTRATION_MODE` (`invite|closed`), `PUBLIC_ORIGIN`, `ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG`. В dev `.env` читает `dotenvy`, пример — `.env.example`.
+- Источники: `sources` — реестр скомпилированных адаптеров, `PUT /api/sources/{code}` заводит `base_url` и `enabled`, `PUT .../config` мержит и валидирует `config_json` (422 со списком полей), `POST .../search`, `POST .../import`, `POST .../probe`. Адаптеры не знают о БД; `AppState.sources` — `Arc<RwLock<SourceRegistry>>`, guard не держится через `.await`. Битый конфиг отключает только свой источник.
+- Импорт: адаптер заново получает метаданные по `external_id`, затем главы; запись — upsert в транзакции. `chapter_key` фиксируется при первом импорте (расхождение — в `source_entries.last_error`). После импорта считаются `chapter_count`/`available_count`/`locked_count`/`missing_count` и `titles.preferred_source_id`.
+- Выдача главы: `GET /api/titles/{title_id}/chapters/{chapter_key}/content` сам выбирает вариант и делает fallback; `locked`/`missing` кешируются по TTL (6/24 ч), временные ошибки не меняют доступность. `GET /api/chapters/{id}/content` — прямой вариант без fallback.
+- Картинки: `GET /api/pages/{id}/image` и `GET /api/sources/{code}/cover?ref=`; ключ кэша страницы — `(source_entry_id, external chapter id, idx)`, запись атомарная, одновременные запросы дедуплицируются. SQLite-статусы `401/403/410` запускают до двух перезапросов списка страниц; затем глава помечается `locked`.
+- SSRF: общий DNS-резолвер отбрасывает private/loopback/link-local/CGNAT/ULA/IPv4-mapped; редиректы у HTTP-клиентов выключены, порты ограничены (loopback — только тестам). URL источника берётся из реестра, а не от клиента; `external_id` валидируется. `SSRF_ALLOW_LOOPBACK` (по умолчанию `false`) нужен только интеграционным тестам с локальным сервером картинок.
+- Конфиг из env: `BIND_ADDR` (по умолчанию `127.0.0.1:3000`), `STATIC_DIR` (`dist`), `DATABASE_URL`, `DATA_DIR` (`data`), `REGISTRATION_MODE` (`invite|closed`), `PUBLIC_ORIGIN`, `ALLOWED_ORIGINS`, `COOKIE_SECURE`, `TRUSTED_PROXIES`, `SSRF_ALLOW_LOOPBACK` (только тесты), `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `RUST_LOG`. В dev `.env` читает `dotenvy`, пример — `.env.example`.
 - Статика читается с диска при каждом запросе: обновление `dist/` не требует перезапуска сервера. `rust-embed` не используем.
 
 ## Разработка

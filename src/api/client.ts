@@ -32,6 +32,22 @@ export function jsonMutation(body: unknown, method: "POST" | "PUT" = "POST"): Re
   };
 }
 
+/**
+ * Мутация, которую нельзя потерять при закрытии вкладки: keepalive даёт
+ * fetch дожить до unload. Ответ не нужен, ошибку показать уже некому.
+ */
+export async function requestKeepalive(path: string, init: RequestInit): Promise<void> {
+  try {
+    await fetch(apiUrl(path), {
+      credentials: "same-origin",
+      keepalive: true,
+      ...init,
+    });
+  } catch {
+    // Последнюю позицию можно потерять: следующий скролл её сохранит снова
+  }
+}
+
 async function errorFrom(response: Response): Promise<ApiError> {
   let payload: ApiErrorPayload | null = null;
   try {
