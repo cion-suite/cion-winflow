@@ -115,6 +115,23 @@ export const en = {
       chooseCover: "Choose file",
       uploadCover: "Upload cover",
       coverHint: "JPEG, PNG, WebP or GIF up to 5 MB.",
+      covers: "Covers",
+      coverEditorDescription:
+        "Up to three sizes: search results, library cards and the title page. If a size is missing, the nearest saved one is shown.",
+      coverSizes: {
+        low: "Search",
+        mid: "Library",
+        high: "Title page",
+      },
+      coverSizeHints: {
+        low: "Shown in source search and the add dialog.",
+        mid: "Shown on library cards.",
+        high: "Shown on the title page.",
+      },
+      coverPresent: "Uploaded",
+      coverMissing: "Not uploaded",
+      replaceCover: "Replace",
+      removeCover: "Remove",
     },
     library: {
       title: "Library",

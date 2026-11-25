@@ -34,7 +34,6 @@ import {
   ItemActions,
   ItemContent,
   ItemDescription,
-  ItemMedia,
   ItemTitle,
 } from "@/ui/shadcn/item";
 import { Spinner } from "@/ui/shadcn/spinner";
@@ -172,7 +171,8 @@ export function AddTitleDialog({ open, onOpenChange }: AddTitleDialogProps) {
                     variant="outline"
                     size="sm"
                   >
-                    <ItemMedia variant="image">
+                    {/* Крупная обложка: по ней проще узнать тайтл в выдаче */}
+                    <div className="h-24 w-16 shrink-0 overflow-hidden rounded-md">
                       <CoverImage
                         src={
                           item.cover_ref
@@ -180,8 +180,9 @@ export function AddTitleDialog({ open, onOpenChange }: AddTitleDialogProps) {
                             : null
                         }
                         alt={item.name}
+                        className="size-full"
                       />
-                    </ItemMedia>
+                    </div>
                     <ItemContent>
                       <ItemTitle>{item.name}</ItemTitle>
                       <ItemDescription>

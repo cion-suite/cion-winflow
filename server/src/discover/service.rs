@@ -259,7 +259,43 @@ pub async fn add(
     .await?;
 
     let (title_id, title_created, imported_chapters) = match existing {
-        Some((_, title_id)) => (title_id, false, 0),
+        Some((_, title_id)) => {
+            // Импорт до появления автоскачивания обложек не сохранил их:
+            // доберём при добавлении, иначе карточка останется с заглушкой.
+            let has_cover = sqlx::query_scalar::<_, i64>(
+                "SELECT 1 FROM title_covers WHERE title_id = ? LIMIT 1",
+            )
+            .bind(title_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .is_some();
+            if !has_cover {
+                match runtime.adapter() {
+                    Ok(adapter) => {
+                        let adapter = adapter.clone();
+                        match adapter.title(kind, &external_id).await {
+                            Ok(source_title) => {
+                                crate::catalog::cover::import_source_covers(
+                                    state,
+                                    title_id,
+                                    runtime.id,
+                                    &adapter,
+                                    &source_title.covers,
+                                )
+                                .await;
+                            }
+                            Err(error) => {
+                                tracing::warn!(title_id, %error, "cannot backfill covers");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(title_id, %error, "source adapter unavailable");
+                    }
+                }
+            }
+            (title_id, false, 0)
+        }
         None => {
             let response = source_admin::import(
                 state,

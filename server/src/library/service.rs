@@ -232,7 +232,8 @@ pub async fn list_library(
     let sql = format!(
         "SELECT l.title_id, l.status, l.score, l.favorite, l.added_at, l.updated_at, \
                 t.kind, t.name, t.year, t.status AS title_status, t.rating, \
-                t.cover_path IS NOT NULL AS has_cover, t.updated_at AS title_updated_at, \
+                EXISTS (SELECT 1 FROM title_covers c WHERE c.title_id = t.id) AS has_cover, \
+                t.updated_at AS title_updated_at, \
                 (SELECT COUNT(*) FROM chapter_reads r \
                  WHERE r.user_id = l.user_id AND r.title_id = l.title_id) AS read_count, \
                 (SELECT COALESCE(MAX(e.chapter_count), 0) FROM source_entries e \

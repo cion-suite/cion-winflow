@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::{
     Json,
     body::Bytes,
@@ -9,11 +11,16 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 
 use crate::{
     auth::session::{self, CurrentUser},
     error::AppError,
     extract::{ApiPath, ApiQuery},
+    sources::{
+        CoverSize, SourceCovers, SourceKind,
+        http::{IMAGE_BODY_LIMIT, fetch_bytes},
+    },
     state::AppState,
 };
 
@@ -21,13 +28,33 @@ use crate::{
 pub const BODY_LIMIT: usize = 6 * 1024 * 1024;
 pub const MAX_FILE_BYTES: usize = 5 * 1024 * 1024;
 
-const FULL_MAX: (u32, u32) = (1200, 1800);
-const THUMB_MAX: (u32, u32) = (320, 480);
 const CACHE: &str = "private, max-age=86400";
+
+const fn max_dimensions(size: CoverSize) -> (u32, u32) {
+    match size {
+        CoverSize::Low => (320, 480),
+        CoverSize::Mid => (640, 960),
+        CoverSize::High => (1200, 1800),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CoverParams {
     pub size: Option<String>,
+}
+
+impl CoverParams {
+    fn resolve(&self) -> Result<CoverSize, AppError> {
+        match self.size.as_deref().map(str::trim) {
+            None | Some("") => Ok(CoverSize::High),
+            Some(raw) => CoverSize::from_db(&raw.to_lowercase()).ok_or_else(|| {
+                AppError::bad_request(
+                    "validation",
+                    format!("size must be `low`, `mid` or `high`, got `{raw}`"),
+                )
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -37,25 +64,24 @@ pub struct CoverResponse {
 }
 
 struct ProcessedCover {
-    full: Vec<u8>,
-    thumb: Vec<u8>,
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
 }
 
-/// Загрузка обложки: только admin, только растровые форматы. Оригинал
-/// не сохраняется и клиенту не отдаётся — только пережатые WebP.
+/// Загрузка обложки в конкретный размер: только admin, только растровые
+/// форматы. Оригинал не сохраняется и клиенту не отдаётся — только WebP.
 pub async fn upload_cover(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     ApiPath(title_id): ApiPath<i64>,
+    ApiQuery(params): ApiQuery<CoverParams>,
     mut multipart: Multipart,
 ) -> Result<Json<CoverResponse>, AppError> {
     user.require_admin()?;
+    let size = params.resolve()?;
 
-    let exists = sqlx::query_scalar::<_, i64>("SELECT 1 FROM titles WHERE id = ?")
-        .bind(title_id)
-        .fetch_optional(&state.pool)
-        .await?;
-    if exists.is_none() {
+    if !title_exists(&state.pool, title_id).await? {
         return Err(AppError::not_found("title_not_found", "title not found"));
     }
 
@@ -96,7 +122,7 @@ pub async fn upload_cover(
         .acquire_owned()
         .await
         .map_err(|_| AppError::Task)?;
-    let processed = tokio::task::spawn_blocking(move || process_cover(&bytes))
+    let processed = tokio::task::spawn_blocking(move || process_cover(&bytes, size))
         .await
         .map_err(|error| {
             tracing::error!(%error, "cover processing task failed");
@@ -104,26 +130,15 @@ pub async fn upload_cover(
         })??;
     drop(permit);
 
-    let relative = format!("covers/{title_id}");
-    let directory = state.config.data_dir.join(&relative);
-    tokio::fs::create_dir_all(&directory).await?;
-    write_atomic(&directory, "full.webp", &processed.full).await?;
-    write_atomic(&directory, "thumb.webp", &processed.thumb).await?;
-
-    // max(now, updated_at + 1): ETag и `v=` меняются даже при двух загрузках
-    // в одну секунду, а часы назад не откатывают версию.
-    let updated_at = sqlx::query_scalar::<_, i64>(
-        "UPDATE titles SET cover_path = ?, updated_at = max(?, updated_at + 1) \
-         WHERE id = ? RETURNING updated_at",
-    )
-    .bind(&relative)
-    .bind(session::now_unix())
-    .bind(title_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(updated_at) = updated_at else {
-        return Err(AppError::not_found("title_not_found", "title not found"));
+    // Запись файла и строки — под локом (title, size): автоимпорт того же
+    // размера не должен перетереть ручную загрузку и наоборот.
+    let lock = state.cover_lock(title_id, size);
+    let updated_at = {
+        let _guard = lock.lock().await;
+        upsert_manual_cover(&state, title_id, size, &processed).await
     };
+    state.release_cover_lock(title_id, size);
+    let updated_at = updated_at?;
 
     Ok(Json(CoverResponse {
         has_cover: true,
@@ -131,40 +146,185 @@ pub async fn upload_cover(
     }))
 }
 
-/// Обложка отдаётся только по сессии и с ETag: перезагрузка после замены
-/// файла видна сразу, а повторные показы не читают диск заново.
+async fn upsert_manual_cover(
+    state: &AppState,
+    title_id: i64,
+    size: CoverSize,
+    processed: &ProcessedCover,
+) -> Result<i64, AppError> {
+    let old_path = sqlx::query_scalar::<_, String>(
+        "SELECT path FROM title_covers WHERE title_id = ? AND size = ?",
+    )
+    .bind(title_id)
+    .bind(size.as_str())
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let relative = format!("covers/{title_id}");
+    let directory = state.config.data_dir.join(&relative);
+    tokio::fs::create_dir_all(&directory).await?;
+    write_atomic(
+        &directory,
+        &format!("{}.webp", size.as_str()),
+        &processed.bytes,
+    )
+    .await?;
+    let path = format!("{relative}/{}.webp", size.as_str());
+
+    sqlx::query(
+        "INSERT INTO title_covers (title_id, size, path, width, height, source_id, updated_at) \
+         VALUES (?, ?, ?, ?, ?, NULL, ?) \
+         ON CONFLICT (title_id, size) DO UPDATE SET \
+             path = excluded.path, width = excluded.width, height = excluded.height, \
+             source_id = NULL, updated_at = excluded.updated_at",
+    )
+    .bind(title_id)
+    .bind(size.as_str())
+    .bind(&path)
+    .bind(i64::from(processed.width))
+    .bind(i64::from(processed.height))
+    .bind(session::now_unix())
+    .execute(&state.pool)
+    .await?;
+
+    // Замена мигрированной обложки меняет имя файла (thumb/full -> size):
+    // старый файл удаляем, если на него больше никто не ссылается.
+    if let Some(old_path) = old_path
+        && old_path != path
+    {
+        remove_unreferenced_cover_file(state, &old_path).await;
+    }
+
+    bump_title_updated_at(&state.pool, title_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))
+}
+
+/// Удаляет один размер. Файл стирается только когда на него больше никто
+/// не ссылается: после миграции low и mid могли указывать на один thumb.
+pub async fn delete_cover(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(title_id): ApiPath<i64>,
+    ApiQuery(params): ApiQuery<CoverParams>,
+) -> Result<Json<CoverResponse>, AppError> {
+    user.require_admin()?;
+    let size = params.resolve()?;
+
+    if !title_exists(&state.pool, title_id).await? {
+        return Err(AppError::not_found("title_not_found", "title not found"));
+    }
+
+    let lock = state.cover_lock(title_id, size);
+    let response = {
+        let _guard = lock.lock().await;
+        delete_cover_locked(&state, title_id, size).await
+    };
+    state.release_cover_lock(title_id, size);
+
+    Ok(Json(response?))
+}
+
+async fn delete_cover_locked(
+    state: &AppState,
+    title_id: i64,
+    size: CoverSize,
+) -> Result<CoverResponse, AppError> {
+    let path = sqlx::query_scalar::<_, String>(
+        "SELECT path FROM title_covers WHERE title_id = ? AND size = ?",
+    )
+    .bind(title_id)
+    .bind(size.as_str())
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let updated_at = match path {
+        Some(path) => {
+            sqlx::query("DELETE FROM title_covers WHERE title_id = ? AND size = ?")
+                .bind(title_id)
+                .bind(size.as_str())
+                .execute(&state.pool)
+                .await?;
+
+            remove_unreferenced_cover_file(state, &path).await;
+
+            bump_title_updated_at(&state.pool, title_id)
+                .await?
+                .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?
+        }
+        None => {
+            sqlx::query_scalar::<_, i64>("SELECT updated_at FROM titles WHERE id = ?")
+                .bind(title_id)
+                .fetch_one(&state.pool)
+                .await?
+        }
+    };
+
+    Ok(CoverResponse {
+        has_cover: has_any_cover(&state.pool, title_id).await?,
+        updated_at,
+    })
+}
+
+/// Удаляет файл обложки, только если на него больше не ссылается ни один
+/// размер: после миграции low и mid могли указывать на один thumb.webp.
+async fn remove_unreferenced_cover_file(state: &AppState, path: &str) {
+    let still_used =
+        sqlx::query_scalar::<_, i64>("SELECT 1 FROM title_covers WHERE path = ? LIMIT 1")
+            .bind(path)
+            .fetch_optional(&state.pool)
+            .await;
+    match still_used {
+        Ok(None) => {
+            let file = state.config.data_dir.join(path);
+            if let Err(error) = tokio::fs::remove_file(&file).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %file.display(), %error, "cannot remove cover file");
+            }
+        }
+        Ok(Some(_)) => {}
+        Err(error) => tracing::warn!(%error, "cannot check cover file references"),
+    }
+}
+
+/// Обложка отдаётся только по сессии и с ETag. Если запрошенного размера
+/// у тайтла нет, отдаётся ближайший доступный — клиент всегда просит
+/// семантический размер и получает картинку, пока есть хоть один вариант.
 pub async fn get_cover(
     State(state): State<AppState>,
     ApiPath(title_id): ApiPath<i64>,
     ApiQuery(params): ApiQuery<CoverParams>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let size = match params.size.as_deref().unwrap_or("thumb") {
-        "thumb" => "thumb",
-        "full" => "full",
-        other => {
-            return Err(AppError::bad_request(
-                "validation",
-                format!("size must be `thumb` or `full`, got `{other}`"),
-            ));
-        }
+    let size = params.resolve()?;
+
+    let updated_at = sqlx::query_scalar::<_, i64>("SELECT updated_at FROM titles WHERE id = ?")
+        .bind(title_id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let Some(updated_at) = updated_at else {
+        return Err(cover_not_found());
     };
 
-    let row = sqlx::query_as::<_, (Option<String>, i64)>(
-        "SELECT cover_path, updated_at FROM titles WHERE id = ?",
+    let stored = sqlx::query_as::<_, (String, String)>(
+        "SELECT size, path FROM title_covers WHERE title_id = ?",
     )
     .bind(title_id)
-    .fetch_optional(&state.pool)
+    .fetch_all(&state.pool)
     .await?;
 
-    let Some((cover_path, updated_at)) = row else {
-        return Err(cover_not_found());
-    };
-    let Some(relative) = cover_path else {
+    let served = size.fallback_order().into_iter().find_map(|candidate| {
+        stored
+            .iter()
+            .find(|(stored_size, _)| stored_size.as_str() == candidate.as_str())
+            .map(|(_, path)| (candidate, path.clone()))
+    });
+    let Some((served_size, relative)) = served else {
         return Err(cover_not_found());
     };
 
-    let etag = format!("\"{title_id}-{updated_at}-{size}\"");
+    let etag = format!("\"{title_id}-{updated_at}-{}\"", served_size.as_str());
     if headers
         .get(IF_NONE_MATCH)
         .and_then(|value| value.to_str().ok())
@@ -173,11 +333,7 @@ pub async fn get_cover(
         return Ok(not_modified(&etag));
     }
 
-    let path = state
-        .config
-        .data_dir
-        .join(&relative)
-        .join(format!("{size}.webp"));
+    let path = state.config.data_dir.join(&relative);
     let bytes = match tokio::fs::read(&path).await {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -199,6 +355,216 @@ pub async fn get_cover(
     }
 
     Ok(response)
+}
+
+/// Автоматически скачивает обложки источника после импорта или привязки.
+/// Заполняет только отсутствующие размеры: ручную обложку не перетирает.
+/// Ошибка сети или разбора не ломает импорт — она только логируется.
+pub async fn import_source_covers(
+    state: &AppState,
+    title_id: i64,
+    source_id: i64,
+    adapter: &SourceKind,
+    covers: &SourceCovers,
+) -> i64 {
+    if covers.is_empty() {
+        return 0;
+    }
+
+    // Считаем размер занятым, только если файл реально на диске: строка без
+    // файла (потерянный DATA_DIR) должна лечиться повторной загрузкой.
+    let rows = match sqlx::query_as::<_, (String, String)>(
+        "SELECT size, path FROM title_covers WHERE title_id = ?",
+    )
+    .bind(title_id)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(title_id, %error, "cannot read existing title covers");
+            return 0;
+        }
+    };
+    let mut present: HashSet<String> = HashSet::new();
+    for (stored_size, stored_path) in rows {
+        if tokio::fs::metadata(state.config.data_dir.join(&stored_path))
+            .await
+            .is_ok()
+        {
+            present.insert(stored_size);
+        }
+    }
+
+    let mut stored = 0_i64;
+    for (size, reference) in covers.entries() {
+        if present.contains(size.as_str()) {
+            continue;
+        }
+        match store_source_cover(state, title_id, source_id, adapter, size, reference).await {
+            Ok(true) => stored += 1,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(
+                    title_id,
+                    size = %size,
+                    error = %error,
+                    "cannot import source cover"
+                );
+            }
+        }
+    }
+
+    if stored > 0
+        && let Err(error) = bump_title_updated_at(&state.pool, title_id).await
+    {
+        tracing::warn!(title_id, %error, "cannot bump title after cover import");
+    }
+
+    stored
+}
+
+async fn store_source_cover(
+    state: &AppState,
+    title_id: i64,
+    source_id: i64,
+    adapter: &SourceKind,
+    size: CoverSize,
+    reference: &str,
+) -> Result<bool, AppError> {
+    let url = adapter.resolve_cover(reference)?;
+
+    let bytes = {
+        let _permit = state
+            .image_download_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::Task)?;
+        let response = fetch_bytes(&state.image_client, url, &[], IMAGE_BODY_LIMIT).await?;
+        if response.status != 200 {
+            return Err(AppError::bad_gateway(
+                "source_upstream_failed",
+                "source cover request failed",
+            ));
+        }
+        response.body
+    };
+
+    let processed = {
+        let _permit = state
+            .image_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::Task)?;
+        tokio::task::spawn_blocking(move || process_cover(&bytes, size))
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "cover processing task failed");
+                AppError::Task
+            })??
+    };
+
+    // Скачивание и декодирование — вне лока; сверка с ручной загрузкой
+    // и запись файла со строкой — под локом (title, size).
+    let lock = state.cover_lock(title_id, size);
+    let stored = {
+        let _guard = lock.lock().await;
+        store_source_cover_locked(state, title_id, source_id, size, &processed).await
+    };
+    state.release_cover_lock(title_id, size);
+    stored
+}
+
+async fn store_source_cover_locked(
+    state: &AppState,
+    title_id: i64,
+    source_id: i64,
+    size: CoverSize,
+    processed: &ProcessedCover,
+) -> Result<bool, AppError> {
+    let existing = sqlx::query_scalar::<_, String>(
+        "SELECT path FROM title_covers WHERE title_id = ? AND size = ?",
+    )
+    .bind(title_id)
+    .bind(size.as_str())
+    .fetch_optional(&state.pool)
+    .await?;
+
+    // Пока шло скачивание, размер могла занять ручная загрузка или другой
+    // источник. Существующий файл не перетираем; отсутствующий — лечим.
+    if let Some(path) = &existing
+        && tokio::fs::metadata(state.config.data_dir.join(path))
+            .await
+            .is_ok()
+    {
+        return Ok(false);
+    }
+
+    let relative = format!("covers/{title_id}");
+    let directory = state.config.data_dir.join(&relative);
+    tokio::fs::create_dir_all(&directory).await?;
+    write_atomic(
+        &directory,
+        &format!("{}.webp", size.as_str()),
+        &processed.bytes,
+    )
+    .await?;
+    let path = format!("{relative}/{}.webp", size.as_str());
+
+    sqlx::query(
+        "INSERT INTO title_covers (title_id, size, path, width, height, source_id, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT (title_id, size) DO UPDATE SET \
+             path = excluded.path, width = excluded.width, height = excluded.height, \
+             source_id = excluded.source_id, updated_at = excluded.updated_at",
+    )
+    .bind(title_id)
+    .bind(size.as_str())
+    .bind(&path)
+    .bind(i64::from(processed.width))
+    .bind(i64::from(processed.height))
+    .bind(source_id)
+    .bind(session::now_unix())
+    .execute(&state.pool)
+    .await?;
+
+    if let Some(old_path) = existing
+        && old_path != path
+    {
+        remove_unreferenced_cover_file(state, &old_path).await;
+    }
+
+    Ok(true)
+}
+
+async fn title_exists(pool: &SqlitePool, title_id: i64) -> Result<bool, AppError> {
+    let row = sqlx::query_scalar::<_, i64>("SELECT 1 FROM titles WHERE id = ?")
+        .bind(title_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
+async fn has_any_cover(pool: &SqlitePool, title_id: i64) -> Result<bool, AppError> {
+    let row = sqlx::query_scalar::<_, i64>("SELECT 1 FROM title_covers WHERE title_id = ? LIMIT 1")
+        .bind(title_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
+async fn bump_title_updated_at(pool: &SqlitePool, title_id: i64) -> Result<Option<i64>, AppError> {
+    // max(now, updated_at + 1): ETag и `v=` меняются даже при двух загрузках
+    // в одну секунду, а часы назад не откатывают версию.
+    Ok(sqlx::query_scalar::<_, i64>(
+        "UPDATE titles SET updated_at = max(?, updated_at + 1) WHERE id = ? RETURNING updated_at",
+    )
+    .bind(session::now_unix())
+    .bind(title_id)
+    .fetch_optional(pool)
+    .await?)
 }
 
 fn not_modified(etag: &str) -> Response {
@@ -231,7 +597,7 @@ async fn write_atomic(
 
 /// Декодирование, ресайз и WebP-перекодирование — CPU-работа: вызывается
 /// только внутри spawn_blocking, лимиты защищают от «бомб».
-fn process_cover(bytes: &[u8]) -> Result<ProcessedCover, AppError> {
+fn process_cover(bytes: &[u8], size: CoverSize) -> Result<ProcessedCover, AppError> {
     let format = image::guess_format(bytes).map_err(|error| {
         tracing::warn!(%error, "cover format is not recognized");
         invalid_cover()
@@ -258,12 +624,14 @@ fn process_cover(bytes: &[u8]) -> Result<ProcessedCover, AppError> {
         invalid_cover()
     })?;
 
-    let full = fit(decoded.clone(), FULL_MAX);
-    let thumb = fit(decoded, THUMB_MAX);
+    let fitted = fit(decoded, max_dimensions(size));
+    let width = fitted.width();
+    let height = fitted.height();
 
     Ok(ProcessedCover {
-        full: encode_webp(&full)?,
-        thumb: encode_webp(&thumb)?,
+        bytes: encode_webp(&fitted)?,
+        width,
+        height,
     })
 }
 

@@ -105,6 +105,8 @@ pub struct ImportResponse {
     pub source_entry_id: i64,
     pub title_created: bool,
     pub imported_chapters: i64,
+    /// Сколько обложек источника удалось скачать автоматически.
+    pub covers_imported: i64,
     pub stats: StatsDto,
 }
 
@@ -478,6 +480,17 @@ pub async fn import(
 
     tx.commit().await?;
 
+    // Обложки — после транзакции: сеть и декодирование не держат блокировку
+    // БД, а сбой загрузки не отменяет уже импортированные главы.
+    let covers_imported = crate::catalog::cover::import_source_covers(
+        state,
+        title_id,
+        source_id,
+        &adapter,
+        &source_title.covers,
+    )
+    .await;
+
     let stats = selection::recompute_stats(&state.pool, entry_id).await?;
     selection::recompute_preferred(&state.pool, title_id).await?;
 
@@ -486,6 +499,7 @@ pub async fn import(
         source_entry_id: entry_id,
         title_created,
         imported_chapters,
+        covers_imported,
         stats: StatsDto {
             chapter_count: stats.chapter_count,
             available_count: stats.available_count,
@@ -875,6 +889,30 @@ pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshRes
                 continue;
             }
         };
+
+        // Refresh — ручная операция: добирает обложки для тайтлов,
+        // импортированных до появления автоскачивания. Пустые размеры
+        // только заполняются, ручные не перетираются.
+        match adapter.title(kind, &external_id).await {
+            Ok(source_title) => {
+                crate::catalog::cover::import_source_covers(
+                    state,
+                    title_id,
+                    source_id,
+                    &adapter,
+                    &source_title.covers,
+                )
+                .await;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    entry_id,
+                    code = %code,
+                    error = %error,
+                    "cannot refresh source covers"
+                );
+            }
+        }
 
         match adapter.chapters(kind, &external_id).await {
             Ok(chapters) => {

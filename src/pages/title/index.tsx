@@ -1,12 +1,12 @@
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
   BookOpenIcon,
   EyeIcon,
   HeartIcon,
+  ImagesIcon,
   SearchIcon,
-  UploadIcon,
 } from "lucide-react";
 import { Link, useParams } from "react-router";
 
@@ -22,7 +22,6 @@ import {
   useSetTitleTabsMutation,
   useTitleQuery,
   useUpdateTitleMutation,
-  useUploadCoverMutation,
   useUpsertLibraryMutation,
   type LibraryTab,
   type TitleChapter,
@@ -50,6 +49,7 @@ import { Skeleton } from "@/ui/shadcn/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/shadcn/tabs";
 import { AdminSourcePanel } from "./AdminSourcePanel";
 import { AliasesPanel } from "./AliasesPanel";
+import { CoverEditorDialog } from "./CoverEditorDialog";
 import { LibraryPanel } from "./LibraryPanel";
 
 function chapterLabel(
@@ -106,59 +106,6 @@ function ScoreSelect({
         </option>
       ))}
     </Select>
-  );
-}
-
-function CoverEditor({ titleId }: { titleId: number }) {
-  const t = useT();
-  const [file, setFile] = useState<File | null>(null);
-  const upload = useUploadCoverMutation(titleId);
-  const errorText = useErrorText(upload.error);
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    if (!file || upload.isPending) return;
-    const form = event.currentTarget;
-    upload.mutate(file, {
-      onSuccess: () => {
-        setFile(null);
-        form.reset();
-      },
-    });
-  }
-
-  return (
-    <form className="flex flex-col gap-2" onSubmit={handleSubmit}>
-      <label
-        className={cn(
-          buttonVariants({ variant: "outline" }),
-          "w-full min-w-0 cursor-pointer",
-        )}
-      >
-        <UploadIcon data-icon="inline-start" />
-        <span className="truncate">{file?.name ?? t("title.chooseCover")}</span>
-        <input
-          type="file"
-          name="file"
-          className="sr-only"
-          aria-label={t("title.uploadCover")}
-          accept="image/jpeg,image/png,image/webp,image/gif"
-          onChange={(event) => {
-            upload.reset();
-            setFile(event.target.files?.[0] ?? null);
-          }}
-        />
-      </label>
-      <Button type="submit" variant="outline" disabled={!file || upload.isPending}>
-        {t("title.uploadCover")}
-      </Button>
-      <p className="text-xs text-muted-foreground">{t("title.coverHint")}</p>
-      {errorText && (
-        <p role="alert" className="text-sm text-destructive">
-          {errorText}
-        </p>
-      )}
-    </form>
   );
 }
 
@@ -241,6 +188,7 @@ export function TitlePage() {
 
   const [tab, setTab] = useState("chapters");
   const [editing, setEditing] = useState(false);
+  const [coversOpen, setCoversOpen] = useState(false);
   const [chapterFilter, setChapterFilter] = useState("");
   const [ascending, setAscending] = useState(false);
 
@@ -389,7 +337,7 @@ export function TitlePage() {
       <div className="grid gap-8 md:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="flex flex-col gap-3 md:sticky md:top-6 md:self-start">
           <CoverImage
-            src={title.has_cover ? titleCoverUrl(title, "full") : null}
+            src={title.has_cover ? titleCoverUrl(title, "high") : null}
             alt={title.name}
             loading="eager"
             className="aspect-2/3 w-full rounded-xl ring-1 ring-foreground/10"
@@ -447,7 +395,17 @@ export function TitlePage() {
             onRemove={() => remove.mutate()}
           />
 
-          {isAdmin && <CoverEditor titleId={titleId} />}
+          {isAdmin && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              onClick={() => setCoversOpen(true)}
+            >
+              <ImagesIcon data-icon="inline-start" />
+              {t("title.covers")}
+            </Button>
+          )}
         </aside>
 
         <div className="flex min-w-0 flex-col gap-4">
@@ -686,6 +644,14 @@ export function TitlePage() {
           </Tabs>
         </div>
       </div>
+
+      {isAdmin && (
+        <CoverEditorDialog
+          title={title}
+          open={coversOpen}
+          onOpenChange={setCoversOpen}
+        />
+      )}
     </div>
   );
 }

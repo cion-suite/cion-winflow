@@ -83,6 +83,7 @@ pub fn router(state: AppState) -> Router {
             // Дефолтные 2 МиБ не пропустят 5-мегабайтный файл
             get(catalog::cover::get_cover)
                 .post(catalog::cover::upload_cover)
+                .delete(catalog::cover::delete_cover)
                 .layer(DefaultBodyLimit::max(catalog::cover::BODY_LIMIT)),
         )
         .route(

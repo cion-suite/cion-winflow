@@ -34,12 +34,28 @@ async fn remanga_search_title_chapters_content() {
         .expect("search");
     assert!(!page.items.is_empty(), "search must return items");
 
+    // Выдача отдаёт ссылку на обложку; она должна разрешаться allowlist'ом.
+    if let Some(item) = page.items.iter().find(|item| item.cover_ref.is_some())
+        && let Some(reference) = item.cover_ref.as_deref()
+    {
+        adapter.resolve_cover(reference).expect("search cover url");
+    }
+
     let first = &page.items[0];
     let title = adapter
         .title(MediaKind::Manga, &first.external_id)
         .await
         .expect("title");
     assert!(!title.name.is_empty());
+
+    // Все варианты обложки из ответа `titles/{dir}` разрешаются в URL.
+    assert!(!title.covers.is_empty(), "title must expose covers");
+    for (size, reference) in title.covers.entries() {
+        let url = adapter
+            .resolve_cover(reference)
+            .unwrap_or_else(|error| panic!("{size} cover must resolve: {error}"));
+        assert!(url.host_str().is_some(), "{size} cover has no host");
+    }
 
     let chapters = adapter
         .chapters(MediaKind::Manga, &first.external_id)

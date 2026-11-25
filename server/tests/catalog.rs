@@ -4,9 +4,10 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
 };
+use image::GenericImageView;
 use serde_json::{Value, json};
 
-use common::{TestApp, body_json, get, json_request, multipart_file_request, with_cookie};
+use common::{ORIGIN, TestApp, body_json, get, json_request, multipart_file_request, with_cookie};
 
 fn title_body(name: &str, kind: &str) -> Value {
     json!({
@@ -21,6 +22,26 @@ fn title_body(name: &str, kind: &str) -> Value {
         "lang": "ru",
         "rating": 7.5,
     })
+}
+
+async fn fetch_cover(app: &TestApp, id: i64, size: &str, cookie: &str) -> Vec<u8> {
+    let response = app
+        .request(with_cookie(
+            get(&format!("/api/titles/{id}/cover?size={size}")),
+            cookie,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK, "cover {size}");
+    axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("cover body")
+        .to_vec()
+}
+
+fn cover_dimensions(bytes: &[u8]) -> (u32, u32) {
+    image::load_from_memory(bytes)
+        .expect("cover image")
+        .dimensions()
 }
 
 async fn post_title(app: &TestApp, cookie: &str, body: &Value) -> axum::response::Response {
@@ -474,6 +495,8 @@ async fn cover_upload_and_serving() {
         .await;
     let title_json = body_json(response).await;
     assert_eq!(title_json["title"]["has_cover"], true);
+    // Без ?size загрузка попадает в high — самый крупный слот.
+    assert_eq!(title_json["title"]["cover_sizes"], json!(["high"]));
     let first_updated_at = title_json["title"]["updated_at"]
         .as_i64()
         .expect("title updated_at");
@@ -484,7 +507,8 @@ async fn cover_upload_and_serving() {
     let catalog = body_json(response).await;
     assert_eq!(catalog["items"][0]["has_cover"], true);
 
-    for size in ["thumb", "full"] {
+    // Загружен только high; остальные размеры отдаются из него же (fallback).
+    for size in ["low", "mid", "high"] {
         let request = Request::builder()
             .uri(format!("/api/titles/{id}/cover?size={size}"))
             .header(header::COOKIE, format!("sid={admin}"))
@@ -521,11 +545,11 @@ async fn cover_upload_and_serving() {
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED, "size {size}");
     }
 
-    // Перезагрузка заменяет оба файла: запись атомарная, старый файл не мешает.
+    // Перезагрузка заменяет файл размера: запись атомарная, старый не мешает.
     // ETag и `v={updated_at}` обязаны измениться даже в ту же секунду,
     // иначе браузер отдаст старую обложку из кэша.
     let request = Request::builder()
-        .uri(format!("/api/titles/{id}/cover?size=full"))
+        .uri(format!("/api/titles/{id}/cover?size=high"))
         .header(header::COOKIE, format!("sid={admin}"))
         .body(Body::empty())
         .expect("request");
@@ -557,7 +581,7 @@ async fn cover_upload_and_serving() {
         .await;
     assert_eq!(response.status(), StatusCode::OK);
     let request = Request::builder()
-        .uri(format!("/api/titles/{id}/cover?size=full"))
+        .uri(format!("/api/titles/{id}/cover?size=high"))
         .header(header::COOKIE, format!("sid={admin}"))
         .body(Body::empty())
         .expect("request");
@@ -742,4 +766,148 @@ async fn cover_upload_validates_file_and_size() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let json = body_json(response).await;
     assert_eq!(json["code"], "validation");
+}
+
+#[tokio::test]
+async fn cover_sizes_are_uploaded_and_deleted_per_size() {
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    let id = app.create_title(&admin, "Sized", "manga").await;
+
+    // 1..3 обложки: каждый размер загружается отдельно и режется под свой
+    // лимит. Проверяем фактические пиксели, иначе перепутанный размер
+    // (low и mid одним файлом) остался бы незамеченным.
+    async fn upload(app: &TestApp, id: i64, size: &str, png: Vec<u8>, cookie: &str) {
+        let response = app
+            .request(with_cookie(
+                multipart_file_request(
+                    &format!("/api/titles/{id}/cover?size={size}"),
+                    "file",
+                    "cover.png",
+                    "image/png",
+                    &png,
+                ),
+                cookie,
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::OK, "upload {size}");
+    }
+
+    upload(&app, id, "low", png_bytes(800, 1200), &admin).await;
+    assert_eq!(
+        cover_dimensions(&fetch_cover(&app, id, "low", &admin).await),
+        (320, 480)
+    );
+    upload(&app, id, "mid", png_bytes(800, 1200), &admin).await;
+    assert_eq!(
+        cover_dimensions(&fetch_cover(&app, id, "mid", &admin).await),
+        (640, 960)
+    );
+
+    let response = app
+        .request(with_cookie(get(&format!("/api/titles/{id}")), &admin))
+        .await;
+    let json = body_json(response).await;
+    assert_eq!(json["title"]["cover_sizes"], json!(["low", "mid"]));
+    assert_eq!(json["title"]["has_cover"], true);
+
+    // high отсутствует, но отдаётся ближайший сохранённый размер (mid).
+    assert_eq!(
+        cover_dimensions(&fetch_cover(&app, id, "high", &admin).await),
+        (640, 960)
+    );
+
+    // Маленький файл не апскейлится: high остаётся 100x150.
+    upload(&app, id, "high", png_bytes(100, 150), &admin).await;
+    assert_eq!(
+        cover_dimensions(&fetch_cover(&app, id, "high", &admin).await),
+        (100, 150)
+    );
+
+    let response = app
+        .request(with_cookie(get(&format!("/api/titles/{id}")), &admin))
+        .await;
+    let json = body_json(response).await;
+    assert_eq!(json["title"]["cover_sizes"], json!(["low", "mid", "high"]));
+
+    fn delete_cover(id: i64, size: &str) -> Request<Body> {
+        Request::builder()
+            .method(Method::DELETE)
+            .uri(format!("/api/titles/{id}/cover?size={size}"))
+            .header(header::ORIGIN, ORIGIN)
+            .header("sec-fetch-site", "same-origin")
+            .body(Body::empty())
+            .expect("request")
+    }
+
+    let response = app
+        .request(with_cookie(delete_cover(id, "low"), &admin))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["has_cover"], true);
+
+    let response = app
+        .request(with_cookie(get(&format!("/api/titles/{id}")), &admin))
+        .await;
+    let json = body_json(response).await;
+    assert_eq!(json["title"]["cover_sizes"], json!(["mid", "high"]));
+
+    // low удалён — отдаётся mid
+    assert_eq!(
+        cover_dimensions(&fetch_cover(&app, id, "low", &admin).await),
+        (640, 960)
+    );
+
+    let response = app
+        .request(with_cookie(delete_cover(id, "mid"), &admin))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .request(with_cookie(get(&format!("/api/titles/{id}")), &admin))
+        .await;
+    let json = body_json(response).await;
+    assert_eq!(json["title"]["cover_sizes"], json!(["high"]));
+
+    // mid удалён — отдаётся high
+    assert_eq!(
+        cover_dimensions(&fetch_cover(&app, id, "mid", &admin).await),
+        (100, 150)
+    );
+
+    // Удаление последнего размера убирает обложку у тайтла
+    let response = app
+        .request(with_cookie(delete_cover(id, "high"), &admin))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["has_cover"], false);
+
+    let response = app
+        .request(with_cookie(
+            get(&format!("/api/titles/{id}/cover?size=mid")),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn cover_delete_requires_admin() {
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    let id = app.create_title(&admin, "Sized", "manga").await;
+    let user = app.register_extra_user("reader").await;
+
+    let request = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/titles/{id}/cover?size=mid"))
+        .header(header::ORIGIN, ORIGIN)
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::empty())
+        .expect("request");
+    let response = app.request(with_cookie(request, &user)).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

@@ -111,7 +111,7 @@ export function LibrarySearch() {
                   >
                     <CoverImage
                       src={
-                        item.title.has_cover ? titleCoverUrl(item.title, "thumb") : null
+                        item.title.has_cover ? titleCoverUrl(item.title, "low") : null
                       }
                       alt={item.title.name}
                       className="h-12 w-8 shrink-0 rounded-md"

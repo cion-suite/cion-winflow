@@ -18,7 +18,7 @@ use tokio::{
 };
 
 use cion_reader::sources::fixture;
-use common::{TestApp, body_json, get, json_request, with_cookie};
+use common::{TestApp, body_json, get, json_request, multipart_file_request, with_cookie};
 
 /// fixture-счётчик глобальный: тесты файла идут по очереди.
 static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -28,7 +28,11 @@ async fn lock() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 fn png_bytes() -> Vec<u8> {
-    let image = image::RgbaImage::from_pixel(4, 8, image::Rgba([20, 40, 80, 255]));
+    png_sized(4, 8)
+}
+
+fn png_sized(width: u32, height: u32) -> Vec<u8> {
+    let image = image::RgbaImage::from_pixel(width, height, image::Rgba([20, 40, 80, 255]));
     let mut bytes = Vec::new();
     image::DynamicImage::ImageRgba8(image)
         .write_to(
@@ -276,6 +280,8 @@ async fn search_import_and_title_reads_only_database() {
     let imported = import_fixture(&app, &admin).await;
     assert_eq!(imported["title_created"], true);
     assert_eq!(imported["imported_chapters"], 3);
+    // Обложка источника скачивается автоматически: у fixture только mid.
+    assert_eq!(imported["covers_imported"], 1);
     assert_eq!(imported["stats"]["chapter_count"], 3);
     assert_eq!(imported["stats"]["available_count"], 2);
     assert_eq!(imported["stats"]["locked_count"], 1);
@@ -288,6 +294,18 @@ async fn search_import_and_title_reads_only_database() {
         before,
         "title page must not hit the source"
     );
+    assert_eq!(title["title"]["cover_sizes"], json!(["mid"]));
+    assert_eq!(title["title"]["has_cover"], true);
+
+    // Обложка уже на диске: импорт её скачал, запроса к источнику нет.
+    let response = app
+        .request(with_cookie(
+            get(&format!("/api/titles/{title_id}/cover?size=mid")),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "image/webp");
 
     assert_eq!(title["title"]["name"], "Fixture Title");
     assert_eq!(title["chapters"].as_array().expect("chapters").len(), 3);
@@ -480,7 +498,9 @@ async fn image_proxy_caches_and_cover_allowlist() {
     assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     assert_eq!(hit_count(&hits, "/img/0.png"), 1);
 
-    // Обложка из выдачи поиска — через тот же allowlist
+    // Обложка из выдачи поиска — через тот же allowlist. Импорт уже
+    // скачал её для тайтла, поэтому первый запрос прокси — второй хит.
+    let cover_hits = hit_count(&hits, "/cover.jpg");
     let response = app
         .request(with_cookie(
             get("/api/sources/fixture/cover?ref=%2Fcover.jpg"),
@@ -488,7 +508,7 @@ async fn image_proxy_caches_and_cover_allowlist() {
         ))
         .await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(hit_count(&hits, "/cover.jpg"), 1);
+    assert_eq!(hit_count(&hits, "/cover.jpg"), cover_hits + 1);
 
     // Чужой хост отклоняется
     let response = app
@@ -513,7 +533,7 @@ async fn image_proxy_caches_and_cover_allowlist() {
         ))
         .await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(hit_count(&hits, "/cover.jpg"), 1);
+    assert_eq!(hit_count(&hits, "/cover.jpg"), cover_hits + 1);
 
     let response = app
         .request(get("/api/sources/fixture/cover?ref=%2Fcover.jpg"))
@@ -602,4 +622,72 @@ async fn import_rejects_bad_kind_id_and_unknown_source() {
         ))
         .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+async fn fetch_cover(app: &TestApp, title_id: i64, size: &str, cookie: &str) -> Vec<u8> {
+    let response = app
+        .request(with_cookie(
+            get(&format!("/api/titles/{title_id}/cover?size={size}")),
+            cookie,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK, "cover {size}");
+    axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("cover body")
+        .to_vec()
+}
+
+#[tokio::test]
+async fn manual_cover_is_not_overwritten_by_source_or_refresh() {
+    let _guard = lock().await;
+    let (base_url, _hits) = start_image_server().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    configure_fixture(&app, &admin, &base_url).await;
+    let imported = import_fixture(&app, &admin).await;
+    let title_id = imported["title_id"].as_i64().expect("title id");
+
+    // Автоимпорт уже сохранил mid из источника.
+    let automatic = fetch_cover(&app, title_id, "mid", &admin).await;
+
+    // Ручная загрузка заменяет размер.
+    let response = app
+        .request(with_cookie(
+            multipart_file_request(
+                &format!("/api/titles/{title_id}/cover?size=mid"),
+                "file",
+                "manual.png",
+                "image/png",
+                &png_sized(40, 60),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let manual = fetch_cover(&app, title_id, "mid", &admin).await;
+    assert_ne!(
+        automatic, manual,
+        "manual cover must replace the source one"
+    );
+
+    // Refresh добирает отсутствующие размеры, но занятый ручной не трогает.
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/admin/refresh/{title_id}"),
+                &json!({}),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK, "refresh");
+
+    let after_refresh = fetch_cover(&app, title_id, "mid", &admin).await;
+    assert_eq!(
+        after_refresh, manual,
+        "auto cover import must not overwrite a manual cover"
+    );
 }

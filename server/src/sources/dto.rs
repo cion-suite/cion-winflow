@@ -178,6 +178,97 @@ impl std::fmt::Display for ExternalId {
 /// и фиксирует при первом импорте.
 pub type ChapterKey = String;
 
+/// Размер обложки. `low` показывается в поиске и диалоге добавления,
+/// `mid` — в библиотеке, `high` — на странице тайтла.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverSize {
+    Low,
+    Mid,
+    High,
+}
+
+impl CoverSize {
+    pub const ALL: [Self; 3] = [Self::Low, Self::Mid, Self::High];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Mid => "mid",
+            Self::High => "high",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "low" => Some(Self::Low),
+            "mid" => Some(Self::Mid),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
+
+    /// Порядок поиска файла: запрошенный размер, затем ближайший больший,
+    /// затем меньший. Отсутствующая обложка не превращается в 404, пока
+    /// у тайтла есть хоть один вариант.
+    pub fn fallback_order(self) -> [Self; 3] {
+        match self {
+            Self::Low => [Self::Low, Self::Mid, Self::High],
+            Self::Mid => [Self::Mid, Self::High, Self::Low],
+            Self::High => [Self::High, Self::Mid, Self::Low],
+        }
+    }
+}
+
+impl std::fmt::Display for CoverSize {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Обложки источника по размерам. Пустой `Option` — варианта у сайта нет.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SourceCovers {
+    #[serde(default)]
+    pub low: Option<String>,
+    #[serde(default)]
+    pub mid: Option<String>,
+    #[serde(default)]
+    pub high: Option<String>,
+}
+
+impl SourceCovers {
+    pub fn get(&self, size: CoverSize) -> Option<&str> {
+        let value = match size {
+            CoverSize::Low => &self.low,
+            CoverSize::Mid => &self.mid,
+            CoverSize::High => &self.high,
+        };
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|reference| !reference.is_empty())
+    }
+
+    /// Все непустые варианты в порядке low → mid → high.
+    pub fn entries(&self) -> impl Iterator<Item = (CoverSize, &str)> {
+        CoverSize::ALL
+            .into_iter()
+            .filter_map(|size| self.get(size).map(|reference| (size, reference)))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries().next().is_none()
+    }
+
+    /// Ссылка для выдачи поиска: сначала low, чтобы не тянуть тяжёлый файл.
+    pub fn search_ref(&self) -> Option<String> {
+        CoverSize::ALL
+            .into_iter()
+            .find_map(|size| self.get(size).map(str::to_owned))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceTitle {
     pub external_id: ExternalId,
@@ -185,8 +276,9 @@ pub struct SourceTitle {
     pub name: String,
     pub alt_names: Vec<String>,
     pub description: Option<String>,
-    /// Стабильная ссылка на обложку, не URL для клиента.
-    pub cover_ref: Option<String>,
+    /// Стабильные ссылки на обложки по размерам, не URL для клиента.
+    #[serde(default)]
+    pub covers: SourceCovers,
     pub authors: Vec<String>,
     pub genres: Vec<String>,
     pub status: Option<TitleStatus>,

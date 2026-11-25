@@ -46,12 +46,9 @@ async fn discover_search_and_lazy_import_for_a_regular_user() {
     app.create_admin().await;
     let admin = app.login_admin().await;
 
-    // Фикстуре нужен origin; сеть она не использует
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let address = listener.local_addr().expect("local addr");
-    configure_fixture(&app, &admin, &format!("http://{address}")).await;
+    // Фикстуре нужен только origin. Порт 9 закрыт: автоскачивание обложки
+    // получает мгновенный отказ, а не висит на молчащем listener'е.
+    configure_fixture(&app, &admin, "http://127.0.0.1:9").await;
     let user = app.register_extra_user("reader").await;
 
     let response = app
@@ -205,11 +202,7 @@ async fn saved_progress_marks_the_chapter_as_read() {
     app.create_admin().await;
     let admin = app.login_admin().await;
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let address = listener.local_addr().expect("local addr");
-    configure_fixture(&app, &admin, &format!("http://{address}")).await;
+    configure_fixture(&app, &admin, "http://127.0.0.1:9").await;
     let user = app.register_extra_user("reader").await;
 
     let added = add_fixture(&app, &user).await;

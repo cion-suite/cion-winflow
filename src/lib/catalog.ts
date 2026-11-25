@@ -12,6 +12,10 @@ export type Availability = (typeof AVAILABILITIES)[number];
 export const CONTENT_KINDS = ["images", "video", "text"] as const;
 export type ContentKind = (typeof CONTENT_KINDS)[number];
 
+/** Размеры обложки: low — поиск и добавление, mid — библиотека, high — тайтл. */
+export const COVER_SIZES = ["low", "mid", "high"] as const;
+export type CoverSize = (typeof COVER_SIZES)[number];
+
 export const LIBRARY_STATUSES = [
   "planned",
   "in_progress",

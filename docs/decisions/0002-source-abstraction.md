@@ -26,7 +26,7 @@
 
 2. **Дескриптор источника — данные.** `SourceDescriptor` объявляет `code`, `name`, `version`, `kinds`, `default_kind`, `capabilities`, схемы `config` и `filters`. Возможности — флаги (`Search`, `Chapters`, `Images`, `VideoEmbed`, `Text`, `Volumes`, `AltNames`, `SearchFilters`, `AuthCookie`, `SignedUrls`), а не набор трейтов. Обработчик проверяет флаг до вызова адаптера и не угадывает поведение по исключениям.
 
-3. **Честные DTO.** Неизвестное поле — `Option`, а не пустая строка или ноль. `SourceTitle` несёт `kind`, альтернативные названия, авторов, жанры, статус, год и `cover_ref`; `SourceChapter` — `external_id`, `chapter_key`, `number_text`, `number_milli`, том, вид главы, `content_kind`, группу перевода, язык и признак блокировки. `SourceContent` — размеченный enum `Images | Video | Text`; тело книги не инлайнится в ответ.
+3. **Честные DTO.** Неизвестное поле — `Option`, а не пустая строка или ноль. `SourceTitle` несёт `kind`, альтернативные названия, авторов, жанры, статус, год и `covers` (до трёх стабильных ссылок: `low` для поиска, `mid` для библиотеки, `high` для страницы тайтла); `SourceChapter` — `external_id`, `chapter_key`, `number_text`, `number_milli`, том, вид главы, `content_kind`, группу перевода, язык и признак блокировки. `SourceContent` — размеченный enum `Images | Video | Text`; тело книги не инлайнится в ответ.
 
 4. **Тип контента хранится на главе.** `chapters.content_kind` — единственный источник истины для `pages`, `embed_url` и текста. Он может быть NULL, пока источник не отдал тип в списке глав: тогда фактический вариант определяется при первом `content()` и записывается. Если тип известен и расходится с ответом — 502; `GET /api/chapters/{id}/text` для не-текстовой главы — 409.
 

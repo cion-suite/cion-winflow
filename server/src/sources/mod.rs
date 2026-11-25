@@ -21,8 +21,9 @@ mod contract;
 
 pub use descriptor::{Capability, ConfigField, FieldType, SourceDescriptor};
 pub use dto::{
-    ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SearchRequest, SourceChapter,
-    SourceContent, SourcePage, SourceSearchItem, SourceText, SourceTitle, TextFormat, TitleStatus,
+    ChapterKind, ContentKind, CoverSize, ExternalId, MediaKind, SearchPage, SearchRequest,
+    SourceChapter, SourceContent, SourceCovers, SourcePage, SourceSearchItem, SourceText,
+    SourceTitle, TextFormat, TitleStatus,
 };
 pub use error::SourceError;
 

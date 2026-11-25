@@ -9,7 +9,7 @@ use crate::sources::config::{HostAllowlist, url_allowed};
 use crate::sources::descriptor::{Capability, SourceDescriptor};
 use crate::sources::dto::{
     ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SearchRequest, SourceChapter,
-    SourceContent, SourcePage, SourceSearchItem, SourceText, SourceTitle,
+    SourceContent, SourceCovers, SourcePage, SourceSearchItem, SourceText, SourceTitle,
 };
 use crate::sources::error::SourceError;
 use crate::sources::http::AdapterCtx;
@@ -111,7 +111,10 @@ impl Fixture {
             name: title_name(external_id).to_owned(),
             alt_names: vec!["Fixture Alt".to_owned()],
             description: Some("Fixture description".to_owned()),
-            cover_ref: Some("/cover.jpg".to_owned()),
+            covers: SourceCovers {
+                mid: Some("/cover.jpg".to_owned()),
+                ..SourceCovers::default()
+            },
             authors: vec!["Fixture Author".to_owned()],
             genres: vec!["Action".to_owned()],
             status: Some(crate::sources::dto::TitleStatus::Ongoing),

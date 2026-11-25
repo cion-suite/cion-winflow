@@ -115,6 +115,23 @@ export const ru = {
       chooseCover: "Выбрать файл",
       uploadCover: "Загрузить обложку",
       coverHint: "JPEG, PNG, WebP или GIF до 5 МБ.",
+      covers: "Обложки",
+      coverEditorDescription:
+        "До трёх размеров: выдача поиска, карточки библиотеки и страница тайтла. Если размера нет, показывается ближайший сохранённый.",
+      coverSizes: {
+        low: "Поиск",
+        mid: "Библиотека",
+        high: "Страница тайтла",
+      },
+      coverSizeHints: {
+        low: "Показывается в выдаче источников и при добавлении.",
+        mid: "Показывается в карточках библиотеки.",
+        high: "Показывается на странице тайтла.",
+      },
+      coverPresent: "Загружена",
+      coverMissing: "Нет",
+      replaceCover: "Заменить",
+      removeCover: "Удалить",
     },
     library: {
       title: "Библиотека",

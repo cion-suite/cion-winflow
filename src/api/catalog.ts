@@ -1,10 +1,16 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 
 import {
   joinList,
   splitList,
   type Availability,
   type ContentKind,
+  type CoverSize,
   type LibraryStatus,
   type MediaKind,
   type TitleFormValues,
@@ -29,6 +35,8 @@ export type Title = TitleSummary & {
   genres: string[];
   description: string | null;
   lang: string | null;
+  /** Какие размеры обложки реально сохранены на сервере. */
+  cover_sizes: CoverSize[];
   origin_source_id: number | null;
   preferred_source_id: number | null;
   created_at: number;
@@ -130,10 +138,10 @@ export function titleQueryKey(id: number | null) {
   return ["title", id] as const;
 }
 
-/** Адрес обложки с версией: после замены файла URL меняется. */
+/** Адрес обложки нужного размера: после замены файла URL меняется. */
 export function titleCoverUrl(
   title: Pick<TitleSummary, "id" | "updated_at">,
-  size: "thumb" | "full",
+  size: CoverSize,
 ): string {
   return apiUrl(`/titles/${title.id}/cover?size=${size}&v=${title.updated_at}`);
 }
@@ -143,11 +151,16 @@ export const catalogApi = {
   create: (input: TitleInput) => request<TitlePayload>("/titles", jsonMutation(input)),
   update: (id: number, input: TitleInput) =>
     request<TitlePayload>(`/titles/${id}`, jsonMutation(input, "PUT")),
-  uploadCover: (id: number, file: File) => {
+  uploadCover: (id: number, size: CoverSize, file: File) => {
     const body = new FormData();
     body.append("file", file);
-    return request<CoverResponse>(`/titles/${id}/cover`, { method: "POST", body });
+    return request<CoverResponse>(`/titles/${id}/cover?size=${size}`, {
+      method: "POST",
+      body,
+    });
   },
+  deleteCover: (id: number, size: CoverSize) =>
+    request<CoverResponse>(`/titles/${id}/cover?size=${size}`, { method: "DELETE" }),
 };
 
 export function useTitleQuery(id: number | null) {
@@ -181,14 +194,33 @@ export function useUpdateTitleMutation(id: number) {
   });
 }
 
+export type UploadCoverInput = {
+  size: CoverSize;
+  file: File;
+};
+
+/** Обложки меняют `has_cover` и `updated_at`, поэтому кэш библиотеки тоже гаснет. */
+function invalidateCoverQueries(queryClient: QueryClient, id: number) {
+  void queryClient.invalidateQueries({ queryKey: titleQueryKey(id) });
+  void queryClient.invalidateQueries({ queryKey: ["library"] });
+}
+
 export function useUploadCoverMutation(id: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (file: File) => catalogApi.uploadCover(id, file),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: titleQueryKey(id) });
-    },
+    mutationFn: ({ size, file }: UploadCoverInput) =>
+      catalogApi.uploadCover(id, size, file),
+    onSuccess: () => invalidateCoverQueries(queryClient, id),
+  });
+}
+
+export function useDeleteCoverMutation(id: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (size: CoverSize) => catalogApi.deleteCover(id, size),
+    onSuccess: () => invalidateCoverQueries(queryClient, id),
   });
 }
 

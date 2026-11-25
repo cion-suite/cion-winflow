@@ -233,6 +233,9 @@ function invalidateTitle(queryClient: ReturnType<typeof useQueryClient>, titleId
   // Связи и доступность меняют выбранный вариант и canonical-ключ прогресса.
   void queryClient.invalidateQueries({ queryKey: ["chapter-content", titleId] });
   void queryClient.invalidateQueries({ queryKey: progressQueryKey(titleId) });
+  // Attach/refresh/import могут добрать обложки: has_cover и updated_at
+  // видны в карточках библиотеки и поиске по шапке.
+  void queryClient.invalidateQueries({ queryKey: ["library"] });
 }
 
 export function useImportSourceMutation() {

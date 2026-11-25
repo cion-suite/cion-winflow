@@ -30,6 +30,7 @@ export {
   titleCoverUrl,
   titleToFormValues,
   useCreateTitleMutation,
+  useDeleteCoverMutation,
   useTitleQuery,
   useUpdateTitleMutation,
   useUploadCoverMutation,
@@ -46,6 +47,7 @@ export type {
   TitleResponse,
   TitleSource,
   TitleSummary,
+  UploadCoverInput,
 } from "./catalog";
 export {
   useAddAliasMutation,

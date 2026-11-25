@@ -128,8 +128,10 @@ sessions(id, token_hash UNIQUE, user_id, created_at, expires_at, last_seen_at)
 sources(id, code UNIQUE, name, base_url, enabled, config_json,
         descriptor_version, config_error, last_checked_at, last_error, created_at)
 titles(id, kind, name, name_lower, alt_names_json, authors_json, genres_json, description,
-       status, year, lang, rating, cover_path, origin_source_id, preferred_source_id,
+       status, year, lang, rating, origin_source_id, preferred_source_id,
        preferred_source_updated_at, created_at, updated_at)
+title_covers(title_id, size, path, width, height, source_id, updated_at,
+             PRIMARY KEY(title_id, size))
 source_entries(id, title_id, source_id, kind, external_id, external_url, raw_json,
                is_primary, adapter_version, chapter_count, available_count,
                locked_count, missing_count, stats_updated_at, last_synced_at, last_error)
@@ -180,7 +182,8 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 - **Дедупликация.** `UNIQUE(source_id, kind, external_id)` и `UNIQUE(source_entry_id, external_id)`; `pages` — `UNIQUE(chapter_id, idx)`. Импорт — `INSERT ... ON CONFLICT ... DO UPDATE`, иначе refresh создаст дубли. **Один `source_entry` на пару `(title_id, source_id)`** (миграция 0003): `preferred_source_id` хранит source_id, поэтому две записи одного источника у одного тайтла неоднозначны; attach второго external_id того же источника к тому же тайтлу — 409 `source_already_attached`.
 - **Импорт не атомарен между сетью и БД.** `source_entry` создаётся или привязывается в транзакции, главы пишутся пачками upsert; сбой на любом шаге оставляет `source_entries.last_error` и не удаляет уже импортированное. Повторный импорт идемпотентен по `(source_entry_id, external_id)`; администратор видит ошибку синхронизации и повторяет её, а не получает полупустой тайтл без объяснения.
 - **Ссылки на страницы.** `pages.image_ref` — стабильная ссылка источника (путь или id), `image_url` — последний разрешённый URL. Подписанные CDN-URL живут недолго: при `401/403/410` прокси не больше двух раз перезапрашивает список страниц через адаптер, обновляет `image_url` и отдаёт байты; если не помогло — глава помечается `locked`, статистика обновляется, клиент повторяет canonical `/content` и получает другой источник. Кэш байтов ключуется по `(source_id, external chapter id, idx)`, не по подписанному URL.
-- **Обложки из поиска.** В выдаче — `cover_ref` (стабильная ссылка), не URL. `GET /api/sources/{code}/cover?ref=` резолвит её через адаптер и тот же SSRF-allowlist, что страницы; иначе поиск становится SSRF-пробой.
+- **Обложки из поиска.** В выдаче — `cover_ref` (стабильная ссылка), не URL. `GET /api/sources/{code}/cover?ref=` резолвит её через адаптер и тот же SSRF-allowlist, что страницы; иначе поиск становится SSRF-пробой. В выдаче берётся `low`-вариант, чтобы диалог добавления не тянул тяжёлый файл.
+- **Обложки по размерам.** `title_covers` хранит до трёх вариантов: `low` — выдача поиска и диалог добавления, `mid` — карточки библиотеки, `high` — страница тайтла. При импорте, привязке источника и ручном refresh сервер сам скачивает размеры, которые отдал адаптер (`SourceCovers`), и заполняет только отсутствующие: ручную обложку автоимпорт не перетирает, а сбой загрузки не отменяет импорт глав. Поэтому `POST /api/admin/refresh/{title_id}` можно использовать, чтобы добрать обложки у тайтлов, импортированных раньше. `GET /api/titles/{id}/cover` при отсутствии запрошенного размера отдаёт ближайший сохранённый (сначала более крупный, затем мелкий), поэтому клиент всегда просит семантический размер. Администратор загружает и удаляет каждый размер отдельно; редактор — диалог с тремя слотами.
 - **Конфиг источника.** `sources.config_json` — типизированный конфиг адаптера: `image_hosts`, `player_hosts`, заголовки/куки, лимиты, язык/перевод, особенности нумерации. `base_url` живёт только в колонке `sources.base_url`, а не в конфиге: иначе у одного хоста два источника истины. `image_hosts` нужен потому, что картинки часто лежат на отдельном CDN, а не на `base_url`. Секреты маскируются в API и не попадают в логи; для self-host допустимо хранить их в SQLite. `descriptor_version` фиксирует версию адаптера, под которую валидировался конфиг, `config_error` — причину отключения источника.
 - **Версия адаптера.** `descriptor.version` пишется в `sources.descriptor_version` при валидации конфига и в `source_entries.adapter_version` при импорте. Рост версии перевалидирует конфиг (если схема не менялась — это no-op) и служит поводом переимпортировать главы; `chapter_key` при этом обязан остаться прежним, иначе прогресс потеряется, — менять семантику ключа можно только с миграцией.
 - **Отключённый источник.** Записи `source_entries` и главы остаются в БД, тайтл и библиотека читаются. Чтение контента из отключённого источника — `source_disabled` (503), а не 500. Селектор пропускает выключенные источники и пересчитывает `preferred_source`; `is_primary` автоматически не переписывается.
@@ -212,7 +215,7 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `GET /api/chapters/{id}/content` | конкретный вариант без fallback (админ/отладка) |
 | `GET /api/chapters/{id}/text` | текст конкретного варианта (админ/отладка) |
 | `GET /api/pages/{id}/image` | прокси страницы из источника |
-| `GET /api/titles/{id}/cover?size=thumb\|full` | обложка (локальная или прокси) |
+| `GET /api/titles/{id}/cover?size=low\|mid\|high` | обложка нужного размера; отсутствующий размер отдаётся из ближайшего |
 | `GET /api/library?q=&status=&favorite=&tab_id=&sort=&page=&page_size=` | библиотека пользователя со счётчиками вкладок |
 | `PUT /api/library/{title_id}` | статус, оценка и избранное |
 | `DELETE /api/library/{title_id}` | убрать из библиотеки (закладки чистятся FK) |
@@ -235,7 +238,8 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `GET/POST /api/admin/invites` | список и создание инвайтов (admin) |
 | `POST /api/admin/users/{id}/disable` | отключить пользователя (admin) |
 | `POST /api/titles`, `PUT /api/titles/{id}` | создание и правка тайтла (admin) |
-| `POST /api/titles/{id}/cover` | загрузка обложки (admin) |
+| `POST /api/titles/{id}/cover?size=low\|mid\|high` | загрузка обложки в конкретный размер (admin) |
+| `DELETE /api/titles/{id}/cover?size=low\|mid\|high` | удалить размер обложки (admin) |
 | `POST /api/titles/{id}/sources` | привязать источник к тайтлу: `{ code, external_id, kind? }`, по умолчанию тип тайтла (admin) |
 | `DELETE /api/titles/{id}/sources/{entry_id}` | отвязать источник; висячие alias чистятся (admin) |
 | `PUT /api/titles/{id}/primary-source` | задать `is_primary` (`{ source_entry_id }`) — тай-брейкер и признак отображения, не жёсткий override (admin) |
@@ -244,7 +248,7 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `DELETE /api/titles/{title_id}/chapter-aliases/{alias_key}` | убрать связь ключей (admin) |
 | `GET /api/admin/source-priorities?kind=&lang=` | список приоритетов источников для `(kind, lang)` (admin) |
 | `PUT /api/admin/source-priorities` | заменить список `{ kind, lang, source_codes: [...] }`; меньший индекс — выше приоритет (admin) |
-| `POST /api/admin/refresh/{title_id}` | обновить главы и статистику источников, пересчитать `preferred_source` (admin) |
+| `POST /api/admin/refresh/{title_id}` | обновить главы и статистику источников, пересчитать `preferred_source`, добрать отсутствующие обложки (admin) |
 
 Поток импорта: поиск по источнику → пользователь выбирает результат → `POST /api/sources/{code}/import` с `{ external_id, kind }` создаёт канонический тайтл и `source_entry` (или привязывает к существующему `title_id`) → адаптер заново получает метаданные по `external_id` (ответ поиска не считается доверенным), импортирует главы, а страницы — лениво при открытии главы. `external_id` приходит из ответа поиска (в БД его ещё нет); адаптер валидирует его и URL-кодирует. `kind` обязателен: по нему проверяется, что источник действительно умеет этот тип, а `titles.kind` совпадёт с `source_entries.kind`.
 
@@ -308,13 +312,19 @@ pub enum Capability {
 pub enum MediaKind { Manga, Anime, Book }
 pub enum ContentKind { Images, Video, Text }
 
+pub struct SourceCovers {                // все поля — стабильные ссылки, не URL для клиента
+    pub low: Option<String>,             // поиск и диалог добавления
+    pub mid: Option<String>,             // карточки библиотеки
+    pub high: Option<String>,            // страница тайтла
+}
+
 pub struct SourceTitle {
     pub external_id: ExternalId,
     pub kind: MediaKind,
     pub name: String,
     pub alt_names: Vec<String>,
     pub description: Option<String>,
-    pub cover_ref: Option<String>,       // стабильная ссылка, не URL для клиента
+    pub covers: SourceCovers,            // источник может отдать 1..3 размера
     pub authors: Vec<String>,
     pub genres: Vec<String>,
     pub status: Option<TitleStatus>,
@@ -360,7 +370,7 @@ pub struct SourceSearchItem {
     pub kind: MediaKind,
     pub name: String,
     pub alt_names: Vec<String>,
-    pub cover_ref: Option<String>,
+    pub cover_ref: Option<String>,       // low-вариант: диалог добавления не тянет тяжёлый файл
     pub year: Option<i16>,
     pub status: Option<TitleStatus>,
     pub external_url: Option<String>,
@@ -724,7 +734,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - [x] каталог, поиск, экраны `catalog`, `title`, `library`;
 - [x] заменить/удалить шаблонные экраны и пункты меню.
 
-Дополнительно: `titles.name_lower` (Unicode-поиск), обложки — два WebP-размера в `DATA_DIR/covers/<id>/` с ETag, общая пагинация каталога и библиотеки, тесты `tests/catalog.rs` и `tests/library.rs`.
+Дополнительно: `titles.name_lower` (Unicode-поиск), обложки — до трёх WebP-размеров (`low`/`mid`/`high`) в `DATA_DIR/covers/<id>/` с ETag, общая пагинация каталога и библиотеки, тесты `tests/catalog.rs` и `tests/library.rs`.
 
 Критерий: тайтл создаётся вручную, добавляется в библиотеку, поиск находит его по названию; статус и оценка сохраняются; в меню нет демо-разделов.
 

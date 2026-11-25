@@ -6,7 +6,7 @@ use scraper::{ElementRef, Html, Selector};
 
 use crate::sources::dto::{
     ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SourceChapter, SourceContent,
-    SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
+    SourceCovers, SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
 };
 use crate::sources::error::SourceError;
 use crate::sources::keys::build_chapter_key;
@@ -255,13 +255,31 @@ pub fn parse_title(
         .map(|text| truncate_chars(&text, MAX_DESCRIPTION_CHARS));
 
     let cover_selector = selector("img[itemprop=\"image\"]")?;
-    let cover_ref = document.select(&cover_selector).next().and_then(|image| {
-        // Thumb уже отдаётся сайтом; полный файл в разы тяжелее и не нужен,
-        // потому что сервер всё равно кэширует обложку как есть.
-        attr_of(image, "data-thumb")
-            .or_else(|| attr_of(image, "src"))
-            .or_else(|| attr_of(image, "data-full"))
-    });
+    // Один <img> несёт три размера: data-thumb (маленький), src (обычный)
+    // и data-full (оригинал). Раскладываем их по low/mid/high; остальные
+    // размеры страхуются ближайшим доступным атрибутом.
+    let (thumb, normal, full) =
+        document
+            .select(&cover_selector)
+            .next()
+            .map_or((None, None, None), |image| {
+                (
+                    attr_of(image, "data-thumb"),
+                    attr_of(image, "src"),
+                    attr_of(image, "data-full"),
+                )
+            });
+    let covers = SourceCovers {
+        low: thumb
+            .clone()
+            .or_else(|| normal.clone())
+            .or_else(|| full.clone()),
+        mid: normal
+            .clone()
+            .or_else(|| full.clone())
+            .or_else(|| thumb.clone()),
+        high: full.or(normal).or(thumb),
+    };
 
     let people_selector = selector(".elem_author a, .elem_screenwriter a, .elem_illustrator a")?;
     let mut authors: Vec<String> = document
@@ -319,7 +337,7 @@ pub fn parse_title(
         name: truncate_chars(&name, MAX_NAME_CHARS),
         alt_names,
         description,
-        cover_ref,
+        covers,
         authors,
         genres,
         status,
@@ -744,8 +762,16 @@ mod tests {
             text.starts_with("Хадзимэ Нагумо") && !text.contains('<')
         }));
         assert_eq!(
-            title.cover_ref.as_deref(),
+            title.covers.low.as_deref(),
             Some("https://static.rumix.me/uploads/pics/00/00/312_p.jpg")
+        );
+        assert_eq!(
+            title.covers.mid.as_deref(),
+            Some("https://static.rumix.me/uploads/pics/00/00/312.jpg")
+        );
+        assert_eq!(
+            title.covers.high.as_deref(),
+            Some("https://static.rumix.me/uploads/pics/00/00/312_o.jpg")
         );
         assert_eq!(title.lang.as_deref(), Some("ru"));
     }

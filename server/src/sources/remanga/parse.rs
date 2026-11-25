@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::sources::dto::{
     ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SourceChapter, SourceContent,
-    SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
+    SourceCovers, SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
 };
 use crate::sources::error::SourceError;
 use crate::sources::keys::{build_chapter_key, normalize_number, number_milli};
@@ -35,13 +35,21 @@ struct RawCover {
 }
 
 impl RawCover {
-    fn best(&self) -> Option<String> {
-        self.mid
-            .clone()
-            .or_else(|| self.high.clone())
-            .or_else(|| self.low.clone())
-            .filter(|path| !path.trim().is_empty())
+    fn covers(&self) -> SourceCovers {
+        SourceCovers {
+            low: clean_ref(&self.low),
+            mid: clean_ref(&self.mid),
+            high: clean_ref(&self.high),
+        }
     }
+}
+
+fn clean_ref(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,7 +214,11 @@ pub fn parse_search(raw: &str, kind: MediaKind) -> Result<SearchPage, SourceErro
             kind,
             name: truncate_chars(name.trim(), MAX_NAME_CHARS),
             alt_names: alt_names(&item.secondary_name, &item.another_name, &name),
-            cover_ref: item.cover.as_ref().and_then(RawCover::best),
+            // В выдаче нужен самый лёгкий вариант: он показывается в диалоге добавления
+            cover_ref: item
+                .cover
+                .as_ref()
+                .and_then(|cover| cover.covers().search_ref()),
             year: item.issue_year,
             status: item
                 .status
@@ -294,7 +306,11 @@ pub fn parse_title(raw: &str, kind: MediaKind) -> Result<SourceTitle, SourceErro
             .map(html_to_text)
             .map(|text| truncate_chars(&text, MAX_DESCRIPTION_CHARS))
             .filter(|text| !text.is_empty()),
-        cover_ref: parsed.cover.as_ref().and_then(RawCover::best),
+        covers: parsed
+            .cover
+            .as_ref()
+            .map(RawCover::covers)
+            .unwrap_or_default(),
         authors,
         genres,
         status: parsed
@@ -611,9 +627,10 @@ mod tests {
         assert_eq!(first.external_id.as_str(), "<13.10.2026>naruto_");
         assert_eq!(first.name, "Наруто");
         assert!(first.alt_names.contains(&"Naruto".to_owned()));
+        // В выдаче — low-вариант, а не mid/high
         assert_eq!(
             first.cover_ref.as_deref(),
-            Some("/media/titles/naruto/3b90be24a27a568a15ede3e2fd123c91.jpg")
+            Some("/media/titles/naruto/b73f82b8e39d93d74820a386a0778f76.jpg")
         );
         assert_eq!(first.year, Some(1999));
         assert_eq!(first.status, Some(TitleStatus::Completed));
@@ -635,6 +652,18 @@ mod tests {
         );
         assert!(title.authors.contains(&"Масаси Кисимото".to_owned()));
         assert!(title.genres.contains(&"Экшен".to_owned()));
+        assert_eq!(
+            title.covers.low.as_deref(),
+            Some("/media/titles/naruto/b73f82b8e39d93d74820a386a0778f76.jpg")
+        );
+        assert_eq!(
+            title.covers.mid.as_deref(),
+            Some("/media/titles/naruto/3b90be24a27a568a15ede3e2fd123c91.jpg")
+        );
+        assert_eq!(
+            title.covers.high.as_deref(),
+            Some("/media/titles/naruto/cc0c0a4c71306e2955760cec3958f27e.jpg")
+        );
         let branches = parse_branches(TITLE).expect("branches");
         assert_eq!(branches.len(), 1);
         assert_eq!(branches[0].id, 249);

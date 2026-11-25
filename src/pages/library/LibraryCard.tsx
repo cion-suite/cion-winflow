@@ -17,7 +17,7 @@ export function LibraryCard({ item }: { item: LibraryItem }) {
     >
       <div className="relative overflow-hidden rounded-xl ring-1 ring-foreground/10">
         <CoverImage
-          src={item.title.has_cover ? titleCoverUrl(item.title, "thumb") : null}
+          src={item.title.has_cover ? titleCoverUrl(item.title, "mid") : null}
           alt={item.title.name}
           className="aspect-2/3 w-full transition-transform duration-200 group-hover:scale-[1.02]"
         />

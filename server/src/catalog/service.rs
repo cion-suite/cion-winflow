@@ -10,6 +10,7 @@ use crate::{
     },
     error::AppError,
     pagination,
+    sources::CoverSize,
     state::AppState,
 };
 
@@ -63,6 +64,8 @@ pub struct TitleDto {
     pub lang: Option<String>,
     pub rating: Option<f64>,
     pub has_cover: bool,
+    /// Какие размеры обложки реально лежат на диске.
+    pub cover_sizes: Vec<String>,
     pub origin_source_id: Option<i64>,
     pub preferred_source_id: Option<i64>,
     pub created_at: i64,
@@ -125,7 +128,7 @@ struct TitleRow {
     year: Option<i64>,
     lang: Option<String>,
     rating: Option<f64>,
-    cover_path: Option<String>,
+    cover_sizes: String,
     origin_source_id: Option<i64>,
     preferred_source_id: Option<i64>,
     created_at: i64,
@@ -134,6 +137,7 @@ struct TitleRow {
 
 impl From<TitleRow> for TitleDto {
     fn from(row: TitleRow) -> Self {
+        let cover_sizes = decode_cover_sizes(&row.cover_sizes);
         Self {
             id: row.id,
             kind: row.kind,
@@ -146,7 +150,8 @@ impl From<TitleRow> for TitleDto {
             year: row.year,
             lang: row.lang,
             rating: row.rating,
-            has_cover: row.cover_path.is_some(),
+            has_cover: !cover_sizes.is_empty(),
+            cover_sizes,
             origin_source_id: row.origin_source_id,
             preferred_source_id: row.preferred_source_id,
             created_at: row.created_at,
@@ -221,7 +226,8 @@ pub async fn list_catalog(
     let offset = pagination::offset(page, page_size);
     let rows = sqlx::query_as::<_, TitleSummaryRow>(
         "SELECT id, kind, name, year, status, rating, \
-                cover_path IS NOT NULL AS has_cover, updated_at \
+                EXISTS (SELECT 1 FROM title_covers c WHERE c.title_id = titles.id) AS has_cover, \
+                updated_at \
          FROM titles \
          WHERE (? IS NULL OR kind = ?) \
            AND (? IS NULL OR name_lower LIKE ? ESCAPE '\\') \
@@ -365,8 +371,10 @@ pub async fn update_title(
 async fn find_title(pool: &SqlitePool, title_id: i64) -> Result<TitleRow, AppError> {
     let row = sqlx::query_as::<_, TitleRow>(
         "SELECT id, kind, name, alt_names_json, authors_json, genres_json, description, status, \
-                year, lang, rating, cover_path, origin_source_id, preferred_source_id, \
-                created_at, updated_at \
+                year, lang, rating, \
+                COALESCE((SELECT group_concat(c.size, ',') FROM title_covers c \
+                          WHERE c.title_id = titles.id), '') AS cover_sizes, \
+                origin_source_id, preferred_source_id, created_at, updated_at \
          FROM titles WHERE id = ?",
     )
     .bind(title_id)
@@ -548,6 +556,19 @@ fn normalize_list(field: &str, values: Vec<String>) -> Result<Vec<String>, AppEr
 fn json_list(values: &[String]) -> String {
     // Value::to_string не возвращает Result: ветки ошибки для Vec<String> нет
     serde_json::Value::from(values.to_vec()).to_string()
+}
+
+fn decode_cover_sizes(raw: &str) -> Vec<String> {
+    let mut sizes: Vec<CoverSize> = raw
+        .split(',')
+        .filter_map(|value| CoverSize::from_db(value.trim()))
+        .collect();
+    sizes.sort_unstable();
+    sizes.dedup();
+    sizes
+        .into_iter()
+        .map(|size| size.as_str().to_owned())
+        .collect()
 }
 
 fn decode_list(raw: &str, field: &'static str) -> Vec<String> {
