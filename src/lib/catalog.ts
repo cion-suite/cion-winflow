@@ -16,15 +16,29 @@ export type ContentKind = (typeof CONTENT_KINDS)[number];
 export const COVER_SIZES = ["low", "mid", "high"] as const;
 export type CoverSize = (typeof COVER_SIZES)[number];
 
+/** Порядок вкладок и выпадающих списков. «Любимое» — обычный статус. */
 export const LIBRARY_STATUSES = [
-  "planned",
   "in_progress",
+  "planned",
+  "favorite",
   "completed",
-  "on_hold",
   "dropped",
+  "on_hold",
   "not_interested",
 ] as const;
 export type LibraryStatus = (typeof LIBRARY_STATUSES)[number];
+
+/** Своя закладка в объединённом выборе статуса. */
+export function customStatusValue(tabId: number): string {
+  return `custom:${tabId}`;
+}
+
+/** null — встроенный статус, число — id своей закладки. */
+export function customTabIdFromValue(value: string): number | null {
+  if (!value.startsWith("custom:")) return null;
+  const id = Number(value.slice("custom:".length));
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
 
 /** Поля формы тайтла: списки и числа вводятся строками (через запятую). */
 export type TitleFormValues = {

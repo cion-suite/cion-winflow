@@ -2,22 +2,12 @@ import { useState } from "react";
 import { SettingsIcon, XIcon } from "lucide-react";
 
 import { useT } from "@/lib/i18n";
-import {
-  isReaderWidth,
-  READER_WIDTHS,
-} from "@/lib/reader";
+import { READER_WIDTHS } from "@/lib/reader";
 import { settings, useSetting } from "@/lib/settings";
 import { Button } from "@/ui/shadcn/button";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from "@/ui/shadcn/drawer";
 import { Field, FieldLabel } from "@/ui/shadcn/field";
 import { useIsMobile } from "@/ui/shadcn/hooks/use-mobile";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/ui/shadcn/select";
 import {
   Sheet,
   SheetClose,
@@ -26,6 +16,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/ui/shadcn/sheet";
+import { Slider } from "@/ui/shadcn/slider";
 
 type ReaderSettingsProps = {
   /** Текущая страница, 1-based. */
@@ -36,13 +27,13 @@ type ReaderSettingsProps = {
 function SettingsBody({ page, total }: ReaderSettingsProps) {
   const t = useT();
   const width = useSetting("readerWidth");
-  const options = READER_WIDTHS.map((value) => ({
-    value,
-    label: t(`reader.widths.${value}`),
-  }));
+  const widthIndex = Math.max(0, READER_WIDTHS.indexOf(width));
 
-  function handleWidth(next: string | null): void {
-    if (isReaderWidth(next)) void settings.set("readerWidth", next);
+  function handleWidth(value: number | readonly number[]): void {
+    const index = Array.isArray(value) ? value[0] : value;
+    if (typeof index !== "number") return;
+    const next = READER_WIDTHS[Math.round(index)];
+    if (next !== undefined) void settings.set("readerWidth", next);
   }
 
   return (
@@ -53,23 +44,27 @@ function SettingsBody({ page, total }: ReaderSettingsProps) {
         </p>
       )}
       <Field>
-        <FieldLabel>{t("reader.width")}</FieldLabel>
-        <Select
-          items={options}
-          value={width}
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>{t("reader.width")}</FieldLabel>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {t(`reader.widths.${width}`)}
+          </span>
+        </div>
+        <Slider
+          min={0}
+          max={READER_WIDTHS.length - 1}
+          step={1}
+          value={[widthIndex]}
           onValueChange={handleWidth}
+          aria-label={t("reader.width")}
+        />
+        <div
+          className="flex justify-between px-0.5 text-xs text-muted-foreground"
+          aria-hidden
         >
-          <SelectTrigger className="w-full" aria-label={t("reader.width")}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {options.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          <span>{t("reader.widths.sm")}</span>
+          <span>{t("reader.widths.full")}</span>
+        </div>
       </Field>
     </div>
   );

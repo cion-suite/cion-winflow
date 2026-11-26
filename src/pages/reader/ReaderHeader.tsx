@@ -3,13 +3,15 @@ import {
   ArrowLeftIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  HeartIcon,
 } from "lucide-react";
 
+import type { LibraryState, LibraryTab } from "@/api";
+import type { LibraryStatus } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { readerPath, titlePath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
-import { Button, buttonVariants } from "@/ui/shadcn/button";
+import { buttonVariants } from "@/ui/shadcn/button";
+import { ReaderBookmarks } from "./ReaderBookmarks";
 import { ReaderUserMenu } from "./ReaderUserMenu";
 
 type ReaderHeaderProps = {
@@ -18,25 +20,34 @@ type ReaderHeaderProps = {
   chapterLabel: string;
   previousChapterKey: string | null;
   nextChapterKey: string | null;
-  favorite: boolean;
-  favoritePending: boolean;
-  favoriteError: string | null;
+  library: LibraryState | null;
+  tabs: LibraryTab[];
+  pending: boolean;
+  errorText: string | null;
   hidden: boolean;
-  onToggleFavorite: () => void;
+  onAdd: () => void;
+  onStatus: (status: LibraryStatus) => void;
+  onCustomStatus: (tabId: number) => void;
 };
 
-/** Верхняя панель: на узком экране только навигация, на широком — ещё тайтл и «Любимое». */
+/**
+ * Верхняя панель: на узком экране только навигация, на широком — ещё
+ * название тайтла одной ссылкой со стрелкой и выбор своих закладок.
+ */
 export function ReaderHeader({
   titleId,
   titleName,
   chapterLabel,
   previousChapterKey,
   nextChapterKey,
-  favorite,
-  favoritePending,
-  favoriteError,
+  library,
+  tabs,
+  pending,
+  errorText,
   hidden,
-  onToggleFavorite,
+  onAdd,
+  onStatus,
+  onCustomStatus,
 }: ReaderHeaderProps) {
   const t = useT();
 
@@ -48,30 +59,20 @@ export function ReaderHeader({
       )}
     >
       <div className="grid h-14 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-2 sm:px-4">
-        <div className="flex min-w-0 items-center gap-1">
-          <Link
-            to="/"
-            aria-label={t("library.title")}
-            className="shrink-0 rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-          >
-            <img
-              src="/logo.png"
-              alt=""
-              width={28}
-              height={28}
-              className="size-7 rounded-full"
-            />
-          </Link>
+        <div className="flex min-w-0 items-center">
           <Link
             to={titlePath(titleId)}
             aria-label={t("reader.backToTitle")}
-            className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "sm" }),
+              "min-w-0 gap-1.5 px-2",
+            )}
           >
             <ArrowLeftIcon aria-hidden />
+            <span className="hidden min-w-0 truncate text-sm font-medium md:block">
+              {titleName}
+            </span>
           </Link>
-          <span className="hidden min-w-0 truncate text-sm font-medium md:block">
-            {titleName}
-          </span>
         </div>
 
         <div className="flex items-center gap-0.5 rounded-full border bg-background/70 p-0.5">
@@ -118,31 +119,20 @@ export function ReaderHeader({
           )}
         </div>
 
-        <div className="relative flex min-w-0 items-center justify-end gap-1">
-          <Button
-            type="button"
-            variant={favorite ? "default" : "secondary"}
-            size="lg"
-            className="hidden md:inline-flex"
-            aria-pressed={favorite}
-            disabled={favoritePending}
-            onClick={onToggleFavorite}
-          >
-            <HeartIcon
-              data-icon="inline-start"
-              className={favorite ? "fill-current" : undefined}
+        <div className="flex min-w-0 items-center justify-end gap-1">
+          <div className="hidden md:block">
+            <ReaderBookmarks
+              variant="wide"
+              library={library}
+              tabs={tabs}
+              pending={pending}
+              errorText={errorText}
+              onAdd={onAdd}
+              onStatus={onStatus}
+              onCustomStatus={onCustomStatus}
             />
-            {t("library.favorite")}
-          </Button>
+          </div>
           <ReaderUserMenu />
-          {favoriteError && (
-            <p
-              role="alert"
-              className="absolute top-full right-0 mt-1 max-w-56 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
-            >
-              {favoriteError}
-            </p>
-          )}
         </div>
       </div>
     </header>

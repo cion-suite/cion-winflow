@@ -92,9 +92,8 @@ pub struct TitleSummaryDto {
 pub struct LibraryState {
     pub status: String,
     pub score: Option<i64>,
-    pub favorite: bool,
-    /// Пользовательские закладки, в которые входит тайтл.
-    pub tab_ids: Vec<i64>,
+    /// Своя закладка как статус: перекрывает встроенный `status`.
+    pub custom_tab_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -398,31 +397,22 @@ async fn find_library_state(
     user_id: i64,
     title_id: i64,
 ) -> Result<Option<LibraryState>, AppError> {
-    let row = sqlx::query_as::<_, (String, Option<i64>, bool)>(
-        "SELECT status, score, favorite FROM library WHERE user_id = ? AND title_id = ?",
+    let row = sqlx::query_as::<_, (String, Option<i64>, Option<i64>)>(
+        "SELECT status, score, custom_tab_id FROM library WHERE user_id = ? AND title_id = ?",
     )
     .bind(user_id)
     .bind(title_id)
     .fetch_optional(pool)
     .await?;
 
-    let Some((status, score, favorite)) = row else {
+    let Some((status, score, custom_tab_id)) = row else {
         return Ok(None);
     };
-
-    let tab_ids = sqlx::query_scalar::<_, i64>(
-        "SELECT tab_id FROM library_tab_items WHERE user_id = ? AND title_id = ? ORDER BY tab_id",
-    )
-    .bind(user_id)
-    .bind(title_id)
-    .fetch_all(pool)
-    .await?;
 
     Ok(Some(LibraryState {
         status,
         score,
-        favorite,
-        tab_ids,
+        custom_tab_id,
     }))
 }
 

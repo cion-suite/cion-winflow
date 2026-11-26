@@ -243,3 +243,65 @@ async fn saved_progress_marks_the_chapter_as_read() {
     assert_eq!(library["items"][0]["read_count"], 1);
     assert_eq!(library["items"][0]["chapter_count"], 3);
 }
+
+#[tokio::test]
+async fn manual_chapter_reads_can_be_bulk_marked_and_cleared() {
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+
+    configure_fixture(&app, &admin, "http://127.0.0.1:9").await;
+    let user = app.register_extra_user("reader").await;
+    let added = add_fixture(&app, &user).await;
+    let title_id = added["title_id"].as_i64().expect("title id");
+
+    async fn put_reads(
+        app: &TestApp,
+        cookie: &str,
+        title_id: i64,
+        keys: &[&str],
+        read: bool,
+    ) -> axum::response::Response {
+        app.request(with_cookie(
+            json_request(
+                Method::PUT,
+                &format!("/api/titles/{title_id}/chapters/read"),
+                &json!({ "chapter_keys": keys, "read": read }),
+            ),
+            cookie,
+        ))
+        .await
+    }
+
+    async fn read_keys(app: &TestApp, cookie: &str, title_id: i64) -> serde_json::Value {
+        let response = app
+            .request(with_cookie(get(&format!("/api/titles/{title_id}")), cookie))
+            .await;
+        body_json(response).await["read_keys"].clone()
+    }
+
+    // «Эта глава и все предыдущие» приходит одним запросом
+    let response = put_reads(&app, &user, title_id, &["c1", "c2"], true).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["read_keys"], json!(["c1", "c2"]));
+    assert_eq!(read_keys(&app, &user, title_id).await, json!(["c1", "c2"]));
+
+    let response = app
+        .request(with_cookie(get("/api/library?q=fixture"), &user))
+        .await;
+    assert_eq!(body_json(response).await["items"][0]["read_count"], 2);
+
+    // Вернуть одну главу в непрочитанное
+    let response = put_reads(&app, &user, title_id, &["c1"], false).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["read_keys"], json!(["c2"]));
+
+    // Неизвестный ключ отклоняет весь запрос: журнал не меняется
+    let response = put_reads(&app, &user, title_id, &["c2", "missing"], false).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(response).await["code"], "chapter_not_found");
+    assert_eq!(read_keys(&app, &user, title_id).await, json!(["c2"]));
+
+    let response = put_reads(&app, &user, title_id, &[], true).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

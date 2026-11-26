@@ -10,14 +10,14 @@ export type LibraryItem = {
   title_id: number;
   status: LibraryStatus;
   score: number | null;
-  favorite: boolean;
   added_at: number;
   updated_at: number;
   /** Прочитано глав по журналу chapter_reads. */
   read_count: number;
   /** Глав в самом полном источнике. */
   chapter_count: number;
-  tab_ids: number[];
+  /** Своя закладка как статус: перекрывает встроенный `status`. */
+  custom_tab_id: number | null;
   title: TitleSummary;
 };
 
@@ -26,7 +26,7 @@ export type LibraryEntry = {
   title_id: number;
   status: LibraryStatus;
   score: number | null;
-  favorite: boolean;
+  custom_tab_id: number | null;
   added_at: number;
   updated_at: number;
 };
@@ -36,7 +36,6 @@ export type StatusCounts = Record<LibraryStatus, number>;
 export type LibraryCounts = {
   all: number;
   statuses: StatusCounts;
-  favorite: number;
 };
 
 export type LibraryListResponse = {
@@ -53,7 +52,6 @@ export type LibraryQuery = {
   /** Поиск по названию только среди своих тайтлов. */
   q?: string;
   status?: LibraryStatus;
-  favorite?: boolean;
   tabId?: number;
   sort?: LibrarySort;
 };
@@ -61,7 +59,8 @@ export type LibraryQuery = {
 export type LibraryInput = {
   status: LibraryStatus;
   score: number | null;
-  favorite: boolean;
+  /** null — встроенный статус, число — своя закладка вместо него. */
+  custom_tab_id: number | null;
 };
 
 export type LibraryTab = {
@@ -76,10 +75,6 @@ export type LibraryTabsResponse = {
   limit: number;
 };
 
-export type TitleTabsResponse = {
-  tab_ids: number[];
-};
-
 export const LIBRARY_QUERY_KEY = ["library"] as const;
 export const LIBRARY_TABS_QUERY_KEY = ["library-tabs"] as const;
 
@@ -89,7 +84,6 @@ function libraryPath(query: LibraryQuery): string {
   if (query.pageSize) params.set("page_size", String(query.pageSize));
   if (query.q) params.set("q", query.q);
   if (query.status) params.set("status", query.status);
-  if (query.favorite !== undefined) params.set("favorite", query.favorite ? "1" : "0");
   if (query.tabId) params.set("tab_id", String(query.tabId));
   if (query.sort) params.set("sort", query.sort);
 
@@ -114,11 +108,6 @@ export const libraryApi = {
     request<LibraryTab>(tabPath(tabId), jsonMutation({ name }, "PUT")),
   deleteTab: (tabId: number) =>
     request<void>(tabPath(tabId), { method: "DELETE" }),
-  setTitleTabs: (titleId: number, tabIds: number[]) =>
-    request<TitleTabsResponse>(
-      `/library/${titleId}/tabs`,
-      jsonMutation({ tab_ids: tabIds }, "PUT"),
-    ),
 };
 
 export function useLibraryQuery(
@@ -130,7 +119,6 @@ export function useLibraryQuery(
       ...LIBRARY_QUERY_KEY,
       query.q ?? "",
       query.status ?? "",
-      query.favorite ?? null,
       query.tabId ?? null,
       query.sort ?? "updated",
       query.page ?? 1,
@@ -157,6 +145,10 @@ function invalidateLibrary(
   void queryClient.invalidateQueries({ queryKey: LIBRARY_TABS_QUERY_KEY });
   if (titleId !== undefined) {
     void queryClient.invalidateQueries({ queryKey: titleQueryKey(titleId) });
+  } else {
+    // Удаление своей закладки меняет library.custom_tab_id у всех тайтлов
+    // через ON DELETE SET NULL, поэтому кэш страницы тайтла тоже устарел.
+    void queryClient.invalidateQueries({ queryKey: ["title"] });
   }
 }
 
@@ -203,14 +195,5 @@ export function useDeleteLibraryTabMutation() {
   return useMutation({
     mutationFn: (tabId: number) => libraryApi.deleteTab(tabId),
     onSuccess: () => invalidateLibrary(queryClient),
-  });
-}
-
-export function useSetTitleTabsMutation(titleId: number) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (tabIds: number[]) => libraryApi.setTitleTabs(titleId, tabIds),
-    onSuccess: () => invalidateLibrary(queryClient, titleId),
   });
 }

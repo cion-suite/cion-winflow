@@ -33,7 +33,7 @@ async fn create_tab(app: &TestApp, cookie: &str, name: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn custom_tabs_crud_limit_and_membership() {
+async fn custom_statuses_crud_limit_and_membership() {
     let app = TestApp::new().await;
     app.create_admin().await;
     let admin = app.login_admin().await;
@@ -46,7 +46,7 @@ async fn custom_tabs_crud_limit_and_membership() {
             &app,
             &user,
             title,
-            &json!({ "status": "planned", "score": null, "favorite": false }),
+            &json!({ "status": "planned", "score": null }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -98,36 +98,25 @@ async fn custom_tabs_crud_limit_and_membership() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body_json(response).await["name"], "Someday");
 
-    let response = app
-        .request(with_cookie(
-            json_request(
-                Method::PUT,
-                &format!("/api/library/{first}/tabs"),
-                &json!({ "tab_ids": [reading, favorites, reading] }),
-            ),
-            &user,
-        ))
-        .await;
+    // Своя закладка — ещё один статус, один на тайтл
+    let response = put_library(
+        &app,
+        &user,
+        first,
+        &json!({ "status": "planned", "score": null, "custom_tab_id": favorites }),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
-    assert_eq!(body["tab_ids"], json!([reading, favorites]));
+    assert_eq!(body["custom_tab_id"], favorites);
+    assert_eq!(body["status"], "planned");
 
     let response = app
         .request(with_cookie(get(&format!("/api/titles/{first}")), &user))
         .await;
     let title = body_json(response).await;
-    assert_eq!(title["library"]["favorite"], false);
-    assert_eq!(title["library"]["tab_ids"], json!([reading, favorites]));
-
-    let response = app
-        .request(with_cookie(
-            get(&format!("/api/library?tab_id={reading}")),
-            &user,
-        ))
-        .await;
-    let list = body_json(response).await;
-    assert_eq!(list["total"], 1);
-    assert_eq!(list["items"][0]["title_id"], first);
+    assert_eq!(title["library"]["custom_tab_id"], favorites);
+    assert!(title["library"].get("tab_ids").is_none());
 
     let response = app
         .request(with_cookie(
@@ -135,45 +124,79 @@ async fn custom_tabs_crud_limit_and_membership() {
             &user,
         ))
         .await;
-    assert_eq!(body_json(response).await["total"], 1);
+    let list = body_json(response).await;
+    assert_eq!(list["total"], 1);
+    assert_eq!(list["items"][0]["title_id"], first);
+    assert_eq!(list["items"][0]["custom_tab_id"], favorites);
+
+    // Свой статус перекрывает встроенный: в planned остаётся только second
+    let response = app
+        .request(with_cookie(get("/api/library?status=planned"), &user))
+        .await;
+    let list = body_json(response).await;
+    assert_eq!(list["total"], 1);
+    assert_eq!(list["items"][0]["title_id"], second);
+    assert_eq!(list["counts"]["all"], 2);
+    assert_eq!(list["counts"]["statuses"]["planned"], 1);
+
+    // Смена своей закладки заменяет статус, а не дополняет его
+    let response = put_library(
+        &app,
+        &user,
+        first,
+        &json!({ "status": "planned", "score": null, "custom_tab_id": reading }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["custom_tab_id"], reading);
+
+    let response = app
+        .request(with_cookie(get("/api/library/tabs"), &user))
+        .await;
+    let tabs = body_json(response).await;
+    let count_of = |tabs: &Value, id: i64| {
+        tabs["tabs"]
+            .as_array()
+            .expect("tabs")
+            .iter()
+            .find(|tab| tab["id"] == id)
+            .expect("tab")["count"]
+            .as_i64()
+            .expect("count")
+    };
+    assert_eq!(count_of(&tabs, reading), 1);
+    assert_eq!(count_of(&tabs, favorites), 0);
 
     // Закладка чужого пользователя не подходит
     let other = app.register_extra_user("reader-two").await;
     let other_tab = create_tab(&app, &other, "Other").await;
-    let response = app
-        .request(with_cookie(
-            json_request(
-                Method::PUT,
-                &format!("/api/library/{first}/tabs"),
-                &json!({ "tab_ids": [other_tab] }),
-            ),
-            &user,
-        ))
-        .await;
+    let response = put_library(
+        &app,
+        &user,
+        first,
+        &json!({ "status": "planned", "score": null, "custom_tab_id": other_tab }),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(body_json(response).await["code"], "library_tab_not_found");
 
-    // Тайтл вне библиотеки нельзя положить в закладку
+    // Свой статус можно выбрать и при добавлении тайтла в библиотеку
     let orphan = app.create_title(&admin, "Orphan", "manga").await;
-    let response = app
-        .request(with_cookie(
-            json_request(
-                Method::PUT,
-                &format!("/api/library/{orphan}/tabs"),
-                &json!({ "tab_ids": [reading] }),
-            ),
-            &user,
-        ))
-        .await;
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(response).await["code"], "library_not_in_library");
+    let response = put_library(
+        &app,
+        &user,
+        orphan,
+        &json!({ "status": "planned", "score": null, "custom_tab_id": reading }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
 
-    // Удаление закладки убирает её из карточки тайтла
+    // Удаление закладки очищает свой статус через FK, возвращая planned
     let response = app
         .request(with_cookie(
             json_request(
                 Method::DELETE,
-                &format!("/api/library/tabs/{favorites}"),
+                &format!("/api/library/tabs/{reading}"),
                 &json!({}),
             ),
             &user,
@@ -181,15 +204,21 @@ async fn custom_tabs_crud_limit_and_membership() {
         .await;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    let response = app
-        .request(with_cookie(get(&format!("/api/titles/{first}")), &user))
-        .await;
-    assert_eq!(
-        body_json(response).await["library"]["tab_ids"],
-        json!([reading])
-    );
+    for title_id in [first, orphan] {
+        let response = app
+            .request(with_cookie(get(&format!("/api/titles/{title_id}")), &user))
+            .await;
+        let title = body_json(response).await;
+        assert!(title["library"]["custom_tab_id"].is_null());
+        assert_eq!(title["library"]["status"], "planned");
+    }
 
-    // Удаление из библиотеки чистит закладки через составной FK
+    let response = app
+        .request(with_cookie(get("/api/library?status=planned"), &user))
+        .await;
+    assert_eq!(body_json(response).await["total"], 3);
+
+    // Удаление из библиотеки убирает и запись статуса
     let response = app
         .request(with_cookie(
             json_request(Method::DELETE, &format!("/api/library/{first}"), &json!({})),
@@ -199,20 +228,13 @@ async fn custom_tabs_crud_limit_and_membership() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     let response = app
-        .request(with_cookie(get("/api/library/tabs"), &user))
+        .request(with_cookie(get("/api/library?status=planned"), &user))
         .await;
-    let tabs = body_json(response).await;
-    let reading_tab = tabs["tabs"]
-        .as_array()
-        .expect("tabs")
-        .iter()
-        .find(|tab| tab["id"] == reading)
-        .expect("reading tab");
-    assert_eq!(reading_tab["count"], 0);
+    assert_eq!(body_json(response).await["total"], 2);
 }
 
 #[tokio::test]
-async fn library_filters_counts_and_favorite() {
+async fn library_filters_counts_and_statuses() {
     let app = TestApp::new().await;
     app.create_admin().await;
     let admin = app.login_admin().await;
@@ -222,39 +244,35 @@ async fn library_filters_counts_and_favorite() {
     let beta = app.create_title(&admin, "Beta Manga", "manga").await;
     let gamma = app.create_title(&admin, "Gamma Book", "book").await;
 
-    for (title, status, favorite) in [
-        (alpha, "planned", true),
-        (beta, "in_progress", false),
-        (gamma, "not_interested", false),
+    for (title, status) in [
+        (alpha, "favorite"),
+        (beta, "in_progress"),
+        (gamma, "not_interested"),
     ] {
         let response = put_library(
             &app,
             &user,
             title,
-            &json!({ "status": status, "score": null, "favorite": favorite }),
+            &json!({ "status": status, "score": null }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK, "put {status}");
     }
 
+    // «Любимое» — обычный статус, поэтому фильтруется через status
     let response = app
-        .request(with_cookie(get("/api/library?status=in_progress"), &user))
-        .await;
-    let list = body_json(response).await;
-    assert_eq!(list["total"], 1);
-    assert_eq!(list["items"][0]["title_id"], beta);
-    assert_eq!(list["counts"]["all"], 3);
-    assert_eq!(list["counts"]["statuses"]["in_progress"], 1);
-    assert_eq!(list["counts"]["statuses"]["not_interested"], 1);
-    assert_eq!(list["counts"]["favorite"], 1);
-
-    let response = app
-        .request(with_cookie(get("/api/library?favorite=1"), &user))
+        .request(with_cookie(get("/api/library?status=favorite"), &user))
         .await;
     let list = body_json(response).await;
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["title_id"], alpha);
-    assert_eq!(list["items"][0]["favorite"], true);
+    assert_eq!(list["items"][0]["status"], "favorite");
+    assert!(list["items"][0].get("favorite").is_none());
+    assert_eq!(list["counts"]["all"], 3);
+    assert_eq!(list["counts"]["statuses"]["favorite"], 1);
+    assert_eq!(list["counts"]["statuses"]["in_progress"], 1);
+    assert_eq!(list["counts"]["statuses"]["not_interested"], 1);
+    assert_eq!(list["counts"]["statuses"]["planned"], 0);
 
     let response = app
         .request(with_cookie(get("/api/library?q=beta"), &user))
@@ -280,23 +298,28 @@ async fn library_filters_counts_and_favorite() {
         .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    // Favorite независим от статуса: «Любимое» не затирает «Читаю».
+    // Смена статуса заменяет «Любимое», а не дополняет его
     let response = put_library(
         &app,
         &user,
         beta,
-        &json!({ "status": "in_progress", "score": 8, "favorite": true }),
+        &json!({ "status": "favorite", "score": 8 }),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let entry = body_json(response).await;
-    assert_eq!(entry["favorite"], true);
-    assert_eq!(entry["status"], "in_progress");
+    assert_eq!(entry["status"], "favorite");
+    assert_eq!(entry["score"], 8);
 
     let response = app
-        .request(with_cookie(get("/api/library?favorite=1"), &user))
+        .request(with_cookie(get("/api/library?status=favorite"), &user))
         .await;
     assert_eq!(body_json(response).await["total"], 2);
+
+    let response = app
+        .request(with_cookie(get("/api/library?status=in_progress"), &user))
+        .await;
+    assert_eq!(body_json(response).await["total"], 0);
 }
 
 #[tokio::test]

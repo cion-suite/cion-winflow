@@ -10,7 +10,7 @@ use crate::{
     extract::{ApiJson, ApiPath, ApiQuery},
     library::service::{
         self, LibraryEntryDto, LibraryInput, LibraryListResponse, LibraryParams, LibraryTabDto,
-        LibraryTabsResponse, TabNameInput, TitleTabsInput, TitleTabsResponse,
+        LibraryTabsResponse, TabNameInput,
     },
     state::AppState,
 };
@@ -77,15 +77,4 @@ pub async fn delete_tab(
 ) -> Result<StatusCode, AppError> {
     service::delete_tab(&state, user.id, tab_id).await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn set_title_tabs(
-    State(state): State<AppState>,
-    Extension(user): Extension<CurrentUser>,
-    ApiPath(title_id): ApiPath<i64>,
-    ApiJson(input): ApiJson<TitleTabsInput>,
-) -> Result<Json<TitleTabsResponse>, AppError> {
-    Ok(Json(
-        service::set_title_tabs(&state, user.id, title_id, input).await?,
-    ))
 }

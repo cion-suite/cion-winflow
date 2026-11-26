@@ -47,8 +47,8 @@ export type Title = TitleSummary & {
 export type LibraryState = {
   status: LibraryStatus;
   score: number | null;
-  favorite: boolean;
-  tab_ids: number[];
+  /** Своя закладка как статус: перекрывает встроенный `status`. */
+  custom_tab_id: number | null;
 };
 
 export type ChapterVariant = {

@@ -146,13 +146,12 @@ source_priorities(id, kind, lang, source_id, rank, created_at,
 pages(id, chapter_id, idx, image_ref, image_url, width, height)
 chapter_texts(chapter_id PK, format, body, byte_len, fetched_at, expires_at)
 
-library(user_id, title_id, status, score, favorite, added_at, updated_at,
-        PRIMARY KEY(user_id, title_id))
+library(user_id, title_id, status, score, custom_tab_id, added_at, updated_at,
+        PRIMARY KEY(user_id, title_id),
+        CHECK(status IN ('in_progress','planned','favorite','completed','dropped','on_hold','not_interested')),
+        FOREIGN KEY(custom_tab_id) REFERENCES library_tabs(id) ON DELETE SET NULL)
 library_tabs(id, user_id, name, position, created_at,
              UNIQUE(user_id, name))
-library_tab_items(user_id, tab_id, title_id, added_at,
-                  PRIMARY KEY(tab_id, title_id),
-                  FOREIGN KEY(user_id, title_id) REFERENCES library)
 progress(user_id, title_id, chapter_key, page, seconds, scroll, updated_at,
          PRIMARY KEY(user_id, title_id))
 chapter_reads(user_id, title_id, chapter_key, read_at,
@@ -165,7 +164,7 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 
 - **Канонический прогресс.** `progress` и `chapter_reads` живут в SQLite, а не в localStorage, и хранятся по `title_id` + каноническому `chapter_key`, а не по `chapter_id` конкретного источника: при переключении источника та же глава имеет другой `chapter_id`, и прогресс терялся бы. `PUT /api/progress/{title_id}` принимает `chapter_key`, проверяет, что ключ принадлежит тайтлу (глава или alias), и в той же транзакции берёт `content_kind` выбранного варианта. Для изображений позиция — `page`, для видео — `seconds`, для текста — `scroll` (0..1); несовпадение поля с `content_kind` — 400, а если `content_kind` ещё NULL — 409 `content_kind_unknown` (клиент сначала открывает главу через `/content`). Alias резолвится в canonical тем же правилом. Автоматически ключи не склеиваются: если у источников нумерация разошлась, администратор связывает их через `POST /api/titles/{title_id}/chapter-aliases`; до связывания у каждого ключа свой прогресс.
 - **Прочитанное.** `PUT /api/progress/{title_id}` в той же транзакции пишет `chapter_reads` по каноническому ключу; карточка библиотеки показывает `read_count` и `chapter_count` (максимум по `source_entries`), страница тайтла — отметку у главы. Журнал не чистится при удалении из библиотеки: возврат тайтла сохраняет историю.
-- **Библиотека и свои закладки.** Статусы — `planned|in_progress|completed|on_hold|dropped|not_interested`; `favorite` — отдельный флаг, не мешающий статусу. Своих закладок не больше трёх (`library_tabs`), имя уникально у пользователя; `library_tab_items` ссылается на пару `(user_id, title_id)` в `library`, поэтому закладка содержит только тайтлы из библиотеки и чистится вместе с записью.
+- **Библиотека и свои закладки.** Статусы — `in_progress|planned|favorite|completed|dropped|on_hold|not_interested`; «Любимое» — такой же статус, отдельного флага нет (миграция 0006). Своя закладка — ещё один статус, один на тайтл: `library.custom_tab_id` перекрывает встроенный `status`, а удаление закладки возвращает сохранённый встроенный (миграция 0007, `library_tab_items` удалена). Своих закладок не больше трёх (`library_tabs`), имя уникально у пользователя.
 - **Приоритеты источников.** `source_priorities(kind, lang, source_id, rank)`: меньший `rank` — выше приоритет, `lang = '*'` — запасной набор. Пример: `manga/ru` = Remanga → RuMix, `manga/en` — свой, `anime/ru` — свой. Приоритет — тай-брейкер, а не жёсткое назначение. Mangamir/MangaLib остаются кандидатами на будущее: локальная проверка дала 403/JS-челлендж, поэтому в фазу 5 не вошли.
 - **Полнота источника и preferred source.** После импорта и refresh `source_entries` хранит `chapter_count` (уникальные `chapter_key` без `removed_at`, не варианты групп), `available_count`, `locked_count`, `missing_count`, `stats_updated_at`. `titles.preferred_source_id` — включённый источник с максимальным `chapter_count`; при равенстве — меньший `rank`, затем `is_primary`, затем `id`; источник с `available_count = 0` не выбирается, пока есть источник с доступными главами; источник без `base_url` или с `config_error` не выбирается. `titles.origin_source_id` — откуда тайтл импортирован (это разные поля). Пересчёт — при импорте, refresh, включении/выключении источника, смене приоритетов, отвязке и падении `available_count` до нуля, не на каждый запрос.
 - **Fallback по главе.** Для канонического ключа сначала пробуется вариант из preferred source; если его нет, он locked/missing или запрос не удался — следующий вариант по доступности (`available` → `unknown` → `locked`/`missing`), затем по приоритету, `is_primary`, `ordinal_site`, `id`. Успех помечает главу `available` и заполняет `content_kind`/`page_count`; `Locked`/`NotFound` — `locked`/`missing`; временные ошибки не меняют доступность, но позволяют попробовать следующий источник.
@@ -216,16 +215,16 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `GET /api/chapters/{id}/text` | текст конкретного варианта (админ/отладка) |
 | `GET /api/pages/{id}/image` | прокси страницы из источника |
 | `GET /api/titles/{id}/cover?size=low\|mid\|high` | обложка нужного размера; отсутствующий размер отдаётся из ближайшего |
-| `GET /api/library?q=&status=&favorite=&tab_id=&sort=&page=&page_size=` | библиотека пользователя со счётчиками вкладок |
-| `PUT /api/library/{title_id}` | статус, оценка и избранное |
+| `GET /api/library?q=&status=&tab_id=&sort=&page=&page_size=` | библиотека пользователя со счётчиками вкладок |
+| `PUT /api/library/{title_id}` | статус, оценка и своя закладка (`custom_tab_id`) |
 | `DELETE /api/library/{title_id}` | убрать из библиотеки (закладки чистятся FK) |
 | `GET/POST /api/library/tabs` | свои закладки пользователя; не больше трёх |
 | `PUT/DELETE /api/library/tabs/{id}` | переименовать или удалить закладку |
-| `PUT /api/library/{title_id}/tabs` | заменить состав закладок у тайтла (`{ tab_ids }`) |
 | `GET /api/discover/search?q=&kind=` | поиск по всем включённым источникам (любая сессия) |
 | `POST /api/discover/add` | ленивый импорт найденного тайтла и добавление в библиотеку |
 | `GET /api/progress/{title_id}` | последняя позиция: `chapter_key` и `page`/`seconds`/`scroll` |
 | `PUT /api/progress/{title_id}` | сохранить `{ chapter_key, page? }` / `{ chapter_key, seconds? }` / `{ chapter_key, scroll? }` по типу контента |
+| `PUT /api/titles/{title_id}/chapters/read` | вручную отметить `{ chapter_keys, read }` пачкой; возвращает полный `read_keys` |
 | `POST /api/me/avatar` | загрузка аватарки (multipart, лимит тела) |
 | `GET /api/me/avatar`, `GET /api/users/{id}/avatar` | аватары |
 | `GET /api/sources` | скомпилированные дескрипторы + состояние: `kinds`, `capabilities`, схемы config и фильтров, `enabled`, `config_error`, `last_checked_at`, `last_error` (admin) |
@@ -779,14 +778,14 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 
 - [x] сайдбар удалён; корневой экран `/` — библиотека, `/library` редиректит; шапка: бренд, ссылки, поиск по библиотеке по центру, меню пользователя; настройка `sidebarOpen` удалена;
 - [x] экран каталога удалён, `GET /api/catalog` остаётся серверным API без UI; ручное создание тайтла перенесено в `/admin` (форма уводит на созданную карточку);
-- [x] вкладки библиотеки: статусы `planned|in_progress|completed|on_hold|dropped|not_interested`, избранное (`favorite`), до трёх своих закладок, сортировка `updated|added|title|score` и счётчики;
-- [x] `library_tabs`/`library_tab_items` (миграция 0004), составной FK на `library`; CRUD закладок и замена состава у тайтла;
+- [x] вкладки библиотеки: статусы `in_progress|planned|favorite|completed|dropped|on_hold|not_interested` («Любимое» — статус, миграция 0006), до трёх своих закладок-статусов, сортировка `updated|added|title|score` и счётчики;
+- [x] `library_tabs` (миграция 0004) и `custom_tab_id` в `library` (миграция 0007); CRUD закладок, одна своя закладка на тайтл;
 - [x] `GET /api/discover/search` по всем включённым источникам с per-source `errors` и `POST /api/discover/add` (любая сессия, отдельный rate limit): импорт выполняется один раз, затем добавляется запись библиотеки; обложки выдачи доступны с сессией;
-- [x] страница тайтла: вкладки «Главы» (первая) и «Главная»; недоступные главы скрыты; поиск, сортировка по тому/номеру, дата и источник, отметка прочитанного; «Читать» продолжает с прогресса; «Любимое», статус, свои закладки и оценка;
+- [x] страница тайтла: вкладки «Главы» (первая) и «Главная»; недоступные главы скрыты; поиск, сортировка по тому/номеру, дата и источник; глаз — кнопка отметки прочитанного, с выбором «только эта» или «эта и все предыдущие»; кнопка «Читать»/«Продолжить»/«Прочитано» зависит от прогресса; статус (включая «Любимое» и свои закладки) и оценка;
 - [x] `PUT /api/progress` пишет `chapter_reads`; `GET /api/titles/{id}` отдаёт `read_keys`, `published_at`, `source_enabled`; карточка библиотеки показывает `read_count/chapter_count`;
 - [x] тесты `library_tabs.rs` и `discover.rs`; `lint`, `build`, `test`, `fmt`, `clippy` зелёные.
 
-Критерий: пользователь без роли администратора находит тайтл в источниках и добавляет его в библиотеку; импорт происходит один раз; вкладки, избранное и свои закладки изолированы по пользователю; недоступные главы не показываются; сохранение прогресса отмечает главу прочитанной.
+Критерий: пользователь без роли администратора находит тайтл в источниках и добавляет его в библиотеку; импорт происходит один раз; вкладки и статусы (включая свои закладки) изолированы по пользователю; недоступные главы не показываются; сохранение прогресса отмечает главу прочитанной.
 
 ### Фаза 6 — видео
 
@@ -855,7 +854,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - есть bootstrap администратора;
 - все `/api`, кроме health и auth, требуют сессию; тест «без cookie → 401» и проверка `Origin` зелёные;
 - один источник пройден от поиска до чтения главы;
-- библиотека — корневой экран без сайдбара и каталога; тайтл добавляется ленивым импортом из поиска по источникам; в библиотеке работают статусы, избранное, свои закладки и отметка прочитанного;
+- библиотека — корневой экран без сайдбара и каталога; тайтл добавляется ленивым импортом из поиска по источникам; в библиотеке работают статусы (включая «Любимое» и свои закладки) и отметка прочитанного;
 - второй источник другой формы (иная нумерация или API вместо HTML) связывается с тем же тайтлом без правок контракта, БД и API; прогресс переживает переключение при совпадении ключей или после ручного `chapter_aliases`;
 - селектор источников проверен: равное число глав → приоритетный источник, больше глав → более полный, locked-глава → fallback с пометкой доступности; страница тайтла не делает запросов к источникам;
 - ридер и плеер сохраняют прогресс;

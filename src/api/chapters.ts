@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { ContentKind } from "@/lib/catalog";
 
-import { ApiError, apiUrl, request } from "./client";
+import { titleQueryKey, type TitleResponse } from "./catalog";
+import { ApiError, apiUrl, jsonMutation, request } from "./client";
 
 export type ContentPage = {
   id: number;
@@ -37,6 +38,15 @@ export type ChapterContentResponse = {
   };
 };
 
+export type ChapterReadsInput = {
+  chapter_keys: string[];
+  read: boolean;
+};
+
+export type ChapterReadsResponse = {
+  read_keys: string[];
+};
+
 export function chapterContentQueryKey(
   titleId: number | null,
   chapterKey: string | null,
@@ -49,7 +59,50 @@ export const chaptersApi = {
     request<ChapterContentResponse>(
       `/titles/${titleId}/chapters/${encodeURIComponent(chapterKey)}/content`,
     ),
+  /** Ручная отметка глав: журнал chapter_reads, прогресс чтения не меняется. */
+  setRead: (titleId: number, input: ChapterReadsInput) =>
+    request<ChapterReadsResponse>(
+      `/titles/${titleId}/chapters/read`,
+      jsonMutation(input, "PUT"),
+    ),
 };
+
+/**
+ * Сервер принимает не больше 2000 ключей за запрос, а «эта и все предыдущие»
+ * на длинном тайтле может быть больше. Пачка в 500 оставляет запас и держит
+ * каждый запрос атомарным.
+ */
+const READ_BATCH_SIZE = 500;
+
+export function useSetChapterReadMutation(titleId: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: ChapterReadsInput) => {
+      const keys = Array.from(new Set(input.chapter_keys));
+      if (keys.length <= READ_BATCH_SIZE) {
+        return chaptersApi.setRead(titleId, { ...input, chapter_keys: keys });
+      }
+
+      let response: ChapterReadsResponse = { read_keys: [] };
+      for (let start = 0; start < keys.length; start += READ_BATCH_SIZE) {
+        response = await chaptersApi.setRead(titleId, {
+          ...input,
+          chapter_keys: keys.slice(start, start + READ_BATCH_SIZE),
+        });
+      }
+      return response;
+    },
+    onSuccess: (data) => {
+      // Ответ — полный список ключей: страница тайтла обновляется без refetch
+      queryClient.setQueryData<TitleResponse>(titleQueryKey(titleId), (current) =>
+        current ? { ...current, read_keys: data.read_keys } : current,
+      );
+      // read_count карточки библиотеки считается по chapter_reads
+      void queryClient.invalidateQueries({ queryKey: ["library"] });
+    },
+  });
+}
 
 export function useChapterContentQuery(
   titleId: number | null,

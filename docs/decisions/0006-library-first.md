@@ -2,6 +2,7 @@
 
 - **Статус:** принято, реализовано в фазе 5.5
 - **Дата:** 2026-11-25
+- **Обновление:** пункт про `favorite` заменён решением [0007-favorite-status.md](0007-favorite-status.md), про свои закладки — [0008-custom-statuses.md](0008-custom-statuses.md)
 - **План:** [../planned-now.md](../planned-now.md)
 - **Связано:** [0001-server-architecture.md](0001-server-architecture.md), [0002-source-abstraction.md](0002-source-abstraction.md), [0003-source-selection.md](0003-source-selection.md), [0005-second-source-rumix.md](0005-second-source-rumix.md)
 

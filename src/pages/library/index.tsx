@@ -9,7 +9,7 @@ import {
   type LibrarySort,
   type LibraryTab,
 } from "@/api";
-import type { LibraryStatus } from "@/lib/catalog";
+import { LIBRARY_STATUSES, type LibraryStatus } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Pagination } from "@/ui/Pagination";
@@ -39,16 +39,6 @@ import { CreateTabDialog, ManageTabsDialog } from "./TabDialogs";
 const PAGE_SIZE = 24;
 const DEFAULT_TAB_LIMIT = 3;
 
-/** Порядок вкладок как в макете: «Читаю» левее «Буду читать». */
-const STATUS_ORDER: LibraryStatus[] = [
-  "in_progress",
-  "planned",
-  "completed",
-  "dropped",
-  "on_hold",
-  "not_interested",
-];
-
 /** Удалённая закладка не должна оставлять пустую вкладку выбранной. */
 function resolveView(view: string, tabs: LibraryTab[] | undefined): string {
   if (!view.startsWith("tab:") || tabs === undefined) return view;
@@ -58,8 +48,7 @@ function resolveView(view: string, tabs: LibraryTab[] | undefined): string {
 
 function viewToQuery(
   view: string,
-): Pick<LibraryQuery, "status" | "favorite" | "tabId"> {
-  if (view === "favorite") return { favorite: true };
+): Pick<LibraryQuery, "status" | "tabId"> {
   if (view.startsWith("status:")) {
     return { status: view.slice("status:".length) as LibraryStatus };
   }
@@ -99,16 +88,11 @@ export function LibraryPage() {
 
   const tabDefs = [
     { value: "all", label: t("library.tabs.all"), count: counts?.all ?? 0 },
-    ...STATUS_ORDER.map((status) => ({
+    ...LIBRARY_STATUSES.map((status) => ({
       value: `status:${status}`,
       label: t(`library.statuses.${status}`),
       count: counts?.statuses[status] ?? 0,
     })),
-    {
-      value: "favorite",
-      label: t("library.favorite"),
-      count: counts?.favorite ?? 0,
-    },
     ...customTabs.map((tab) => ({
       value: `tab:${tab.id}`,
       label: tab.name,

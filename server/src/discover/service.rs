@@ -317,8 +317,8 @@ pub async fn add(
 
     let now = now_unix();
     let inserted = sqlx::query(
-        "INSERT INTO library (user_id, title_id, status, score, favorite, added_at, updated_at) \
-         VALUES (?, ?, 'planned', NULL, 0, ?, ?) \
+        "INSERT INTO library (user_id, title_id, status, score, added_at, updated_at) \
+         VALUES (?, ?, 'planned', NULL, ?, ?) \
          ON CONFLICT (user_id, title_id) DO NOTHING",
     )
     .bind(user_id)

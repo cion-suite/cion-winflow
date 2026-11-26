@@ -1,4 +1,4 @@
-import type { LibraryState } from "@/api";
+import type { LibraryState, LibraryTab } from "@/api";
 import type { LibraryStatus } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -7,11 +7,12 @@ import { ReaderSettings } from "./ReaderSettings";
 
 type LibraryActions = {
   library: LibraryState | null;
+  tabs: LibraryTab[];
   pending: boolean;
   errorText: string | null;
   onAdd: () => void;
   onStatus: (status: LibraryStatus) => void;
-  onToggleFavorite: () => void;
+  onCustomStatus: (tabId: number) => void;
 };
 
 type ReaderControlsProps = LibraryActions & {
@@ -46,11 +47,12 @@ export function ReaderMobileControls({
   total,
   hidden,
   library,
+  tabs,
   pending,
   errorText,
   onAdd,
   onStatus,
-  onToggleFavorite,
+  onCustomStatus,
 }: ReaderControlsProps) {
   const t = useT();
 
@@ -70,11 +72,12 @@ export function ReaderMobileControls({
         <ReaderSettings page={page} total={total} />
         <ReaderBookmarks
           library={library}
+          tabs={tabs}
           pending={pending}
           errorText={errorText}
           onAdd={onAdd}
           onStatus={onStatus}
-          onToggleFavorite={onToggleFavorite}
+          onCustomStatus={onCustomStatus}
         />
       </div>
     </div>

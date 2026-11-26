@@ -129,10 +129,6 @@ pub fn router(state: AppState) -> Router {
             put(library::handlers::rename_tab).delete(library::handlers::delete_tab),
         )
         .route(
-            "/library/{title_id}/tabs",
-            put(library::handlers::set_title_tabs),
-        )
-        .route(
             "/library/{title_id}",
             put(library::handlers::upsert_library).delete(library::handlers::remove_library),
         )
@@ -141,6 +137,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/progress/{title_id}",
             get(progress::get_progress).put(progress::save_progress),
+        )
+        .route(
+            "/titles/{title_id}/chapters/read",
+            put(progress::set_chapter_reads),
         )
         .route(
             "/titles/{title_id}/chapters/{chapter_key}/content",

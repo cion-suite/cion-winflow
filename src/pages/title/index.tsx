@@ -3,9 +3,11 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   BookOpenIcon,
+  CheckIcon,
   EyeIcon,
-  HeartIcon,
+  EyeOffIcon,
   ImagesIcon,
+  PlusIcon,
   SearchIcon,
 } from "lucide-react";
 import { Link, useParams } from "react-router";
@@ -19,14 +21,20 @@ import {
   useLibraryTabsQuery,
   useProgressQuery,
   useRemoveLibraryMutation,
-  useSetTitleTabsMutation,
+  useSetChapterReadMutation,
   useTitleQuery,
   useUpdateTitleMutation,
   useUpsertLibraryMutation,
   type LibraryTab,
   type TitleChapter,
 } from "@/api";
-import type { LibraryStatus, TitleFormValues } from "@/lib/catalog";
+import {
+  customStatusValue,
+  customTabIdFromValue,
+  LIBRARY_STATUSES,
+  type LibraryStatus,
+  type TitleFormValues,
+} from "@/lib/catalog";
 import { isAvailableChapter, sortChapters } from "@/lib/chapters";
 import { useLocale, useT } from "@/lib/i18n";
 import { readerPath } from "@/lib/routes";
@@ -37,17 +45,28 @@ import { Badge } from "@/ui/shadcn/badge";
 import { Button, buttonVariants } from "@/ui/shadcn/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/ui/shadcn/card";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/ui/shadcn/dropdown-menu";
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
 } from "@/ui/shadcn/empty";
+import { Field, FieldLabel } from "@/ui/shadcn/field";
 import { Input } from "@/ui/shadcn/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/ui/shadcn/select";
@@ -127,12 +146,21 @@ function ChapterRow({
   titleId,
   chapter,
   read,
+  needsChoice,
+  pending,
   formatDate,
+  onMarkRead,
+  onMarkUnread,
 }: {
   titleId: number;
   chapter: TitleChapter;
   read: boolean;
+  /** Есть непрочитанные предыдущие главы: глаз предлагает «эта и все предыдущие». */
+  needsChoice: boolean;
+  pending: boolean;
   formatDate: (unix: number) => string;
+  onMarkRead: (withBelow: boolean) => void;
+  onMarkUnread: () => void;
 }) {
   const t = useT();
   // variants[0] может быть свежим locked preferred, а не выбранным вариантом.
@@ -141,46 +169,87 @@ function ChapterRow({
     chapter.variants[0];
   const source = variant?.source_name ?? "";
   const date = chapter.published_at === null ? null : formatDate(chapter.published_at);
+  const eyeLabel = read ? t("title.markUnread") : t("title.markRead");
 
   return (
-    <Link
-      to={readerPath(titleId, chapter.chapter_key)}
+    <div
       className={cn(
-        "flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors outline-none",
-        "hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+        "flex items-center gap-1 rounded-xl border px-2 py-2.5 transition-colors hover:bg-muted/50",
+        // Прочитанное не подсвечиваем фоном: приглушаем всю карточку, иначе
+        // muted-фон в тёмной теме выглядит ярче непрочитанного.
+        read && "text-muted-foreground opacity-50",
       )}
     >
-      <span
-        className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"
-        title={read ? t("title.chapterRead") : t("title.chapterUnread")}
+      {needsChoice ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="shrink-0"
+                aria-label={eyeLabel}
+                disabled={pending}
+              />
+            }
+          >
+            <EyeIcon aria-hidden />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-max">
+            <DropdownMenuGroup>
+              <DropdownMenuItem onClick={() => onMarkRead(false)}>
+                <EyeIcon aria-hidden />
+                <span>{t("title.readOnlyChapter")}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onMarkRead(true)}>
+                <EyeOffIcon aria-hidden />
+                <span>{t("title.readChapterAndPrevious")}</span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0"
+          aria-pressed={read}
+          aria-label={eyeLabel}
+          disabled={pending}
+          onClick={read ? onMarkUnread : () => onMarkRead(false)}
+        >
+          {read ? <EyeOffIcon aria-hidden /> : <EyeIcon aria-hidden />}
+        </Button>
+      )}
+
+      <Link
+        to={readerPath(titleId, chapter.chapter_key)}
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-0.5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
-        <EyeIcon className={cn("size-4", read && "text-primary")} aria-hidden />
-        <span className="sr-only">
-          {read ? t("title.chapterRead") : t("title.chapterUnread")}
-        </span>
-      </span>
+        {chapter.volume !== null && (
+          <span className="grid size-9 shrink-0 place-items-center rounded-lg border text-sm font-medium tabular-nums">
+            {chapter.volume}
+          </span>
+        )}
 
-      {chapter.volume !== null && (
-        <span className="grid size-9 shrink-0 place-items-center rounded-lg border text-sm font-medium tabular-nums">
-          {chapter.volume}
-        </span>
-      )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">
+            {chapterLabel(chapter, t("title.chapter"), t("title.special"))}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">
+            {[source, chapter.name].filter(Boolean).join(" · ")}
+          </p>
+        </div>
 
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">
-          {chapterLabel(chapter, t("title.chapter"), t("title.special"))}
-        </p>
-        <p className="truncate text-xs text-muted-foreground">
-          {[source, chapter.name].filter(Boolean).join(" · ")}
-        </p>
-      </div>
-
-      {date && (
-        <span className="hidden shrink-0 text-xs text-muted-foreground tabular-nums sm:inline">
-          {date}
-        </span>
-      )}
-    </Link>
+        {date && (
+          <span className="hidden shrink-0 text-xs text-muted-foreground tabular-nums sm:inline">
+            {date}
+          </span>
+        )}
+      </Link>
+    </div>
   );
 }
 
@@ -198,7 +267,7 @@ export function TitlePage() {
   const update = useUpdateTitleMutation(titleId ?? 0);
   const upsert = useUpsertLibraryMutation(titleId ?? 0);
   const remove = useRemoveLibraryMutation(titleId ?? 0);
-  const setTabs = useSetTitleTabsMutation(titleId ?? 0);
+  const setRead = useSetChapterReadMutation(titleId ?? 0);
 
   const [tab, setTab] = useState("chapters");
   const [editing, setEditing] = useState(false);
@@ -208,8 +277,9 @@ export function TitlePage() {
 
   const queryError = useErrorText(query.error);
   const updateError = useErrorText(update.error);
-  const mutationError = useErrorText(upsert.error ?? remove.error ?? setTabs.error);
-  const mutationPending = upsert.isPending || remove.isPending || setTabs.isPending;
+  const readError = useErrorText(setRead.error);
+  const mutationError = useErrorText(upsert.error ?? remove.error);
+  const mutationPending = upsert.isPending || remove.isPending;
   const isAdmin = user?.role === "admin";
 
   const availableChapters = useMemo(
@@ -220,6 +290,30 @@ export function TitlePage() {
     () => new Set(query.data?.read_keys ?? []),
     [query.data?.read_keys],
   );
+
+  // Порядок чтения: «эта глава и все предыдущие» — все главы до неё включительно
+  const ascendingChapters = useMemo(
+    () => sortChapters(availableChapters, true),
+    [availableChapters],
+  );
+  const ascendingIndex = useMemo(
+    () =>
+      new Map(
+        ascendingChapters.map((chapter, index) => [chapter.chapter_key, index]),
+      ),
+    [ascendingChapters],
+  );
+  // Главы, у которых есть непрочитанная предыдущая: для них глаз спрашивает
+  const needsChoiceKeys = useMemo(() => {
+    const keys = new Set<string>();
+    let unreadEarlier = false;
+    for (const chapter of ascendingChapters) {
+      const unread = !readKeys.has(chapter.chapter_key);
+      if (unread && unreadEarlier) keys.add(chapter.chapter_key);
+      if (unread) unreadEarlier = true;
+    }
+    return keys;
+  }, [ascendingChapters, readKeys]);
 
   const visibleChapters = useMemo(() => {
     const sorted = sortChapters(availableChapters, ascending);
@@ -234,10 +328,9 @@ export function TitlePage() {
     );
   }, [availableChapters, ascending, chapterFilter]);
 
-  const firstChapterKey = useMemo(() => {
-    const ascendingChapters = sortChapters(availableChapters, true);
-    return ascendingChapters[0]?.chapter_key ?? null;
-  }, [availableChapters]);
+  const firstChapterKey = ascendingChapters[0]?.chapter_key ?? null;
+  const lastChapterKey =
+    ascendingChapters[ascendingChapters.length - 1]?.chapter_key ?? null;
 
   const progressKey = progressQuery.data?.progress?.chapter_key ?? null;
   const readTarget = useMemo(() => {
@@ -246,6 +339,17 @@ export function TitlePage() {
     );
     return saved?.chapter_key ?? firstChapterKey;
   }, [availableChapters, progressKey, firstChapterKey]);
+
+  // «Продолжить» — прогресс не на первой главе, «Прочитано» — на последней.
+  const hasSavedProgress =
+    progressKey !== null &&
+    availableChapters.some((chapter) => chapter.chapter_key === progressKey);
+  const atLastChapter = hasSavedProgress && readTarget === lastChapterKey;
+  const readLabel = atLastChapter
+    ? t("title.finished")
+    : hasSavedProgress && readTarget !== firstChapterKey
+      ? t("title.continue")
+      : t("title.read");
 
   const formatDate = useMemo(() => makeDateFormatter(locale), [locale]);
   const tabs: LibraryTab[] = tabsQuery.data?.tabs ?? [];
@@ -292,7 +396,26 @@ export function TitlePage() {
   }
 
   const { title, library, sources, aliases } = query.data;
-  const favorite = library?.favorite ?? false;
+  const statusItems = [
+    ...LIBRARY_STATUSES.map((status) => ({
+      value: status as string,
+      label: t(`library.statuses.${status}`),
+    })),
+    ...tabs.map((tab) => ({
+      value: customStatusValue(tab.id),
+      label: tab.name,
+    })),
+  ];
+  // Если закладка уже удалена, а кэш ещё старый, показываем встроенный
+  // статус, а не пустой триггер с несуществующим custom:<id>.
+  const selectedCustomTabId = library?.custom_tab_id ?? null;
+  const selectedCustomTab =
+    selectedCustomTabId === null
+      ? undefined
+      : tabs.find((tab) => tab.id === selectedCustomTabId);
+  const selectedStatus = selectedCustomTab
+    ? customStatusValue(selectedCustomTab.id)
+    : (library?.status ?? "planned");
   const meta = [
     t(`catalog.kinds.${title.kind}`),
     title.year === null ? null : String(title.year),
@@ -305,33 +428,39 @@ export function TitlePage() {
     return {
       status: library?.status ?? "planned",
       score: library?.score ?? null,
-      favorite,
+      custom_tab_id: library?.custom_tab_id ?? null,
     };
   }
 
-  function handleStatus(status: LibraryStatus): void {
-    upsert.mutate({ ...currentInput(), status });
+  function handleStatusValue(value: string | null): void {
+    if (value === null) return;
+    const customTabId = customTabIdFromValue(value);
+    upsert.mutate(
+      customTabId === null
+        ? { ...currentInput(), status: value as LibraryStatus, custom_tab_id: null }
+        : { ...currentInput(), custom_tab_id: customTabId },
+    );
   }
 
   function handleScore(score: number | null): void {
     upsert.mutate({ ...currentInput(), score });
   }
 
-  function toggleFavorite(): void {
-    upsert.mutate({ ...currentInput(), favorite: !favorite });
-  }
-
   function addToLibrary(): void {
-    upsert.mutate(currentInput());
+    upsert.mutate({ ...currentInput(), custom_tab_id: null });
   }
 
-  function toggleTab(tabId: number): void {
-    const current = library?.tab_ids ?? [];
-    setTabs.mutate(
-      current.includes(tabId)
-        ? current.filter((value) => value !== tabId)
-        : [...current, tabId],
-    );
+  function handleMarkRead(chapter: TitleChapter, withBelow: boolean): void {
+    const index = ascendingIndex.get(chapter.chapter_key);
+    const keys =
+      withBelow && index !== undefined
+        ? ascendingChapters.slice(0, index + 1).map((item) => item.chapter_key)
+        : [chapter.chapter_key];
+    setRead.mutate({ chapter_keys: keys, read: true });
+  }
+
+  function handleMarkUnread(chapter: TitleChapter): void {
+    setRead.mutate({ chapter_keys: [chapter.chapter_key], read: false });
   }
 
   function toggleEditing(): void {
@@ -362,30 +491,78 @@ export function TitlePage() {
               to={readerPath(titleId, readTarget)}
               className={cn(buttonVariants(), "w-full")}
             >
-              <BookOpenIcon data-icon="inline-start" />
-              {t("title.read")}
+              {atLastChapter ? (
+                <CheckIcon data-icon="inline-start" />
+              ) : (
+                <BookOpenIcon data-icon="inline-start" />
+              )}
+              {readLabel}
             </Link>
           ) : (
             <Button type="button" className="w-full" disabled>
               <BookOpenIcon data-icon="inline-start" />
-              {t("title.read")}
+              {readLabel}
             </Button>
           )}
 
-          <Button
-            type="button"
-            variant={favorite ? "default" : "secondary"}
-            className="w-full"
-            aria-pressed={favorite}
-            disabled={mutationPending}
-            onClick={toggleFavorite}
-          >
-            <HeartIcon
-              data-icon="inline-start"
-              className={favorite ? "fill-current" : undefined}
-            />
-            {t("library.favorite")}
-          </Button>
+          {library ? (
+            <Field className="w-full">
+              <FieldLabel>{t("library.status")}</FieldLabel>
+              <Select
+                items={statusItems}
+                value={selectedStatus}
+                disabled={mutationPending}
+                onValueChange={handleStatusValue}
+              >
+                <SelectTrigger className="w-full" aria-label={t("library.status")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {LIBRARY_STATUSES.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {t(`library.statuses.${status}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                  {tabs.length > 0 && (
+                    <>
+                      <SelectSeparator />
+                      <SelectGroup>
+                        <SelectLabel>{t("library.customTabs")}</SelectLabel>
+                        {tabs.map((tab) => (
+                          <SelectItem
+                            key={customStatusValue(tab.id)}
+                            value={customStatusValue(tab.id)}
+                          >
+                            {tab.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full"
+                disabled={mutationPending}
+                onClick={addToLibrary}
+              >
+                <PlusIcon data-icon="inline-start" />
+                {t("title.addToLibrary")}
+              </Button>
+              {mutationError && (
+                <p role="alert" className="text-sm text-destructive">
+                  {mutationError}
+                </p>
+              )}
+            </div>
+          )}
 
           {isAdmin && (
             <Button
@@ -398,16 +575,13 @@ export function TitlePage() {
             </Button>
           )}
 
-          <LibraryPanel
-            entry={library}
-            tabs={tabs}
-            pending={mutationPending}
-            errorText={mutationError}
-            onAdd={addToLibrary}
-            onStatus={handleStatus}
-            onToggleTab={toggleTab}
-            onRemove={() => remove.mutate()}
-          />
+          {library && (
+            <LibraryPanel
+              pending={mutationPending}
+              errorText={mutationError}
+              onRemove={() => remove.mutate()}
+            />
+          )}
 
           {isAdmin && (
             <Button
@@ -501,6 +675,12 @@ export function TitlePage() {
                   </Button>
                 </div>
 
+                {readError && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {readError}
+                  </p>
+                )}
+
                 {visibleChapters.length === 0 ? (
                   <Empty className="border">
                     <EmptyHeader>
@@ -523,7 +703,16 @@ export function TitlePage() {
                         titleId={titleId}
                         chapter={chapter}
                         read={readKeys.has(chapter.chapter_key)}
+                        needsChoice={
+                          !readKeys.has(chapter.chapter_key) &&
+                          needsChoiceKeys.has(chapter.chapter_key)
+                        }
+                        pending={setRead.isPending}
                         formatDate={formatDate}
+                        onMarkRead={(withBelow) =>
+                          handleMarkRead(chapter, withBelow)
+                        }
+                        onMarkUnread={() => handleMarkUnread(chapter)}
                       />
                     ))}
                   </div>

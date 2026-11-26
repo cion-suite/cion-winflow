@@ -21,10 +21,10 @@ export function LibraryCard({ item }: { item: LibraryItem }) {
           alt={item.title.name}
           className="aspect-2/3 w-full transition-transform duration-200 group-hover:scale-[1.02]"
         />
-        {item.favorite && (
+        {item.status === "favorite" && item.custom_tab_id === null && (
           <span className="absolute top-2 right-2 grid size-7 place-items-center rounded-full bg-background/85 text-primary shadow-sm">
             <HeartIcon className="size-4 fill-current" aria-hidden />
-            <span className="sr-only">{t("library.favorite")}</span>
+            <span className="sr-only">{t("library.statuses.favorite")}</span>
           </span>
         )}
       </div>

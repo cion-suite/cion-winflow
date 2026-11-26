@@ -87,10 +87,13 @@ export {
   chapterContentQueryKey,
   pageImageUrl,
   useChapterContentQuery,
+  useSetChapterReadMutation,
 } from "./chapters";
 export type {
   ChapterContent,
   ChapterContentResponse,
+  ChapterReadsInput,
+  ChapterReadsResponse,
   ChapterSourceRef,
   ContentPage,
 } from "./chapters";
@@ -122,7 +125,6 @@ export {
   useLibraryTabsQuery,
   useRemoveLibraryMutation,
   useRenameLibraryTabMutation,
-  useSetTitleTabsMutation,
   useUpsertLibraryMutation,
 } from "./library";
 export type {
@@ -136,5 +138,4 @@ export type {
   LibraryTab,
   LibraryTabsResponse,
   StatusCounts,
-  TitleTabsResponse,
 } from "./library";

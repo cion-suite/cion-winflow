@@ -7,6 +7,7 @@ import {
   progressApi,
   useChapterContentQuery,
   useErrorText,
+  useLibraryTabsQuery,
   useProgressQuery,
   useSaveProgressMutation,
   useTitleQuery,
@@ -29,6 +30,10 @@ const EMPTY_PAGES: ContentPage[] = [];
 const SAVE_DEBOUNCE_MS = 800;
 const AROUND = 2;
 const AHEAD = 6;
+/** Небольшая прокрутка вниз прячет панели, как клик по странице. */
+const CHROME_SCROLL_THRESHOLD = 32;
+/** Программный скролл не должен считаться жестом читателя. */
+const PROGRAMMATIC_SCROLL_MS = 500;
 
 /** Бинарный поиск страницы по накопленным высотам. */
 function pageAt(offsets: number[], scrollTop: number): number {
@@ -76,6 +81,7 @@ function ReaderView({
   const progressQuery = useProgressQuery(titleId);
   const save = useSaveProgressMutation(titleId ?? 0);
   const upsert = useUpsertLibraryMutation(titleId ?? 0);
+  const tabsQuery = useLibraryTabsQuery();
   const errorText = useErrorText(contentQuery.error);
   const libraryError = useErrorText(upsert.error);
 
@@ -100,6 +106,9 @@ function ReaderView({
   const currentRef = useRef(0);
   const restoredRef = useRef(false);
   const rafRef = useRef<number | null>(null);
+  const lastScrollTopRef = useRef(0);
+  const scrollAccumulatorRef = useRef(0);
+  const suppressAutoHideUntilRef = useRef(0);
 
   const heights = useMemo(
     () =>
@@ -163,13 +172,49 @@ function ReaderView({
     return () => observer.disconnect();
   }, [pages.length]);
 
+  // Программный скролл (восстановление позиции, ширина, клавиши) не должен
+  // прятать панели: читатель их не двигал.
+  const scrollToPosition = useCallback(
+    (top: number, behavior: ScrollBehavior = "auto") => {
+      const element = scrollRef.current;
+      if (!element) return;
+      suppressAutoHideUntilRef.current = performance.now() + PROGRAMMATIC_SCROLL_MS;
+      lastScrollTopRef.current = top;
+      scrollAccumulatorRef.current = 0;
+      if (behavior === "smooth") {
+        element.scrollTo({ top, behavior });
+      } else {
+        element.scrollTop = top;
+      }
+    },
+    [],
+  );
+
   const handleScroll = useCallback(() => {
     if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       const element = scrollRef.current;
       if (!element) return;
-      setCurrent(pageAt(offsetsRef.current, element.scrollTop));
+
+      const top = element.scrollTop;
+      const delta = top - lastScrollTopRef.current;
+      lastScrollTopRef.current = top;
+      setCurrent(pageAt(offsetsRef.current, top));
+
+      if (performance.now() < suppressAutoHideUntilRef.current) return;
+
+      // Скролл вверх панели не показывает: состояние меняет только клик
+      // по странице. Вниз — прячет после небольшого хода.
+      if (delta <= 0) {
+        scrollAccumulatorRef.current = 0;
+        return;
+      }
+      scrollAccumulatorRef.current += delta;
+      if (scrollAccumulatorRef.current > CHROME_SCROLL_THRESHOLD) {
+        scrollAccumulatorRef.current = 0;
+        setChromeHidden(true);
+      }
     });
   }, []);
 
@@ -192,11 +237,8 @@ function ReaderView({
       return;
     }
     previousColumnWidthRef.current = columnWidth;
-    const element = scrollRef.current;
-    if (element) {
-      element.scrollTop = offsetsRef.current[currentRef.current] + 1;
-    }
-  }, [columnWidth]);
+    scrollToPosition(offsetsRef.current[currentRef.current] + 1);
+  }, [columnWidth, scrollToPosition]);
 
   // Восстановление позиции: ждём прогресс, чтобы не прыгнуть на первую страницу
   useEffect(() => {
@@ -209,12 +251,11 @@ function ReaderView({
     const savedPage = saved?.chapter_key === canonicalKey ? (saved.page ?? 0) : 0;
     const index = Math.min(Math.max(0, savedPage), pages.length - 1);
 
-    const element = scrollRef.current;
     // Флаг ставим только в кадре: StrictMode отменяет первый rAF и повторяет
     // эффект — иначе восстановление не выполнилось бы в dev.
     const frame = requestAnimationFrame(() => {
       restoredRef.current = true;
-      if (element) element.scrollTop = offsets[index] + 1;
+      scrollToPosition(offsets[index] + 1);
       setCurrent(index);
     });
     return () => cancelAnimationFrame(frame);
@@ -226,6 +267,7 @@ function ReaderView({
     progressQuery.data,
     chapterKey,
     contentQuery.data?.chapter_key,
+    scrollToPosition,
   ]);
 
   const mutateRef = useRef(save.mutate);
@@ -314,12 +356,12 @@ function ReaderView({
 
       event.preventDefault();
       next = Math.min(Math.max(0, next), pages.length - 1);
-      element.scrollTo({ top: values[next] + 1, behavior: "smooth" });
+      scrollToPosition(values[next] + 1, "smooth");
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [pages.length]);
+  }, [pages.length, scrollToPosition]);
 
   // Prefetch ближайших страниц: следующая должна быть готова до скролла
   useEffect(() => {
@@ -330,23 +372,24 @@ function ReaderView({
   }, [current, pages]);
 
   const library = titleQuery.data?.library ?? null;
-  const favorite = library?.favorite ?? false;
+  const tabs = tabsQuery.data?.tabs ?? [];
+  const libraryPending = upsert.isPending;
   const libraryInput = {
     status: library?.status ?? "planned",
     score: library?.score ?? null,
-    favorite,
+    custom_tab_id: library?.custom_tab_id ?? null,
   } as const;
 
-  function toggleFavorite(): void {
-    upsert.mutate({ ...libraryInput, favorite: !favorite });
+  function handleStatus(status: LibraryStatus): void {
+    upsert.mutate({ ...libraryInput, status, custom_tab_id: null });
   }
 
-  function handleStatus(status: LibraryStatus): void {
-    upsert.mutate({ ...libraryInput, status });
+  function handleCustomStatus(tabId: number): void {
+    upsert.mutate({ ...libraryInput, custom_tab_id: tabId });
   }
 
   function addToLibrary(): void {
-    upsert.mutate({ ...libraryInput, status: "planned", favorite: false });
+    upsert.mutate({ ...libraryInput, status: "planned", custom_tab_id: null });
   }
 
   if (titleId === null) {
@@ -367,11 +410,14 @@ function ReaderView({
         chapterLabel={chapterLabel}
         previousChapterKey={previousChapter?.chapter_key ?? null}
         nextChapterKey={nextChapter?.chapter_key ?? null}
-        favorite={favorite}
-        favoritePending={upsert.isPending}
-        favoriteError={libraryError}
+        library={library}
+        tabs={tabs}
+        pending={libraryPending}
+        errorText={libraryError}
         hidden={chromeHidden}
-        onToggleFavorite={toggleFavorite}
+        onAdd={addToLibrary}
+        onStatus={handleStatus}
+        onCustomStatus={handleCustomStatus}
       />
 
       <div
@@ -489,11 +535,12 @@ function ReaderView({
         total={pages.length}
         hidden={chromeHidden}
         library={library}
-        pending={upsert.isPending}
+        tabs={tabs}
+        pending={libraryPending}
         errorText={libraryError}
         onAdd={addToLibrary}
         onStatus={handleStatus}
-        onToggleFavorite={toggleFavorite}
+        onCustomStatus={handleCustomStatus}
       />
     </div>
   );

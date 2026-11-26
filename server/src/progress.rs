@@ -17,6 +17,9 @@ use crate::{
 };
 
 const MAX_KEY_CHARS: usize = 256;
+/// Пометка «прочитано до этой главы» приходит одним запросом: ограничение
+/// защищает от тела на сотни тысяч ключей.
+const MAX_READ_KEYS: usize = 2000;
 
 #[derive(Debug, Deserialize)]
 pub struct ProgressInput {
@@ -38,6 +41,17 @@ pub struct ProgressDto {
 #[derive(Debug, Serialize)]
 pub struct ProgressResponse {
     pub progress: Option<ProgressDto>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChapterReadsInput {
+    pub chapter_keys: Vec<String>,
+    pub read: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChapterReadsResponse {
+    pub read_keys: Vec<String>,
 }
 
 pub async fn get_progress(
@@ -213,6 +227,88 @@ pub async fn save_progress(
         scroll,
         updated_at,
     }))
+}
+
+/// Ручная отметка глав: не трогает прогресс чтения, только журнал
+/// `chapter_reads`. Массовая пометка «эта и все предыдущие» приходит одним
+/// запросом, поэтому ключи резолвятся пачкой и пишутся в одной транзакции.
+pub async fn set_chapter_reads(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(title_id): ApiPath<i64>,
+    ApiJson(input): ApiJson<ChapterReadsInput>,
+) -> Result<Json<ChapterReadsResponse>, AppError> {
+    if input.chapter_keys.is_empty() {
+        return Err(AppError::bad_request(
+            "validation",
+            "chapter_keys must not be empty",
+        ));
+    }
+    if input.chapter_keys.len() > MAX_READ_KEYS {
+        return Err(AppError::bad_request(
+            "validation",
+            format!("at most {MAX_READ_KEYS} chapter keys are allowed"),
+        ));
+    }
+
+    selection::load_title_info(&state.pool, title_id).await?;
+
+    let mut canonical_keys: Vec<String> = Vec::with_capacity(input.chapter_keys.len());
+    for raw in &input.chapter_keys {
+        let key = raw.trim();
+        if key.is_empty() || key.chars().count() > MAX_KEY_CHARS {
+            return Err(AppError::bad_request(
+                "invalid_chapter_key",
+                "chapter_key must be 1..=256 characters",
+            ));
+        }
+        let canonical = selection::resolve_key(&state.pool, title_id, key)
+            .await?
+            .ok_or_else(|| AppError::not_found("chapter_not_found", "chapter not found"))?;
+        if !canonical_keys.contains(&canonical) {
+            canonical_keys.push(canonical);
+        }
+    }
+
+    let now = now_unix();
+    let mut tx = state.pool.begin().await?;
+    for key in &canonical_keys {
+        if input.read {
+            sqlx::query(
+                "INSERT INTO chapter_reads (user_id, title_id, chapter_key, read_at) \
+                 VALUES (?, ?, ?, ?) \
+                 ON CONFLICT (user_id, title_id, chapter_key) DO NOTHING",
+            )
+            .bind(user.id)
+            .bind(title_id)
+            .bind(key)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query(
+                "DELETE FROM chapter_reads \
+                 WHERE user_id = ? AND title_id = ? AND chapter_key = ?",
+            )
+            .bind(user.id)
+            .bind(title_id)
+            .bind(key)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+
+    let read_keys = sqlx::query_scalar::<_, String>(
+        "SELECT chapter_key FROM chapter_reads \
+         WHERE user_id = ? AND title_id = ? ORDER BY chapter_key",
+    )
+    .bind(user.id)
+    .bind(title_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(ChapterReadsResponse { read_keys }))
 }
 
 /// Поле позиции обязано соответствовать типу контента, иначе UI незаметно
