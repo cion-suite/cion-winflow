@@ -9,9 +9,7 @@ use crate::{
     auth::session::now_unix,
     error::AppError,
     extract::ApiPath,
-    sources::{
-        ChapterKind, ContentKind, ExternalId, MediaKind, SourceChapter, SourceContent, SourcePage,
-    },
+    sources::{ChapterKind, ContentKind, ExternalId, SourceChapter, SourceContent, SourcePage},
     state::AppState,
 };
 
@@ -80,14 +78,13 @@ pub async fn canonical(
     requested_key: &str,
 ) -> Result<ContentResponse, AppError> {
     let title = selection::load_title_info(&state.pool, title_id).await?;
-    let kind = MediaKind::from_db(&title.kind).ok_or(AppError::Internal)?;
 
     let canonical_key = selection::resolve_key(&state.pool, title_id, requested_key)
         .await?
         .ok_or_else(|| AppError::not_found("chapter_not_found", "chapter not found"))?;
 
     let now = now_unix();
-    let ranks = selection::load_priorities(&state.pool, &title.kind, title.lang.as_deref()).await?;
+    let ranks = selection::load_priorities(&state.pool, title.lang.as_deref()).await?;
     let candidates = selection::candidates(&state.pool, title_id, &canonical_key).await?;
 
     if candidates.is_empty() {
@@ -160,7 +157,7 @@ pub async fn canonical(
 
         attempted = true;
         let source_chapter = source_chapter(candidate)?;
-        match adapter.content(kind, &source_chapter).await {
+        match adapter.content(&source_chapter).await {
             Ok(content) => {
                 let content = persist_success(state, candidate, content).await?;
                 return Ok(response(
@@ -238,8 +235,6 @@ pub async fn direct(state: &AppState, chapter_id: i64) -> Result<ContentResponse
     .await?
     .ok_or_else(|| AppError::not_found("chapter_not_found", "chapter not found"))?;
 
-    let title = selection::load_title_info(&state.pool, candidate.title_id).await?;
-    let kind = MediaKind::from_db(&title.kind).ok_or(AppError::Internal)?;
     let now = now_unix();
 
     if selection::view(&candidate, now) == AvailabilityView::Unavailable {
@@ -261,7 +256,7 @@ pub async fn direct(state: &AppState, chapter_id: i64) -> Result<ContentResponse
     }
 
     let source_chapter = source_chapter(&candidate)?;
-    match adapter.content(kind, &source_chapter).await {
+    match adapter.content(&source_chapter).await {
         Ok(content) => {
             let content = persist_success(state, &candidate, content).await?;
             Ok(response(&candidate, &candidate.chapter_key, content, None))

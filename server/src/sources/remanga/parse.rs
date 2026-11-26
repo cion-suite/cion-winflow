@@ -5,8 +5,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::sources::dto::{
-    ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SourceChapter, SourceContent,
-    SourceCovers, SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
+    ChapterKind, ContentKind, ExternalId, SearchPage, SourceChapter, SourceContent, SourceCovers,
+    SourcePage, SourceSearchItem, SourceTitle, TitleKind, TitleStatus,
 };
 use crate::sources::error::SourceError;
 use crate::sources::keys::{build_chapter_key, normalize_number, number_milli};
@@ -80,6 +80,8 @@ struct RawSearchItem {
     another_name: Option<String>,
     #[serde(default)]
     dir: Option<String>,
+    #[serde(default, rename = "type")]
+    title_type: Option<RawNamed>,
     #[serde(default)]
     issue_year: Option<i16>,
     #[serde(default)]
@@ -122,6 +124,8 @@ struct RawTitle {
     dir: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default, rename = "type")]
+    title_type: Option<RawNamed>,
     #[serde(default)]
     issue_year: Option<i16>,
     #[serde(default)]
@@ -196,7 +200,7 @@ pub struct ParsedChapters {
     pub next_cursor: Option<String>,
 }
 
-pub fn parse_search(raw: &str, kind: MediaKind) -> Result<SearchPage, SourceError> {
+pub fn parse_search(raw: &str) -> Result<SearchPage, SourceError> {
     let parsed: RawSearch = serde_json::from_str(raw).map_err(parse_error("search"))?;
 
     let mut items = Vec::with_capacity(parsed.results.len());
@@ -211,7 +215,7 @@ pub fn parse_search(raw: &str, kind: MediaKind) -> Result<SearchPage, SourceErro
 
         items.push(SourceSearchItem {
             external_id,
-            kind,
+            kind: title_kind(item.title_type.as_ref()),
             name: truncate_chars(name.trim(), MAX_NAME_CHARS),
             alt_names: alt_names(&item.secondary_name, &item.another_name, &name),
             // В выдаче нужен самый лёгкий вариант: он показывается в диалоге добавления
@@ -247,8 +251,9 @@ pub fn parse_search(raw: &str, kind: MediaKind) -> Result<SearchPage, SourceErro
     })
 }
 
-pub fn parse_title(raw: &str, kind: MediaKind) -> Result<SourceTitle, SourceError> {
+pub fn parse_title(raw: &str) -> Result<SourceTitle, SourceError> {
     let parsed: RawTitle = serde_json::from_str(raw).map_err(parse_error("title"))?;
+    let kind = title_kind(parsed.title_type.as_ref()).unwrap_or(TitleKind::Other);
 
     let dir = parsed
         .dir
@@ -483,6 +488,13 @@ pub fn parse_content(raw: &str) -> Result<SourceContent, SourceError> {
     Ok(SourceContent::Images { pages })
 }
 
+/// Remanga отдаёт тип как `{ id, name }`; id не используем — названия
+/// стабильнее для чтения и не требуют таблицы соответствий.
+fn title_kind(raw: Option<&RawNamed>) -> Option<TitleKind> {
+    raw.and_then(|named| named.name.as_deref())
+        .and_then(TitleKind::from_source_name)
+}
+
 pub fn map_status(name: Option<&str>) -> Option<TitleStatus> {
     match name?.trim() {
         "Продолжается" | "Выходит" => Some(TitleStatus::Ongoing),
@@ -618,13 +630,14 @@ mod tests {
 
     #[test]
     fn parses_search_items_and_cursor() {
-        let page = parse_search(SEARCH, MediaKind::Manga).expect("search");
+        let page = parse_search(SEARCH).expect("search");
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.total, Some(194));
         assert_eq!(page.next_cursor.as_deref(), Some("2"));
 
         let first = &page.items[0];
         assert_eq!(first.external_id.as_str(), "<13.10.2026>naruto_");
+        assert_eq!(first.kind, Some(TitleKind::Manga));
         assert_eq!(first.name, "Наруто");
         assert!(first.alt_names.contains(&"Naruto".to_owned()));
         // В выдаче — low-вариант, а не mid/high
@@ -638,8 +651,9 @@ mod tests {
 
     #[test]
     fn parses_title_metadata_as_plain_text() {
-        let title = parse_title(TITLE, MediaKind::Manga).expect("title");
+        let title = parse_title(TITLE).expect("title");
         assert_eq!(title.external_id.as_str(), "<13.10.2026>naruto_");
+        assert_eq!(title.kind, TitleKind::Manga);
         assert_eq!(title.name, "Наруто");
         assert_eq!(title.status, Some(TitleStatus::Completed));
         assert_eq!(title.year, Some(1999));

@@ -5,8 +5,8 @@ use reqwest::Url;
 use scraper::{ElementRef, Html, Selector};
 
 use crate::sources::dto::{
-    ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SourceChapter, SourceContent,
-    SourceCovers, SourcePage, SourceSearchItem, SourceTitle, TitleStatus,
+    ChapterKind, ContentKind, ExternalId, SearchPage, SourceChapter, SourceContent, SourceCovers,
+    SourcePage, SourceSearchItem, SourceTitle, TitleKind, TitleStatus,
 };
 use crate::sources::error::SourceError;
 use crate::sources::keys::build_chapter_key;
@@ -112,12 +112,7 @@ fn parse_total(html: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-pub fn parse_search(
-    raw: &str,
-    site: &Url,
-    kind: MediaKind,
-    offset: u64,
-) -> Result<SearchPage, SourceError> {
+pub fn parse_search(raw: &str, site: &Url, offset: u64) -> Result<SearchPage, SourceError> {
     let document = Html::parse_document(raw);
     let container_selector = selector("#advanced-results")?;
     if document.select(&container_selector).next().is_none() {
@@ -164,7 +159,8 @@ pub fn parse_search(
 
         items.push(SourceSearchItem {
             external_id,
-            kind,
+            // Плитка выдачи не содержит тип: он станет известен при импорте.
+            kind: None,
             name: truncate_chars(&name, MAX_NAME_CHARS),
             alt_names,
             cover_ref,
@@ -191,13 +187,21 @@ pub fn parse_search(
     })
 }
 
-/// Тип произведения в заголовке RuMix: «Манга», «Манхва», «Ранобэ».
-fn title_kind(raw: &str) -> MediaKind {
+/// Тип произведения в заголовке RuMix: «Манга», «Манхва», «Маньхуа» и т. п.
+/// Заголовок начинается с типа, затем идёт название. Названия берём из
+/// `TitleKind::source_name`, чтобы список типов жил в одном месте.
+fn heading_kind(raw: &str) -> Option<TitleKind> {
+    let lower = raw.trim().to_lowercase();
+    TitleKind::ALL
+        .into_iter()
+        .filter(|kind| lower.starts_with(&kind.source_name().to_lowercase()))
+        .max_by_key(|kind| kind.source_name().len())
+}
+
+/// Ранобэ RuMix — текст, а не комикс: адаптер его не умеет читать.
+fn is_novel(raw: &str) -> bool {
     let first = raw.split_whitespace().next().unwrap_or_default();
-    match first {
-        "Ранобэ" | "Ранобе" | "Новелла" => MediaKind::Book,
-        _ => MediaKind::Manga,
-    }
+    matches!(first, "Ранобэ" | "Ранобе" | "Новелла")
 }
 
 pub fn parse_title(
@@ -215,10 +219,10 @@ pub fn parse_title(
         .ok_or_else(|| parse_error("title", "missing title heading"))?;
     let heading_text = text_of(heading);
 
-    let kind = title_kind(&heading_text);
-    if kind != MediaKind::Manga {
-        return Err(SourceError::UnsupportedKind(kind.as_str().to_owned()));
+    if is_novel(&heading_text) {
+        return Err(SourceError::UnsupportedKind("novel".to_owned()));
     }
+    let kind = heading_kind(&heading_text).unwrap_or(TitleKind::Other);
 
     let name_selector = selector("h1.names > span.name")?;
     let name = document
@@ -721,7 +725,7 @@ mod tests {
 
     #[test]
     fn parses_search_results_and_total() {
-        let page = parse_search(SEARCH, &site(), MediaKind::Manga, 0).expect("search");
+        let page = parse_search(SEARCH, &site(), 0).expect("search");
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.total, Some(2));
         assert_eq!(page.next_cursor, None);
@@ -745,7 +749,7 @@ mod tests {
         let external_id = ExternalId::new("arifureta__silneishii_remeslennik_v_mire").expect("id");
         let title = parse_title(TITLE, &site(), &external_id, "ru").expect("title");
 
-        assert_eq!(title.kind, MediaKind::Manga);
+        assert_eq!(title.kind, TitleKind::Manga);
         assert_eq!(title.name, "Арифурэта: Сильнейший ремесленник в мире");
         assert!(title.alt_names.contains(&"Arifureta".to_owned()));
         assert!(title.authors.contains(&"Рё Сиракомэ".to_owned()));

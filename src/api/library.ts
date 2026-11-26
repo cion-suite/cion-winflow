@@ -4,7 +4,8 @@ import type { LibraryStatus } from "@/lib/catalog";
 import { titleQueryKey, type TitleSummary } from "./catalog";
 import { jsonMutation, request } from "./client";
 
-export type LibrarySort = "updated" | "added" | "title" | "score";
+export type LibrarySort = "updated" | "added" | "title" | "chapters" | "rating";
+export type LibraryOrder = "asc" | "desc";
 
 export type LibraryItem = {
   title_id: number;
@@ -54,6 +55,7 @@ export type LibraryQuery = {
   status?: LibraryStatus;
   tabId?: number;
   sort?: LibrarySort;
+  order?: LibraryOrder;
 };
 
 export type LibraryInput = {
@@ -86,6 +88,7 @@ function libraryPath(query: LibraryQuery): string {
   if (query.status) params.set("status", query.status);
   if (query.tabId) params.set("tab_id", String(query.tabId));
   if (query.sort) params.set("sort", query.sort);
+  if (query.order) params.set("order", query.order);
 
   const search = params.toString();
   return search ? `/library?${search}` : "/library";
@@ -121,6 +124,7 @@ export function useLibraryQuery(
       query.status ?? "",
       query.tabId ?? null,
       query.sort ?? "updated",
+      query.order ?? "desc",
       query.page ?? 1,
       query.pageSize ?? 50,
     ],

@@ -1,8 +1,6 @@
 //! Дескриптор источника — данные, а не набор трейтов: админка и обработчики
 //! узнают возможности и схему конфига без особенностей конкретного сайта.
 
-use crate::sources::dto::MediaKind;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
     Search,
@@ -40,8 +38,6 @@ pub struct SourceDescriptor {
     pub name: &'static str,
     /// Растёт при смене семантики парсинга или контракта.
     pub version: u32,
-    pub kinds: &'static [MediaKind],
-    pub default_kind: MediaKind,
     pub capabilities: &'static [Capability],
     /// Схема `config_json` для админки.
     pub config: &'static [ConfigField],
@@ -50,10 +46,6 @@ pub struct SourceDescriptor {
 }
 
 impl SourceDescriptor {
-    pub fn supports(&self, kind: MediaKind) -> bool {
-        self.kinds.contains(&kind)
-    }
-
     pub fn has(&self, capability: Capability) -> bool {
         self.capabilities.contains(&capability)
     }
@@ -63,8 +55,6 @@ impl SourceDescriptor {
 pub struct ConfigField {
     pub key: &'static str,
     pub kind: FieldType,
-    /// Пустой срез — поле применимо ко всем `kinds`.
-    pub applies_to: &'static [MediaKind],
     pub required: bool,
     pub secret: bool,
 }

@@ -121,7 +121,7 @@ async fn library_is_per_user() {
     let app = TestApp::new().await;
     app.create_admin().await;
     let admin = app.login_admin().await;
-    let title_id = app.create_title(&admin, "Shared Title", "book").await;
+    let title_id = app.create_title(&admin, "Shared Title", "other").await;
     let first = app.register_extra_user("reader-one").await;
     let second = app.register_extra_user("reader-two").await;
 
@@ -273,4 +273,116 @@ async fn library_rejects_bad_input() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let json = body_json(response).await;
     assert_eq!(json["code"], "title_not_found");
+}
+
+async fn library_names(app: &TestApp, user: &str, query: &str) -> Vec<String> {
+    let response = app
+        .request(with_cookie(get(&format!("/api/library?{query}")), user))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK, "{query}");
+    let body = body_json(response).await;
+    body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["title"]["name"].as_str().expect("name").to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn library_sorts_by_chapter_update_count_rating_and_order() {
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    let user = app.register_extra_user("sorter").await;
+
+    let alpha = app.create_title(&admin, "Alpha", "manga").await;
+    let beta = app.create_title(&admin, "Beta", "manhwa").await;
+    let gamma = app.create_title(&admin, "Gamma", "other").await;
+
+    let source_id: i64 = sqlx::query_scalar(
+        "INSERT INTO sources (code, name, enabled, created_at) VALUES ('sort', 'Sort', 1, 0) RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("source");
+
+    for (title_id, external_id, chapters, published_at, rating) in [
+        (alpha, "alpha", 1_i64, 100_i64, Some(7.0_f64)),
+        (beta, "beta", 3, 300, Some(9.0)),
+        (gamma, "gamma", 2, 200, None),
+    ] {
+        let entry_id: i64 = sqlx::query_scalar(
+            "INSERT INTO source_entries (title_id, source_id, external_id, chapter_count) \
+             VALUES (?, ?, ?, ?) RETURNING id",
+        )
+        .bind(title_id)
+        .bind(source_id)
+        .bind(external_id)
+        .bind(chapters)
+        .fetch_one(&app.pool)
+        .await
+        .expect("source entry");
+
+        sqlx::query(
+            "INSERT INTO chapters (source_entry_id, external_id, chapter_key, published_at) \
+             VALUES (?, ?, 'c1', ?)",
+        )
+        .bind(entry_id)
+        .bind(format!("{external_id}-1"))
+        .bind(published_at)
+        .execute(&app.pool)
+        .await
+        .expect("chapter");
+
+        sqlx::query("UPDATE titles SET rating = ? WHERE id = ?")
+            .bind(rating)
+            .bind(title_id)
+            .execute(&app.pool)
+            .await
+            .expect("rating");
+
+        let response = put_library(
+            &app,
+            &user,
+            title_id,
+            &json!({ "status": "planned", "score": null }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    assert_eq!(
+        library_names(&app, &user, "sort=updated").await,
+        ["Beta", "Gamma", "Alpha"]
+    );
+    assert_eq!(
+        library_names(&app, &user, "sort=updated&order=asc").await,
+        ["Alpha", "Gamma", "Beta"]
+    );
+    assert_eq!(
+        library_names(&app, &user, "sort=chapters&order=desc").await,
+        ["Beta", "Gamma", "Alpha"]
+    );
+    assert_eq!(
+        library_names(&app, &user, "sort=rating&order=desc").await,
+        ["Beta", "Alpha", "Gamma"]
+    );
+    assert_eq!(
+        library_names(&app, &user, "sort=title&order=desc").await,
+        ["Gamma", "Beta", "Alpha"]
+    );
+    assert_eq!(
+        library_names(&app, &user, "sort=title").await,
+        ["Alpha", "Beta", "Gamma"]
+    );
+
+    let response = app
+        .request(with_cookie(
+            get("/api/library?sort=title&order=sideways"),
+            &user,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(response).await["code"], "validation");
 }

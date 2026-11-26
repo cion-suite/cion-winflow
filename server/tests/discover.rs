@@ -30,7 +30,6 @@ async fn add_fixture(app: &TestApp, cookie: &str) -> serde_json::Value {
                 &json!({
                     "code": "fixture",
                     "external_id": "fixture-title",
-                    "kind": "manga",
                 }),
             ),
             cookie,
@@ -124,7 +123,6 @@ async fn discover_requires_session_and_rejects_bad_input() {
             &json!({
                 "code": "fixture",
                 "external_id": "fixture-title",
-                "kind": "manga",
             }),
         ))
         .await;
@@ -145,7 +143,6 @@ async fn discover_requires_session_and_rejects_bad_input() {
                 &json!({
                     "code": "missing",
                     "external_id": "fixture-title",
-                    "kind": "manga",
                 }),
             ),
             &user,
@@ -160,25 +157,7 @@ async fn discover_requires_session_and_rejects_bad_input() {
                 "/api/discover/add",
                 &json!({
                     "code": "fixture",
-                    "external_id": "fixture-title",
-                    "kind": "anime",
-                }),
-            ),
-            &user,
-        ))
-        .await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_json(response).await["code"], "source_unsupported_kind");
-
-    let response = app
-        .request(with_cookie(
-            json_request(
-                Method::POST,
-                "/api/discover/add",
-                &json!({
-                    "code": "fixture",
                     "external_id": "../secret",
-                    "kind": "manga",
                 }),
             ),
             &user,

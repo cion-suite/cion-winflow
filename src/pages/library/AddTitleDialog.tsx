@@ -89,7 +89,7 @@ export function AddTitleDialog({ open, onOpenChange }: AddTitleDialogProps) {
       return;
     }
     add.mutate(
-      { code: item.code, externalId: item.external_id, kind: item.kind },
+      { code: item.code, externalId: item.external_id },
       { onSuccess: (response) => openTitle(response.title_id) },
     );
   }
@@ -188,8 +188,9 @@ export function AddTitleDialog({ open, onOpenChange }: AddTitleDialogProps) {
                       <ItemDescription>
                         {item.source_name}
                         {item.year !== null ? ` · ${item.year}` : ""}
-                        {" · "}
-                        {t(`catalog.kinds.${item.kind}`)}
+                        {item.title_kind !== null && (
+                          <> · {t(`catalog.types.${item.title_kind}`)}</>
+                        )}
                       </ItemDescription>
                     </ItemContent>
                     <ItemActions>

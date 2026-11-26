@@ -10,7 +10,7 @@ use crate::{
     catalog::selection,
     error::{AppError, FieldError},
     sources::{
-        ConfigField, FieldType, MediaKind, SourceDescriptor, SourceError,
+        ConfigField, FieldType, SourceDescriptor, SourceError, TitleKind,
         config::{mask_config, merge_config, validate_config, validate_outbound_url},
         descriptor::Capability,
         dto::SearchRequest,
@@ -25,8 +25,6 @@ pub struct SourceStateDto {
     pub code: &'static str,
     pub name: &'static str,
     pub version: u32,
-    pub kinds: Vec<&'static str>,
-    pub default_kind: &'static str,
     pub capabilities: Vec<&'static str>,
     pub config_schema: Vec<Value>,
     pub filters_schema: Vec<Value>,
@@ -60,7 +58,6 @@ pub struct ConfigSaveResponse {
 #[derive(Debug, Default, Deserialize)]
 pub struct SearchInput {
     pub query: String,
-    pub kind: Option<String>,
     pub cursor: Option<String>,
     pub filters: Option<Value>,
 }
@@ -68,7 +65,8 @@ pub struct SearchInput {
 #[derive(Debug, Serialize)]
 pub struct SearchItemDto {
     pub external_id: String,
-    pub kind: &'static str,
+    /// Тип из выдачи источника, если он его отдаёт.
+    pub kind: Option<&'static str>,
     pub name: String,
     pub alt_names: Vec<String>,
     pub cover_ref: Option<String>,
@@ -87,7 +85,6 @@ pub struct SearchResponse {
 #[derive(Debug, Deserialize)]
 pub struct ImportInput {
     pub external_id: String,
-    pub kind: String,
     pub title_id: Option<i64>,
 }
 
@@ -266,11 +263,6 @@ pub async fn search(
         ));
     }
 
-    let kind = media_kind(input.kind.as_deref(), descriptor.default_kind)?;
-    if !descriptor.supports(kind) {
-        return Err(SourceError::UnsupportedKind(kind.as_str().to_owned()).into());
-    }
-
     let filters = input.filters.unwrap_or(Value::Null);
     if !descriptor.has(Capability::SearchFilters)
         && !matches!(&filters, Value::Null)
@@ -287,7 +279,6 @@ pub async fn search(
     let page = adapter
         .search(SearchRequest {
             query: input.query,
-            kind,
             cursor: input.cursor,
             filters,
         })
@@ -299,7 +290,7 @@ pub async fn search(
             .into_iter()
             .map(|item| SearchItemDto {
                 external_id: item.external_id.as_str().to_owned(),
-                kind: item.kind.as_str(),
+                kind: item.kind.map(TitleKind::as_str),
                 name: item.name,
                 alt_names: item.alt_names,
                 cover_ref: item.cover_ref,
@@ -319,13 +310,6 @@ pub async fn import(
     input: ImportInput,
 ) -> Result<ImportResponse, AppError> {
     let descriptor = descriptor(state, code).await?;
-    if input.kind.trim().is_empty() {
-        return Err(AppError::bad_request("validation", "`kind` is required"));
-    }
-    let kind = media_kind(Some(&input.kind), descriptor.default_kind)?;
-    if !descriptor.supports(kind) {
-        return Err(SourceError::UnsupportedKind(kind.as_str().to_owned()).into());
-    }
     if !descriptor.has(Capability::Chapters) {
         return Err(AppError::bad_request(
             "source_bad_request",
@@ -338,24 +322,19 @@ pub async fn import(
     let source_id = runtime.id;
     let external_id = crate::sources::ExternalId::new(input.external_id)?;
 
-    // Сеть до транзакции: импорт не атомарен между сетью и БД (§5)
-    let source_title = adapter.title(kind, &external_id).await?;
-    if source_title.kind != kind {
-        return Err(AppError::conflict(
-            "kind_mismatch",
-            "source returned a different kind",
-        ));
-    }
-    let chapters = adapter.chapters(kind, &external_id).await?;
+    // Сеть до транзакции: импорт не атомарен между сетью и БД (§5).
+    // Тип нового тайтла берём из метаданных источника.
+    let source_title = adapter.title(&external_id).await?;
+    let kind = source_title.kind;
+    let chapters = adapter.chapters(&external_id).await?;
 
     let now = now_unix();
     let mut tx = state.pool.begin().await?;
 
     let existing = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT id, title_id FROM source_entries WHERE source_id = ? AND kind = ? AND external_id = ?",
+        "SELECT id, title_id FROM source_entries WHERE source_id = ? AND external_id = ?",
     )
     .bind(source_id)
-    .bind(kind.as_str())
     .bind(external_id.as_str())
     .fetch_optional(&mut *tx)
     .await?;
@@ -374,19 +353,11 @@ pub async fn import(
         }
         None => match input.title_id {
             Some(title_id) => {
-                let existing_kind =
-                    sqlx::query_scalar::<_, String>("SELECT kind FROM titles WHERE id = ?")
-                        .bind(title_id)
-                        .fetch_optional(&mut *tx)
-                        .await?
-                        .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
-
-                if existing_kind != kind.as_str() {
-                    return Err(AppError::conflict(
-                        "kind_mismatch",
-                        "title kind does not match the imported kind",
-                    ));
-                }
+                sqlx::query_scalar::<_, i64>("SELECT 1 FROM titles WHERE id = ?")
+                    .bind(title_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
 
                 // preferred_source_id — source_id, поэтому два разных title
                 // одного источника у одного тайтла неоднозначны.
@@ -431,13 +402,12 @@ pub async fn import(
         }
         None => {
             let entry_id = sqlx::query_scalar::<_, i64>(
-                "INSERT INTO source_entries (title_id, source_id, kind, external_id, external_url, \
+                "INSERT INTO source_entries (title_id, source_id, external_id, external_url, \
                                              raw_json, is_primary, adapter_version, last_synced_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?) RETURNING id",
+                 VALUES (?, ?, ?, ?, ?, 0, ?, ?) RETURNING id",
             )
             .bind(title_id)
             .bind(source_id)
-            .bind(kind.as_str())
             .bind(external_id.as_str())
             .bind(source_title.external_url.as_deref())
             .bind(source_title.raw_json.as_ref().map(Value::to_string))
@@ -461,7 +431,7 @@ pub async fn import(
     };
 
     // Ручной тайтл мог быть создан без языка; привязка источника заполняет
-    // его, иначе сохранённый набор priorities для manga/ru не применится.
+    // его, иначе сохранённый набор priorities для языка не применится.
     if let Some(lang) = source_title.lang.as_deref() {
         sqlx::query("UPDATE titles SET lang = COALESCE(lang, ?) WHERE id = ?")
             .bind(lang)
@@ -518,7 +488,6 @@ pub async fn probe(state: &AppState, code: &str) -> Result<ProbeResponse, AppErr
     let (status, message) = match adapter
         .search(SearchRequest {
             query: "test".to_owned(),
-            kind: descriptor.default_kind,
             cursor: None,
             filters: Value::Null,
         })
@@ -558,7 +527,7 @@ pub async fn probe(state: &AppState, code: &str) -> Result<ProbeResponse, AppErr
 
 async fn create_title(
     tx: &mut Transaction<'_, Sqlite>,
-    kind: MediaKind,
+    kind: TitleKind,
     source_title: &crate::sources::SourceTitle,
     source_id: i64,
     now: i64,
@@ -724,15 +693,6 @@ async fn runtime(state: &AppState, code: &str) -> Result<std::sync::Arc<SourceRu
         .ok_or_else(|| AppError::not_found("source_not_found", "source is not registered"))
 }
 
-fn media_kind(raw: Option<&str>, default: MediaKind) -> Result<MediaKind, AppError> {
-    match raw.map(str::trim) {
-        None | Some("") => Ok(default),
-        Some(value) => MediaKind::from_db(&value.to_lowercase()).ok_or_else(|| {
-            AppError::bad_request("validation", "kind must be one of: manga, anime, book")
-        }),
-    }
-}
-
 fn normalize_base_url(raw: &str) -> Result<String, AppError> {
     let url = Url::parse(raw)
         .map_err(|_| AppError::bad_request("validation", "base_url must be an absolute URL"))?;
@@ -762,8 +722,6 @@ fn state_dto(
         code: descriptor.code,
         name: descriptor.name,
         version: descriptor.version,
-        kinds: descriptor.kinds.iter().map(|kind| kind.as_str()).collect(),
-        default_kind: descriptor.default_kind.as_str(),
         capabilities: descriptor
             .capabilities
             .iter()
@@ -791,7 +749,6 @@ fn field_schema(field: &ConfigField) -> Value {
         "kind": field.kind.kind_name(),
         "required": field.required,
         "secret": field.secret,
-        "applies_to": field.applies_to.iter().map(|kind| kind.as_str()).collect::<Vec<_>>(),
     });
 
     match field.kind {
@@ -839,12 +796,11 @@ pub struct RefreshResponse {
 /// Обновляет главы всех источников тайтла. Сеть идёт до транзакции,
 /// ошибка одного источника не отменяет остальные.
 pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshResponse, AppError> {
-    let title_kind = sqlx::query_scalar::<_, String>("SELECT kind FROM titles WHERE id = ?")
+    sqlx::query_scalar::<_, i64>("SELECT 1 FROM titles WHERE id = ?")
         .bind(title_id)
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
-    let kind = MediaKind::from_db(&title_kind).ok_or(AppError::Internal)?;
 
     let entries = sqlx::query_as::<_, (i64, i64, String, String)>(
         "SELECT e.id, e.source_id, e.external_id, s.code \
@@ -893,7 +849,7 @@ pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshRes
         // Refresh — ручная операция: добирает обложки для тайтлов,
         // импортированных до появления автоскачивания. Пустые размеры
         // только заполняются, ручные не перетираются.
-        match adapter.title(kind, &external_id).await {
+        match adapter.title(&external_id).await {
             Ok(source_title) => {
                 crate::catalog::cover::import_source_covers(
                     state,
@@ -914,7 +870,7 @@ pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshRes
             }
         }
 
-        match adapter.chapters(kind, &external_id).await {
+        match adapter.chapters(&external_id).await {
             Ok(chapters) => {
                 let now = now_unix();
                 let mut tx = state.pool.begin().await?;

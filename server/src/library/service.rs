@@ -38,6 +38,8 @@ pub struct LibraryParams {
     pub status: Option<String>,
     pub tab_id: Option<i64>,
     pub sort: Option<String>,
+    /// Направление сортировки: `asc` или `desc` (по умолчанию).
+    pub order: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,7 +189,7 @@ pub async fn list_library(
             Some(format!("%{}%", escape_like(&query.to_lowercase())))
         }
     };
-    let order = order_by(params.sort.as_deref())?;
+    let order = order_by(params.sort.as_deref(), params.order.as_deref())?;
 
     let total = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM library l JOIN titles t ON t.id = l.title_id \
@@ -214,7 +216,11 @@ pub async fn list_library(
                 (SELECT COUNT(*) FROM chapter_reads r \
                  WHERE r.user_id = l.user_id AND r.title_id = l.title_id) AS read_count, \
                 (SELECT COALESCE(MAX(e.chapter_count), 0) FROM source_entries e \
-                 WHERE e.title_id = l.title_id) AS chapter_count \
+                 WHERE e.title_id = l.title_id) AS chapter_count, \
+                (SELECT MAX(ch.published_at) FROM chapters ch \
+                 JOIN source_entries e ON e.id = ch.source_entry_id \
+                 WHERE e.title_id = l.title_id AND ch.removed_at IS NULL) \
+                 AS latest_chapter_at \
          FROM library l JOIN titles t ON t.id = l.title_id \
          WHERE l.user_id = ? \
            AND (? IS NULL OR (l.custom_tab_id IS NULL AND l.status = ?)) \
@@ -586,17 +592,53 @@ fn normalize_tab_name(raw: &str) -> Result<String, AppError> {
     Ok(name.to_owned())
 }
 
-fn order_by(sort: Option<&str>) -> Result<&'static str, AppError> {
-    match sort.map(str::trim) {
-        None | Some("") | Some("updated") => Ok("l.updated_at DESC, l.title_id DESC"),
-        Some("added") => Ok("l.added_at DESC, l.title_id DESC"),
-        Some("title") => Ok("t.name_lower ASC, l.title_id ASC"),
-        Some("score") => Ok("l.score IS NULL, l.score DESC, l.updated_at DESC"),
-        Some(_) => Err(AppError::bad_request(
-            "validation",
-            "sort must be one of: updated, added, title, score",
-        )),
-    }
+/// Нейтральные поля сортировки: направление задаётся отдельно, чтобы
+/// «по названию» и «по оценке» не дублировались в списке.
+fn order_by(sort: Option<&str>, order: Option<&str>) -> Result<String, AppError> {
+    let sort = match sort.map(str::trim) {
+        None | Some("") => "updated",
+        Some(value) => value,
+    };
+
+    // Без явного направления название читается от «А», остальные поля —
+    // от большего к меньшему. UI присылает order всегда, API — по умолчанию.
+    let direction = match order.map(str::trim) {
+        None | Some("") => {
+            if sort == "title" {
+                "ASC"
+            } else {
+                "DESC"
+            }
+        }
+        Some("desc") => "DESC",
+        Some("asc") => "ASC",
+        Some(_) => {
+            return Err(AppError::bad_request(
+                "validation",
+                "order must be one of: asc, desc",
+            ));
+        }
+    };
+
+    let primary = match sort {
+        "updated" => {
+            format!(
+                "(latest_chapter_at IS NULL), latest_chapter_at {direction}, l.title_id {direction}"
+            )
+        }
+        "added" => format!("l.added_at {direction}, l.title_id {direction}"),
+        "title" => format!("t.name_lower {direction}, l.title_id {direction}"),
+        "chapters" => format!("chapter_count {direction}, l.title_id {direction}"),
+        "rating" => format!("(t.rating IS NULL), t.rating {direction}, l.title_id {direction}"),
+        _ => {
+            return Err(AppError::bad_request(
+                "validation",
+                "sort must be one of: updated, added, title, chapters, rating",
+            ));
+        }
+    };
+
+    Ok(primary)
 }
 
 fn escape_like(value: &str) -> String {

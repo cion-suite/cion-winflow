@@ -3,7 +3,6 @@ use serde_json::Value;
 
 use crate::sources::config::{HostAllowlist, normalize_host_pattern};
 use crate::sources::descriptor::{Capability, ConfigField, FieldType, SourceDescriptor};
-use crate::sources::dto::MediaKind;
 
 pub const CODE: &str = "rumix";
 
@@ -22,8 +21,6 @@ pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
     code: CODE,
     name: "RuMix",
     version: 1,
-    kinds: &[MediaKind::Manga],
-    default_kind: MediaKind::Manga,
     capabilities: &[
         Capability::Search,
         Capability::Chapters,
@@ -37,21 +34,18 @@ pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
         ConfigField {
             key: "image_hosts",
             kind: FieldType::HostList,
-            applies_to: &[],
             required: false,
             secret: false,
         },
         ConfigField {
             key: "language",
             kind: FieldType::Select(&["ru"]),
-            applies_to: &[],
             required: false,
             secret: false,
         },
         ConfigField {
             key: "user_agent",
             kind: FieldType::Text { max_len: 300 },
-            applies_to: &[],
             required: false,
             secret: false,
         },

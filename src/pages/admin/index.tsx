@@ -1,28 +1,21 @@
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
 import { ArrowDownIcon, ArrowUpIcon, PlusIcon, ShieldIcon } from "lucide-react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 
 import {
   formValuesToTitleInput,
   useAuth,
   useCreateTitleMutation,
   useErrorText,
-  useImportSourceMutation,
   useProbeSourceMutation,
   useSaveSourcePrioritiesMutation,
   useSourcePrioritiesQuery,
-  useSourceSearchMutation,
   useSourcesQuery,
   useToggleSourceMutation,
   type SourcePriority,
   type SourceState,
 } from "@/api";
-import {
-  emptyTitleFormValues,
-  MEDIA_KINDS,
-  type MediaKind,
-  type TitleFormValues,
-} from "@/lib/catalog";
+import { emptyTitleFormValues, type TitleFormValues } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { titlePath } from "@/lib/routes";
 import { PageHeader } from "@/ui/PageHeader";
@@ -31,13 +24,6 @@ import { Badge } from "@/ui/shadcn/badge";
 import { Button } from "@/ui/shadcn/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui/shadcn/card";
 import { Input } from "@/ui/shadcn/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/ui/shadcn/select";
 import { Skeleton } from "@/ui/shadcn/skeleton";
 
 function SourceRow({ source }: { source: SourceState }) {
@@ -173,167 +159,6 @@ function SourceRow({ source }: { source: SourceState }) {
         </p>
       )}
     </div>
-  );
-}
-
-function ImportFromSource({ sources }: { sources: SourceState[] }) {
-  const t = useT();
-  const search = useSourceSearchMutation();
-  const importTitle = useImportSourceMutation();
-  const [code, setCode] = useState("");
-  const [kind, setKind] = useState<MediaKind>("manga");
-  const [query, setQuery] = useState("");
-
-  const searchError = useErrorText(search.error);
-  const importError = useErrorText(importTitle.error);
-
-  const available = sources.filter(
-    (source) =>
-      source.configured &&
-      source.enabled &&
-      source.capabilities.includes("search") &&
-      source.capabilities.includes("chapters"),
-  );
-  const selected = available.find((source) => source.code === code) ?? available[0];
-  const effectiveKind = selected?.kinds.includes(kind)
-    ? kind
-    : (selected?.default_kind ?? "manga");
-  const sourceOptions = available.map((source) => ({
-    value: source.code,
-    label: source.name,
-  }));
-  const kindOptions = (selected?.kinds ?? []).map((value) => ({
-    value,
-    label: t(`catalog.kinds.${value}`),
-  }));
-
-  function handleSearch(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const value = query.trim();
-    if (!selected || value === "") return;
-    search.mutate({
-      code: selected.code,
-      input: { query: value, kind: effectiveKind },
-    });
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("admin.importTitle")}</CardTitle>
-        <CardDescription>{t("admin.importHint")}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {available.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("admin.noImportSources")}</p>
-        ) : (
-          <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleSearch}>
-            <Select
-              items={sourceOptions}
-              value={selected?.code ?? null}
-              onValueChange={(value) => setCode(value ?? "")}
-            >
-              <SelectTrigger className="w-full sm:w-44" aria-label={t("admin.source")}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {sourceOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selected && selected.kinds.length > 1 && (
-              <Select
-                items={kindOptions}
-                value={effectiveKind}
-                onValueChange={(value) => {
-                  if (value !== null) setKind(value);
-                }}
-              >
-                <SelectTrigger className="w-full sm:w-36" aria-label={t("title.kind")}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {kindOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Input
-              value={query}
-              placeholder={t("admin.searchPlaceholder")}
-              aria-label={t("admin.searchPlaceholder")}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <Button type="submit" variant="outline" disabled={search.isPending}>
-              {t("admin.search")}
-            </Button>
-          </form>
-        )}
-
-        {searchError && (
-          <p role="alert" className="text-sm text-destructive">
-            {searchError}
-          </p>
-        )}
-        {importError && (
-          <p role="alert" className="text-sm text-destructive">
-            {importError}
-          </p>
-        )}
-
-        {importTitle.data && (
-          <p className="text-sm">
-            {t("admin.imported", { count: importTitle.data.imported_chapters })}{" "}
-            <Link className="underline" to={titlePath(importTitle.data.title_id)}>
-              {t("admin.openImported")}
-            </Link>
-          </p>
-        )}
-
-        {search.data && search.data.items.length === 0 && (
-          <p className="text-sm text-muted-foreground">{t("admin.importEmpty")}</p>
-        )}
-
-        {search.data && search.data.items.length > 0 && (
-          <ul className="divide-y divide-border rounded-lg border border-border">
-            {search.data.items.map((item) => (
-              <li
-                key={`${search.variables?.code}:${item.external_id}`}
-                className="flex items-center justify-between gap-3 px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{item.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {item.external_id}
-                    {item.year !== null ? ` · ${item.year}` : ""}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={importTitle.isPending}
-                  onClick={() =>
-                    importTitle.mutate({
-                      code: search.variables?.code ?? selected?.code ?? "",
-                      externalId: item.external_id,
-                      kind: search.variables?.input.kind ?? effectiveKind,
-                    })
-                  }
-                >
-                  {t("admin.importButton")}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -502,27 +327,20 @@ export function AdminPage() {
 
 function AdminContent() {
   const t = useT();
-  const [kind, setKind] = useState<MediaKind>("manga");
   const [lang, setLang] = useState("ru");
 
   const sources = useSourcesQuery();
-  const priorities = useSourcePrioritiesQuery(kind, lang);
+  const priorities = useSourcePrioritiesQuery(lang);
   const save = useSaveSourcePrioritiesMutation();
   const prioritiesError = useErrorText(priorities.error);
   const saveError = useErrorText(save.error);
   const sourcesError = useErrorText(sources.error);
 
   const serverCodes = priorities.data?.sources.map((source) => source.code).join(",") ?? "";
-  const kindOptions = MEDIA_KINDS.map((value) => ({
-    value,
-    label: t(`catalog.kinds.${value}`),
-  }));
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       <PageHeader title={t("admin.title")} description={t("admin.description")} />
-
-      <ImportFromSource sources={sources.data?.sources ?? []} />
 
       <ManualTitleCard />
 
@@ -555,39 +373,16 @@ function AdminContent() {
           <CardDescription>{t("admin.prioritiesHint")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="flex flex-col gap-1.5 text-sm">
-              <span className="font-medium">{t("title.kind")}</span>
-              <Select
-                items={kindOptions}
-                value={kind}
-                onValueChange={(value) => {
-                  if (value !== null) setKind(value);
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label={t("title.kind")}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {kindOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm">
-              <span className="font-medium">{t("admin.lang")}</span>
-              <Input
-                value={lang}
-                maxLength={8}
-                placeholder="ru"
-                onChange={(event) => setLang(event.target.value)}
-              />
-              <span className="text-xs text-muted-foreground">{t("admin.langHint")}</span>
-            </label>
-          </div>
+          <label className="flex max-w-xs flex-col gap-1.5 text-sm">
+            <span className="font-medium">{t("admin.lang")}</span>
+            <Input
+              value={lang}
+              maxLength={8}
+              placeholder="ru"
+              onChange={(event) => setLang(event.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">{t("admin.langHint")}</span>
+          </label>
 
           {priorities.isPending && <Skeleton className="h-32 w-full" />}
           {priorities.isError && (
@@ -603,14 +398,12 @@ function AdminContent() {
 
           {priorities.data && (
             <PrioritiesEditor
-              key={`${kind}:${lang}:${serverCodes}`}
+              key={`${lang}:${serverCodes}`}
               sources={priorities.data.sources}
               isPending={save.isPending}
               isSaved={save.isSuccess}
               errorText={saveError}
-              onSave={(codes) =>
-                save.mutate({ kind, lang: lang.trim(), sourceCodes: codes })
-              }
+              onSave={(codes) => save.mutate({ lang: lang.trim(), sourceCodes: codes })}
             />
           )}
         </CardContent>

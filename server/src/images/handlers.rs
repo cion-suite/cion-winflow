@@ -14,8 +14,7 @@ use crate::{
     error::AppError,
     extract::{ApiPath, ApiQuery},
     sources::{
-        ChapterKind, ContentKind, ExternalId, MediaKind, SourceChapter, SourceContent, SourceError,
-        SourceKind,
+        ChapterKind, ContentKind, ExternalId, SourceChapter, SourceContent, SourceError, SourceKind,
     },
     state::AppState,
 };
@@ -45,7 +44,6 @@ struct PageSourceRow {
     source_entry_id: i64,
     source_id: i64,
     title_id: i64,
-    title_kind: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,10 +193,9 @@ async fn refresh_pages(
     adapter: &SourceKind,
     row: &PageSourceRow,
 ) -> Result<(), AppError> {
-    let kind = MediaKind::from_db(&row.title_kind).ok_or(AppError::Internal)?;
     let chapter = source_chapter(row)?;
 
-    match adapter.content(kind, &chapter).await {
+    match adapter.content(&chapter).await {
         Ok(SourceContent::Images { pages }) => {
             let pages = replace_pages(&state.pool, row.chapter_id, &pages).await?;
             sqlx::query(
@@ -265,7 +262,7 @@ async fn load_page(state: &AppState, page_id: i64) -> Result<PageSourceRow, AppE
                 ch.external_id AS chapter_external_id, ch.chapter_key, ch.chapter_kind, \
                 ch.content_kind, ch.number_text, ch.number_milli, ch.volume, ch.name, \
                 ch.group_name, ch.language, ch.is_locked, ch.external_url, \
-                e.id AS source_entry_id, e.source_id, t.id AS title_id, t.kind AS title_kind \
+                e.id AS source_entry_id, e.source_id, t.id AS title_id \
          FROM pages p \
          JOIN chapters ch ON ch.id = p.chapter_id \
          JOIN source_entries e ON e.id = ch.source_entry_id \

@@ -21,8 +21,6 @@ const MAX_KEY_CHARS: usize = 256;
 pub struct AttachInput {
     pub code: String,
     pub external_id: String,
-    /// По умолчанию — тип тайтла; несовпадение проверяет импорт.
-    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,32 +46,17 @@ pub struct AliasListResponse {
 }
 
 /// Привязка источника к существующему тайтлу — тот же импорт, что и
-/// `POST /api/sources/{code}/import`, но с явным `title_id`.
+/// ленивое добавление, но с явным `title_id`.
 pub async fn attach(
     state: &AppState,
     title_id: i64,
     input: AttachInput,
 ) -> Result<ImportResponse, AppError> {
-    let title_kind = sqlx::query_scalar::<_, String>("SELECT kind FROM titles WHERE id = ?")
-        .bind(title_id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
-
-    let kind = input
-        .kind
-        .as_deref()
-        .map(str::trim)
-        .filter(|kind| !kind.is_empty())
-        .map(str::to_owned)
-        .unwrap_or(title_kind);
-
     service::import(
         state,
         input.code.trim(),
         ImportInput {
             external_id: input.external_id,
-            kind,
             title_id: Some(title_id),
         },
     )

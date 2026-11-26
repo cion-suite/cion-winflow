@@ -15,7 +15,6 @@ pub const MISSING_TTL_SECS: i64 = 24 * 60 * 60;
 #[derive(Debug, sqlx::FromRow)]
 pub struct TitleInfo {
     pub id: i64,
-    pub kind: String,
     pub lang: Option<String>,
     pub preferred_source_id: Option<i64>,
 }
@@ -66,13 +65,11 @@ pub struct EntryStats {
 }
 
 pub async fn load_title_info(pool: &SqlitePool, title_id: i64) -> Result<TitleInfo, AppError> {
-    sqlx::query_as::<_, TitleInfo>(
-        "SELECT id, kind, lang, preferred_source_id FROM titles WHERE id = ?",
-    )
-    .bind(title_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))
+    sqlx::query_as::<_, TitleInfo>("SELECT id, lang, preferred_source_id FROM titles WHERE id = ?")
+        .bind(title_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))
 }
 
 /// Alias важнее одноимённой главы: администратор явно связал ключи.
@@ -159,7 +156,6 @@ pub fn is_fresh(checked_at: Option<i64>, now: i64, ttl_secs: i64) -> bool {
 
 pub async fn load_priorities(
     pool: &SqlitePool,
-    kind: &str,
     lang: Option<&str>,
 ) -> Result<HashMap<i64, i64>, AppError> {
     let language = lang.unwrap_or("*");
@@ -168,9 +164,8 @@ pub async fn load_priorities(
     // наборов смешивались бы и '*' мог обогнать язык-специфичный источник.
     let rows = sqlx::query_as::<_, (i64, i64)>(
         "SELECT source_id, rank FROM source_priorities \
-         WHERE kind = ? AND lang = ? ORDER BY rank",
+         WHERE lang = ? ORDER BY rank",
     )
-    .bind(kind)
     .bind(language)
     .fetch_all(pool)
     .await?;
@@ -181,9 +176,8 @@ pub async fn load_priorities(
 
     let fallback = sqlx::query_as::<_, (i64, i64)>(
         "SELECT source_id, rank FROM source_priorities \
-         WHERE kind = ? AND lang = '*' ORDER BY rank",
+         WHERE lang = '*' ORDER BY rank",
     )
-    .bind(kind)
     .fetch_all(pool)
     .await?;
 
@@ -290,11 +284,11 @@ pub async fn recompute_titles_for_source(
     Ok(())
 }
 
-/// Пересчитывает preferred у всех тайтлов типа: приоритеты задаются
-/// на (kind, lang), поэтому смена списка может затронуть любой язык.
-pub async fn recompute_titles_for_kind(pool: &SqlitePool, kind: &str) -> Result<(), AppError> {
-    let title_ids = sqlx::query_scalar::<_, i64>("SELECT id FROM titles WHERE kind = ?")
-        .bind(kind)
+/// Пересчитывает preferred у всех тайтлов. Приоритеты задаются на язык,
+/// а язык тайтла мог измениться, поэтому после правки списка проще пройтись
+/// по всем: на self-host базе это дешёвая операция.
+pub async fn recompute_all_titles(pool: &SqlitePool) -> Result<(), AppError> {
+    let title_ids = sqlx::query_scalar::<_, i64>("SELECT id FROM titles")
         .fetch_all(pool)
         .await?;
 
@@ -311,7 +305,7 @@ pub async fn recompute_preferred(
     title_id: i64,
 ) -> Result<Option<i64>, AppError> {
     let title = load_title_info(pool, title_id).await?;
-    let ranks = load_priorities(pool, &title.kind, title.lang.as_deref()).await?;
+    let ranks = load_priorities(pool, title.lang.as_deref()).await?;
 
     let entries = sqlx::query_as::<_, (i64, i64, i64, bool)>(
         "SELECT e.source_id, e.chapter_count, e.available_count, e.is_primary \

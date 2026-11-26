@@ -21,9 +21,9 @@ mod contract;
 
 pub use descriptor::{Capability, ConfigField, FieldType, SourceDescriptor};
 pub use dto::{
-    ChapterKind, ContentKind, CoverSize, ExternalId, MediaKind, SearchPage, SearchRequest,
-    SourceChapter, SourceContent, SourceCovers, SourcePage, SourceSearchItem, SourceText,
-    SourceTitle, TextFormat, TitleStatus,
+    ChapterKind, ContentKind, CoverSize, ExternalId, SearchPage, SearchRequest, SourceChapter,
+    SourceContent, SourceCovers, SourcePage, SourceSearchItem, SourceText, SourceTitle, TextFormat,
+    TitleKind, TitleStatus,
 };
 pub use error::SourceError;
 
@@ -54,10 +54,6 @@ impl SourceKind {
         }
     }
 
-    pub fn supports(&self, kind: MediaKind) -> bool {
-        self.descriptor().supports(kind)
-    }
-
     pub async fn search(&self, request: SearchRequest) -> Result<SearchPage, SourceError> {
         match self {
             Self::Remanga(source) => source.search(request).await,
@@ -67,55 +63,42 @@ impl SourceKind {
         }
     }
 
-    pub async fn title(
-        &self,
-        kind: MediaKind,
-        external_id: &ExternalId,
-    ) -> Result<SourceTitle, SourceError> {
+    pub async fn title(&self, external_id: &ExternalId) -> Result<SourceTitle, SourceError> {
         match self {
-            Self::Remanga(source) => source.title(kind, external_id).await,
-            Self::Rumix(source) => source.title(kind, external_id).await,
+            Self::Remanga(source) => source.title(external_id).await,
+            Self::Rumix(source) => source.title(external_id).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.title(kind, external_id).await,
+            Self::Fixture(source) => source.title(external_id).await,
         }
     }
 
     pub async fn chapters(
         &self,
-        kind: MediaKind,
         external_id: &ExternalId,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         match self {
-            Self::Remanga(source) => source.chapters(kind, external_id).await,
-            Self::Rumix(source) => source.chapters(kind, external_id).await,
+            Self::Remanga(source) => source.chapters(external_id).await,
+            Self::Rumix(source) => source.chapters(external_id).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.chapters(kind, external_id).await,
+            Self::Fixture(source) => source.chapters(external_id).await,
         }
     }
 
-    pub async fn content(
-        &self,
-        kind: MediaKind,
-        chapter: &SourceChapter,
-    ) -> Result<SourceContent, SourceError> {
+    pub async fn content(&self, chapter: &SourceChapter) -> Result<SourceContent, SourceError> {
         match self {
-            Self::Remanga(source) => source.content(kind, chapter).await,
-            Self::Rumix(source) => source.content(kind, chapter).await,
+            Self::Remanga(source) => source.content(chapter).await,
+            Self::Rumix(source) => source.content(chapter).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.content(kind, chapter).await,
+            Self::Fixture(source) => source.content(chapter).await,
         }
     }
 
-    pub async fn text(
-        &self,
-        kind: MediaKind,
-        chapter: &SourceChapter,
-    ) -> Result<SourceText, SourceError> {
+    pub async fn text(&self, chapter: &SourceChapter) -> Result<SourceText, SourceError> {
         match self {
-            Self::Remanga(source) => source.text(kind, chapter).await,
-            Self::Rumix(source) => source.text(kind, chapter).await,
+            Self::Remanga(source) => source.text(chapter).await,
+            Self::Rumix(source) => source.text(chapter).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.text(kind, chapter).await,
+            Self::Fixture(source) => source.text(chapter).await,
         }
     }
 

@@ -58,7 +58,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/ui/shadcn/empty";
-import { Field, FieldLabel } from "@/ui/shadcn/field";
 import { Input } from "@/ui/shadcn/input";
 import {
   Select,
@@ -417,7 +416,7 @@ export function TitlePage() {
     ? customStatusValue(selectedCustomTab.id)
     : (library?.status ?? "planned");
   const meta = [
-    t(`catalog.kinds.${title.kind}`),
+    t(`catalog.types.${title.kind}`),
     title.year === null ? null : String(title.year),
     title.status === null ? null : t(`title.statuses.${title.status}`),
   ]
@@ -506,44 +505,41 @@ export function TitlePage() {
           )}
 
           {library ? (
-            <Field className="w-full">
-              <FieldLabel>{t("library.status")}</FieldLabel>
-              <Select
-                items={statusItems}
-                value={selectedStatus}
-                disabled={mutationPending}
-                onValueChange={handleStatusValue}
-              >
-                <SelectTrigger className="w-full" aria-label={t("library.status")}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {LIBRARY_STATUSES.map((status) => (
-                      <SelectItem key={status} value={status}>
-                        {t(`library.statuses.${status}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                  {tabs.length > 0 && (
-                    <>
-                      <SelectSeparator />
-                      <SelectGroup>
-                        <SelectLabel>{t("library.customTabs")}</SelectLabel>
-                        {tabs.map((tab) => (
-                          <SelectItem
-                            key={customStatusValue(tab.id)}
-                            value={customStatusValue(tab.id)}
-                          >
-                            {tab.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </>
-                  )}
-                </SelectContent>
-              </Select>
-            </Field>
+            <Select
+              items={statusItems}
+              value={selectedStatus}
+              disabled={mutationPending}
+              onValueChange={handleStatusValue}
+            >
+              <SelectTrigger className="w-full" aria-label={t("library.status")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {LIBRARY_STATUSES.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {t(`library.statuses.${status}`)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                {tabs.length > 0 && (
+                  <>
+                    <SelectSeparator />
+                    <SelectGroup>
+                      <SelectLabel>{t("library.customTabs")}</SelectLabel>
+                      {tabs.map((tab) => (
+                        <SelectItem
+                          key={customStatusValue(tab.id)}
+                          value={customStatusValue(tab.id)}
+                        >
+                          {tab.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </>
+                )}
+              </SelectContent>
+            </Select>
           ) : (
             <div className="flex flex-col gap-1.5">
               <Button
@@ -765,8 +761,14 @@ export function TitlePage() {
                     </MetaRow>
                   )}
                   {title.genres.length > 0 && (
-                    <MetaRow label={t("title.genres")}>
-                      {title.genres.join(", ")}
+                    <MetaRow label={t("title.tags")}>
+                      <div className="flex flex-wrap gap-1.5">
+                        {title.genres.map((tag) => (
+                          <Badge key={tag} variant="secondary">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
                     </MetaRow>
                   )}
                   {title.lang !== null && (
@@ -833,7 +835,6 @@ export function TitlePage() {
                 {isAdmin && (
                   <AdminSourcePanel
                     titleId={titleId}
-                    titleKind={title.kind}
                     sources={sources}
                     preferredSourceId={title.preferred_source_id}
                   />

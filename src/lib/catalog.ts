@@ -1,7 +1,17 @@
 /** Значения, общие для API и форм: строки-коды, которые принимает сервер. */
 
-export const MEDIA_KINDS = ["manga", "anime", "book"] as const;
-export type MediaKind = (typeof MEDIA_KINDS)[number];
+/** Тип произведения. Список повторяет типы Remanga; аниме и книги — не типы. */
+export const TITLE_KINDS = [
+  "manga",
+  "manhwa",
+  "manhua",
+  "western_comic",
+  "ru_comic",
+  "indonesian_comic",
+  "other",
+  "original",
+] as const;
+export type TitleKind = (typeof TITLE_KINDS)[number];
 
 export const TITLE_STATUSES = ["ongoing", "completed", "hiatus", "cancelled"] as const;
 export type TitleStatus = (typeof TITLE_STATUSES)[number];
@@ -43,7 +53,7 @@ export function customTabIdFromValue(value: string): number | null {
 /** Поля формы тайтла: списки и числа вводятся строками (через запятую). */
 export type TitleFormValues = {
   name: string;
-  kind: MediaKind;
+  kind: TitleKind;
   altNames: string;
   authors: string;
   genres: string;

@@ -122,8 +122,8 @@ async fn import_fixture(app: &TestApp, admin: &str) -> Value {
         .request(with_cookie(
             json_request(
                 Method::POST,
-                "/api/sources/fixture/import",
-                &json!({ "external_id": "fixture-title", "kind": "manga" }),
+                "/api/discover/add",
+                &json!({ "code": "fixture", "external_id": "fixture-title" }),
             ),
             admin,
         ))
@@ -280,11 +280,6 @@ async fn search_import_and_title_reads_only_database() {
     let imported = import_fixture(&app, &admin).await;
     assert_eq!(imported["title_created"], true);
     assert_eq!(imported["imported_chapters"], 3);
-    // Обложка источника скачивается автоматически: у fixture только mid.
-    assert_eq!(imported["covers_imported"], 1);
-    assert_eq!(imported["stats"]["chapter_count"], 3);
-    assert_eq!(imported["stats"]["available_count"], 2);
-    assert_eq!(imported["stats"]["locked_count"], 1);
 
     let title_id = imported["title_id"].as_i64().expect("title id");
     let before = fixture::call_count();
@@ -542,7 +537,7 @@ async fn image_proxy_caches_and_cover_allowlist() {
 }
 
 #[tokio::test]
-async fn import_rejects_bad_kind_id_and_unknown_source() {
+async fn discover_add_rejects_bad_id_and_unknown_source() {
     let _guard = lock().await;
     let (base_url, _server) = start_image_server().await;
     let app = TestApp::new().await;
@@ -554,21 +549,8 @@ async fn import_rejects_bad_kind_id_and_unknown_source() {
         .request(with_cookie(
             json_request(
                 Method::POST,
-                "/api/sources/fixture/import",
-                &json!({ "external_id": "fixture-title", "kind": "anime" }),
-            ),
-            &admin,
-        ))
-        .await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_json(response).await["code"], "source_unsupported_kind");
-
-    let response = app
-        .request(with_cookie(
-            json_request(
-                Method::POST,
-                "/api/sources/fixture/import",
-                &json!({ "external_id": "a/b", "kind": "manga" }),
+                "/api/discover/add",
+                &json!({ "code": "fixture", "external_id": "a/b" }),
             ),
             &admin,
         ))
@@ -578,25 +560,6 @@ async fn import_rejects_bad_kind_id_and_unknown_source() {
         body_json(response).await["code"],
         "source_invalid_external_id"
     );
-
-    // Тайтл другого типа: 409, а не молчаливое смешивание
-    let anime_title = app.create_title(&admin, "Anime Title", "anime").await;
-    let response = app
-        .request(with_cookie(
-            json_request(
-                Method::POST,
-                "/api/sources/fixture/import",
-                &json!({
-                    "external_id": "fixture-title",
-                    "kind": "manga",
-                    "title_id": anime_title,
-                }),
-            ),
-            &admin,
-        ))
-        .await;
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(response).await["code"], "kind_mismatch");
 
     let response = app
         .request(with_cookie(
@@ -615,8 +578,20 @@ async fn import_rejects_bad_kind_id_and_unknown_source() {
         .request(with_cookie(
             json_request(
                 Method::POST,
-                "/api/sources/remanga/import",
-                &json!({ "external_id": "x", "kind": "manga" }),
+                "/api/discover/add",
+                &json!({ "code": "remanga", "external_id": "x" }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                "/api/discover/add",
+                &json!({ "code": "nope", "external_id": "fixture-title" }),
             ),
             &admin,
         ))

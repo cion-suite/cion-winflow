@@ -12,7 +12,7 @@ use axum::http::{Method, StatusCode, header};
 use serde_json::json;
 
 use cion_reader::sources::{
-    MediaKind, SearchRequest, SourceContent,
+    SearchRequest, SourceContent,
     http::{AdapterCtx, metadata_client},
     rumix::{Rumix, RumixConfig},
 };
@@ -32,7 +32,6 @@ async fn rumix_search_title_chapters_content() {
     let page = adapter
         .search(SearchRequest {
             query: "arifureta".to_owned(),
-            kind: MediaKind::Manga,
             cursor: None,
             filters: Value::Null,
         })
@@ -48,16 +47,10 @@ async fn rumix_search_title_chapters_content() {
         .find(|item| item.external_id.as_str() == "arifureta__silneishii_remeslennik_v_mire")
         .unwrap_or(&page.items[0]);
 
-    let title = adapter
-        .title(MediaKind::Manga, &item.external_id)
-        .await
-        .expect("title");
+    let title = adapter.title(&item.external_id).await.expect("title");
     assert!(!title.name.is_empty());
 
-    let chapters = adapter
-        .chapters(MediaKind::Manga, &item.external_id)
-        .await
-        .expect("chapters");
+    let chapters = adapter.chapters(&item.external_id).await.expect("chapters");
     assert!(!chapters.is_empty(), "title must have chapters");
 
     // Первая глава (c0) бесплатная и не запланирована; новейшие могут быть
@@ -67,10 +60,7 @@ async fn rumix_search_title_chapters_content() {
         .find(|chapter| chapter.chapter_key == "v1:c0")
         .or_else(|| chapters.last())
         .expect("readable chapter");
-    let content = adapter
-        .content(MediaKind::Manga, chapter)
-        .await
-        .expect("content");
+    let content = adapter.content(chapter).await.expect("content");
     let SourceContent::Images { pages } = content else {
         panic!("expected images");
     };
@@ -129,8 +119,8 @@ async fn rumix_end_to_end_through_router() {
         .request(with_cookie(
             json_request(
                 Method::POST,
-                "/api/sources/rumix/import",
-                &json!({ "external_id": external_id, "kind": "manga" }),
+                "/api/discover/add",
+                &json!({ "code": "rumix", "external_id": external_id }),
             ),
             &admin,
         ))

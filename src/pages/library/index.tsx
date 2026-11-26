@@ -1,10 +1,17 @@
 import { useState } from "react";
-import { LibraryBigIcon, PencilIcon, PlusIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  LibraryBigIcon,
+  PencilIcon,
+  PlusIcon,
+} from "lucide-react";
 
 import {
   useErrorText,
   useLibraryQuery,
   useLibraryTabsQuery,
+  type LibraryOrder,
   type LibraryQuery,
   type LibrarySort,
   type LibraryTab,
@@ -62,6 +69,7 @@ export function LibraryPage() {
   const t = useT();
   const [view, setView] = useState("all");
   const [sort, setSort] = useState<LibrarySort>("updated");
+  const [order, setOrder] = useState<LibraryOrder>("desc");
   const [page, setPage] = useState(1);
   const [addOpen, setAddOpen] = useState(false);
   const [createTabOpen, setCreateTabOpen] = useState(false);
@@ -73,6 +81,7 @@ export function LibraryPage() {
   const library = useLibraryQuery({
     ...viewToQuery(effectiveView),
     sort,
+    order,
     page,
     pageSize: PAGE_SIZE,
   });
@@ -105,8 +114,16 @@ export function LibraryPage() {
     setPage(1);
   }
 
+  // Направление по умолчанию подстраивается под поле: название удобнее
+  // читать от «А», остальные — от большего к меньшему.
   function changeSort(next: LibrarySort): void {
     setSort(next);
+    setOrder(next === "title" ? "asc" : "desc");
+    setPage(1);
+  }
+
+  function toggleOrder(): void {
+    setOrder((current: LibraryOrder) => (current === "asc" ? "desc" : "asc"));
     setPage(1);
   }
 
@@ -114,7 +131,8 @@ export function LibraryPage() {
     { value: "updated", label: t("library.sorts.updated") },
     { value: "added", label: t("library.sorts.added") },
     { value: "title", label: t("library.sorts.title") },
-    { value: "score", label: t("library.sorts.score") },
+    { value: "chapters", label: t("library.sorts.chapters") },
+    { value: "rating", label: t("library.sorts.rating") },
   ] as const;
 
   return (
@@ -188,13 +206,25 @@ export function LibraryPage() {
         </div>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          aria-label={
+            order === "asc" ? t("library.sortAsc") : t("library.sortDesc")
+          }
+          title={order === "asc" ? t("library.sortAsc") : t("library.sortDesc")}
+          onClick={toggleOrder}
+        >
+          {order === "asc" ? <ArrowUpIcon /> : <ArrowDownIcon />}
+        </Button>
         <Select
           items={sortOptions}
           value={sort}
           onValueChange={(value) => changeSort(value as LibrarySort)}
         >
-          <SelectTrigger className="w-48" aria-label={t("library.sortLabel")}>
+          <SelectTrigger className="w-56" aria-label={t("library.sortLabel")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

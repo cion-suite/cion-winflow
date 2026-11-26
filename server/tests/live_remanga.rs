@@ -7,7 +7,7 @@ use reqwest::Url;
 use serde_json::Value;
 
 use cion_reader::sources::{
-    MediaKind, SearchRequest, SourceContent,
+    SearchRequest, SourceContent,
     http::{AdapterCtx, metadata_client},
     remanga::{Remanga, RemangaConfig},
 };
@@ -26,7 +26,6 @@ async fn remanga_search_title_chapters_content() {
     let page = adapter
         .search(SearchRequest {
             query: "naruto".to_owned(),
-            kind: MediaKind::Manga,
             cursor: None,
             filters: Value::Null,
         })
@@ -42,10 +41,7 @@ async fn remanga_search_title_chapters_content() {
     }
 
     let first = &page.items[0];
-    let title = adapter
-        .title(MediaKind::Manga, &first.external_id)
-        .await
-        .expect("title");
+    let title = adapter.title(&first.external_id).await.expect("title");
     assert!(!title.name.is_empty());
 
     // Все варианты обложки из ответа `titles/{dir}` разрешаются в URL.
@@ -58,7 +54,7 @@ async fn remanga_search_title_chapters_content() {
     }
 
     let chapters = adapter
-        .chapters(MediaKind::Manga, &first.external_id)
+        .chapters(&first.external_id)
         .await
         .expect("chapters");
     assert!(!chapters.is_empty(), "title must have chapters");
@@ -68,10 +64,7 @@ async fn remanga_search_title_chapters_content() {
         .find(|chapter| !chapter.is_locked)
         .expect("at least one unlocked chapter");
 
-    let content = adapter
-        .content(MediaKind::Manga, chapter)
-        .await
-        .expect("content");
+    let content = adapter.content(chapter).await.expect("content");
     match content {
         SourceContent::Images { pages } => assert!(!pages.is_empty()),
         other => panic!("expected images, got {other:?}"),

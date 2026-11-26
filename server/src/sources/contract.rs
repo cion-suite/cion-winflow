@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use crate::sources::{
-    ChapterKind, ContentKind, MediaKind, SourceDescriptor, config::config_example,
+    ChapterKind, ContentKind, SourceDescriptor, TitleKind, config::config_example,
     descriptor::FieldType,
 };
 
@@ -22,11 +22,6 @@ fn descriptor_is_sane(descriptor: &SourceDescriptor) {
     );
     assert!(!descriptor.name.is_empty());
     assert!(descriptor.version > 0);
-    assert!(!descriptor.kinds.is_empty());
-    assert!(
-        descriptor.kinds.contains(&descriptor.default_kind),
-        "default_kind must be one of kinds"
-    );
 
     let mut config_keys = HashSet::new();
     for field in descriptor.config {
@@ -36,12 +31,6 @@ fn descriptor_is_sane(descriptor: &SourceDescriptor) {
             "duplicate config key {}",
             field.key
         );
-        for kind in field.applies_to {
-            assert!(
-                descriptor.kinds.contains(kind),
-                "applies_to kind `{kind}` is not declared by source"
-            );
-        }
         if let FieldType::Select(options) | FieldType::MultiSelect(options) = field.kind {
             assert!(!options.is_empty(), "empty options for {}", field.key);
         }
@@ -75,11 +64,8 @@ fn descriptor_is_sane(descriptor: &SourceDescriptor) {
 fn remanga_passes_contract() {
     descriptor_is_sane(&crate::sources::remanga::DESCRIPTOR);
 
-    let search = super::remanga::parse::parse_search(
-        include_str!("remanga/fixtures/search.json"),
-        MediaKind::Manga,
-    )
-    .expect("search fixture");
+    let search = super::remanga::parse::parse_search(include_str!("remanga/fixtures/search.json"))
+        .expect("search fixture");
     assert!(!search.items.is_empty());
     let mut external_ids = HashSet::new();
     for item in &search.items {
@@ -90,12 +76,9 @@ fn remanga_passes_contract() {
         );
     }
 
-    let title = super::remanga::parse::parse_title(
-        include_str!("remanga/fixtures/title.json"),
-        MediaKind::Manga,
-    )
-    .expect("title fixture");
-    assert_eq!(title.kind, MediaKind::Manga);
+    let title = super::remanga::parse::parse_title(include_str!("remanga/fixtures/title.json"))
+        .expect("title fixture");
+    assert_eq!(title.kind, TitleKind::Manga);
     assert!(!title.name.is_empty());
 
     let chapters = super::remanga::parse::parse_chapters(
@@ -163,13 +146,9 @@ fn rumix_passes_contract() {
     descriptor_is_sane(&crate::sources::rumix::DESCRIPTOR);
 
     let site = reqwest::Url::parse("https://rumix.me").expect("site");
-    let search = super::rumix::parse::parse_search(
-        include_str!("rumix/fixtures/search.html"),
-        &site,
-        MediaKind::Manga,
-        0,
-    )
-    .expect("search fixture");
+    let search =
+        super::rumix::parse::parse_search(include_str!("rumix/fixtures/search.html"), &site, 0)
+            .expect("search fixture");
     assert!(!search.items.is_empty());
     let mut external_ids = HashSet::new();
     for item in &search.items {
@@ -189,7 +168,7 @@ fn rumix_passes_contract() {
         "ru",
     )
     .expect("title fixture");
-    assert_eq!(title.kind, MediaKind::Manga);
+    assert_eq!(title.kind, TitleKind::Manga);
     assert!(!title.name.is_empty());
 
     let chapters =

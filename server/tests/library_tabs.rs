@@ -242,7 +242,7 @@ async fn library_filters_counts_and_statuses() {
 
     let alpha = app.create_title(&admin, "Alpha Manga", "manga").await;
     let beta = app.create_title(&admin, "Beta Manga", "manga").await;
-    let gamma = app.create_title(&admin, "Gamma Book", "book").await;
+    let gamma = app.create_title(&admin, "Gamma Book", "other").await;
 
     for (title, status) in [
         (alpha, "favorite"),

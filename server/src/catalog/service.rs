@@ -10,11 +10,10 @@ use crate::{
     },
     error::AppError,
     pagination,
-    sources::CoverSize,
+    sources::{CoverSize, TitleKind},
     state::AppState,
 };
 
-pub const KINDS: [&str; 3] = ["manga", "anime", "book"];
 pub const TITLE_STATUSES: [&str; 4] = ["ongoing", "completed", "hiatus", "cancelled"];
 
 const MAX_NAME_CHARS: usize = 300;
@@ -265,7 +264,6 @@ pub async fn get_title(
     let library = find_library_state(pool, user_id, title_id).await?;
     let info = selection::TitleInfo {
         id: title.id,
-        kind: title.kind.clone(),
         lang: title.lang.clone(),
         preferred_source_id: title.preferred_source_id,
     };
@@ -325,20 +323,6 @@ pub async fn update_title(
 ) -> Result<TitleDto, AppError> {
     let current = find_title(&state.pool, title_id).await?;
     let title = validate_title(input)?;
-
-    if title.kind != current.kind {
-        let entries: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM source_entries WHERE title_id = ?")
-                .bind(title_id)
-                .fetch_one(&state.pool)
-                .await?;
-        if entries > 0 {
-            return Err(AppError::conflict(
-                "kind_locked",
-                "cannot change kind while source entries are attached",
-            ));
-        }
-    }
 
     sqlx::query(
         "UPDATE titles SET kind = ?, name = ?, name_lower = ?, alt_names_json = ?, \
@@ -519,13 +503,11 @@ fn validate_title(input: TitleInput) -> Result<ValidatedTitle, AppError> {
 
 fn validate_kind(kind: &str) -> Result<String, AppError> {
     let kind = kind.trim().to_lowercase();
-    if KINDS.contains(&kind.as_str()) {
+    if TitleKind::from_db(&kind).is_some() {
         Ok(kind)
     } else {
-        Err(validation(format!(
-            "kind must be one of: {}",
-            KINDS.join(", ")
-        )))
+        let allowed = TitleKind::ALL.map(TitleKind::as_str).join(", ");
+        Err(validation(format!("kind must be one of: {allowed}")))
     }
 }
 

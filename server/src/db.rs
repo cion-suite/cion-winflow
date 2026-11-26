@@ -13,6 +13,8 @@ pub enum DbError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("cannot create database directory: {0}")]
     Io(#[from] std::io::Error),
+    #[error("foreign key check after migrations found {0} violation(s)")]
+    ForeignKeyCheck(usize),
 }
 
 /// Пул SQLite с настройками из плана и миграциями при старте.
@@ -40,6 +42,40 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool, DbError> {
         .connect_with(options)
         .await?;
 
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    run_migrations(&pool).await?;
     Ok(pool)
+}
+
+/// Применяет миграции с выключенными внешними ключами.
+///
+/// 0008 пересобирает `titles` и `source_entries`. Дочерние таблицы ссылаются
+/// на них с ON DELETE CASCADE, а SQLx для SQLite всегда оборачивает миграцию
+/// в транзакцию, где `PRAGMA foreign_keys` — no-op. Выключаем ключи на
+/// соединении мигратора до запуска и включаем после, иначе `DROP TABLE`
+/// родителя каскадно удалит пользовательские данные. После включения
+/// проверяем целостность: миграция не должна оставить висячие ссылки.
+pub async fn run_migrations(pool: &SqlitePool) -> Result<(), DbError> {
+    let migrator = sqlx::migrate!("./migrations");
+    let mut connection = pool.acquire().await?;
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *connection)
+        .await?;
+    let migrated = migrator.run(&mut *connection).await;
+    let fk_restored = sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *connection)
+        .await;
+
+    migrated?;
+    fk_restored?;
+
+    let violations = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&mut *connection)
+        .await?;
+    let violations = violations.len();
+    drop(connection);
+
+    if violations > 0 {
+        return Err(DbError::ForeignKeyCheck(violations));
+    }
+    Ok(())
 }

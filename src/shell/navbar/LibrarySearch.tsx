@@ -121,7 +121,7 @@ export function LibrarySearch() {
                         {item.title.name}
                       </span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {t(`catalog.kinds.${item.title.kind}`)}
+                        {t(`catalog.types.${item.title.kind}`)}
                         {item.title.year !== null ? ` · ${item.title.year}` : ""}
                       </span>
                     </span>

@@ -40,18 +40,34 @@ async fn configure_fixture(app: &TestApp, admin: &str) -> String {
 }
 
 async fn import_fixture(app: &TestApp, admin: &str, title_id: Option<i64>) -> Value {
-    let mut body = json!({ "external_id": "fixture-title", "kind": "manga" });
-    if let Some(title_id) = title_id {
-        body["title_id"] = json!(title_id);
-    }
+    // Существующий тайтл привязывается через /sources, новый импортируется
+    // ленивым добавлением: отдельного админского импорта больше нет.
+    let (path, body) = match title_id {
+        Some(title_id) => (
+            format!("/api/titles/{title_id}/sources"),
+            json!({ "code": "fixture", "external_id": "fixture-title" }),
+        ),
+        None => (
+            "/api/discover/add".to_owned(),
+            json!({ "code": "fixture", "external_id": "fixture-title" }),
+        ),
+    };
     let response = app
-        .request(with_cookie(
-            json_request(Method::POST, "/api/sources/fixture/import", &body),
-            admin,
-        ))
+        .request(with_cookie(json_request(Method::POST, &path, &body), admin))
         .await;
     assert_eq!(response.status(), StatusCode::OK, "import fixture");
-    body_json(response).await
+    let mut imported = body_json(response).await;
+    if imported["source_entry_id"].is_null() {
+        let entry_id: i64 = sqlx::query_scalar(
+            "SELECT e.id FROM source_entries e JOIN sources s ON s.id = e.source_id              WHERE e.title_id = ? AND s.code = 'fixture'",
+        )
+        .bind(imported["title_id"].as_i64())
+        .fetch_one(&app.pool)
+        .await
+        .expect("fixture source entry");
+        imported["source_entry_id"] = json!(entry_id);
+    }
+    imported
 }
 
 async fn get_json(app: &TestApp, uri: &str, cookie: &str) -> Value {
@@ -93,9 +109,9 @@ async fn seed_remanga_entry(
 
     let entry_id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO source_entries \
-         (title_id, source_id, kind, external_id, is_primary, chapter_count, available_count, \
+         (title_id, source_id, external_id, is_primary, chapter_count, available_count, \
           locked_count, missing_count, stats_updated_at, last_synced_at) \
-         VALUES (?, ?, 'manga', 'remanga-title', 0, ?, ?, 0, 0, ?, ?) RETURNING id",
+         VALUES (?, ?, 'remanga-title', 0, ?, ?, 0, 0, ?, ?) RETURNING id",
     )
     .bind(title_id)
     .bind(remanga_id)
@@ -152,7 +168,6 @@ async fn priorities_replace_and_preferred_source_recompute() {
                 Method::PUT,
                 "/api/admin/source-priorities",
                 &json!({
-                    "kind": "manga",
                     "lang": "ru",
                     "source_codes": ["remanga", "fixture"],
                 }),
@@ -175,7 +190,6 @@ async fn priorities_replace_and_preferred_source_recompute() {
                 Method::PUT,
                 "/api/admin/source-priorities",
                 &json!({
-                    "kind": "manga",
                     "lang": "ru",
                     "source_codes": ["fixture", "remanga"],
                 }),
@@ -201,7 +215,6 @@ async fn priorities_replace_and_preferred_source_recompute() {
                 Method::PUT,
                 "/api/admin/source-priorities",
                 &json!({
-                    "kind": "manga",
                     "lang": "ru",
                     "source_codes": ["fixture", "remanga"],
                 }),
@@ -237,7 +250,7 @@ async fn exact_language_priorities_override_star_fallback() {
             json_request(
                 Method::PUT,
                 "/api/admin/source-priorities",
-                &json!({ "kind": "manga", "lang": "ru", "source_codes": ["fixture"] }),
+                &json!({ "lang": "ru", "source_codes": ["fixture"] }),
             ),
             &admin,
         ))
@@ -248,7 +261,7 @@ async fn exact_language_priorities_override_star_fallback() {
             json_request(
                 Method::PUT,
                 "/api/admin/source-priorities",
-                &json!({ "kind": "manga", "lang": "*", "source_codes": ["remanga"] }),
+                &json!({ "lang": "*", "source_codes": ["remanga"] }),
             ),
             &admin,
         ))
@@ -264,7 +277,7 @@ async fn exact_language_priorities_override_star_fallback() {
             json_request(
                 Method::PUT,
                 "/api/admin/source-priorities",
-                &json!({ "kind": "manga", "lang": "ru", "source_codes": [] }),
+                &json!({ "lang": "ru", "source_codes": [] }),
             ),
             &admin,
         ))
@@ -303,10 +316,9 @@ async fn priorities_validation_is_typed() {
     assert!(base_url.is_some(), "base_url must be preserved");
 
     for body in [
-        json!({ "kind": "nope", "lang": "ru", "source_codes": [] }),
-        json!({ "kind": "manga", "lang": "", "source_codes": [] }),
-        json!({ "kind": "manga", "lang": "ru", "source_codes": ["nope"] }),
-        json!({ "kind": "manga", "lang": "ru", "source_codes": ["fixture", "fixture"] }),
+        json!({ "lang": "", "source_codes": [] }),
+        json!({ "lang": "ru", "source_codes": ["nope"] }),
+        json!({ "lang": "ru", "source_codes": ["fixture", "fixture"] }),
     ] {
         let response = app
             .request(with_cookie(
@@ -319,7 +331,7 @@ async fn priorities_validation_is_typed() {
 
     let response = app
         .request(with_cookie(
-            get("/api/admin/source-priorities?kind=manga&lang=ru"),
+            get("/api/admin/source-priorities?lang=ru"),
             &admin,
         ))
         .await;
@@ -567,7 +579,7 @@ async fn attach_detach_primary_refresh_and_disabled_source() {
             json_request(
                 Method::POST,
                 &format!("/api/titles/{title_id}/sources"),
-                &json!({ "code": "fixture", "external_id": "fixture-title", "kind": "manga" }),
+                &json!({ "code": "fixture", "external_id": "fixture-title" }),
             ),
             &admin,
         ))
@@ -586,7 +598,6 @@ async fn attach_detach_primary_refresh_and_disabled_source() {
                 &json!({
                     "code": "fixture",
                     "external_id": "fixture-title-2",
-                    "kind": "manga",
                 }),
             ),
             &admin,
@@ -696,7 +707,7 @@ async fn attach_detach_primary_refresh_and_disabled_source() {
     let user = app.register_extra_user("reader").await;
     let response = app
         .request(with_cookie(
-            get("/api/admin/source-priorities?kind=manga&lang=ru"),
+            get("/api/admin/source-priorities?lang=ru"),
             &user,
         ))
         .await;

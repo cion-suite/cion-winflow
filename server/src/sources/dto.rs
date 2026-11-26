@@ -8,34 +8,92 @@ use crate::sources::error::SourceError;
 /// Максимальная длина `external_id`: длиннее — почти наверняка ошибка парсинга.
 pub const MAX_EXTERNAL_ID_CHARS: usize = 256;
 
+/// Тип произведения. Список повторяет типы Remanga; аниме и книги здесь
+/// отсутствуют: это не формат тайтла, а связанный контент будущих фаз.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MediaKind {
+pub enum TitleKind {
+    #[serde(rename = "manga")]
     Manga,
-    Anime,
-    Book,
+    #[serde(rename = "manhwa")]
+    Manhwa,
+    #[serde(rename = "manhua")]
+    Manhua,
+    #[serde(rename = "western_comic")]
+    WesternComic,
+    #[serde(rename = "ru_comic")]
+    RuComic,
+    #[serde(rename = "indonesian_comic")]
+    IndonesianComic,
+    #[serde(rename = "other")]
+    Other,
+    #[serde(rename = "original")]
+    Original,
 }
 
-impl MediaKind {
+impl TitleKind {
+    pub const ALL: [Self; 8] = [
+        Self::Manga,
+        Self::Manhwa,
+        Self::Manhua,
+        Self::WesternComic,
+        Self::RuComic,
+        Self::IndonesianComic,
+        Self::Other,
+        Self::Original,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Manga => "manga",
-            Self::Anime => "anime",
-            Self::Book => "book",
+            Self::Manhwa => "manhwa",
+            Self::Manhua => "manhua",
+            Self::WesternComic => "western_comic",
+            Self::RuComic => "ru_comic",
+            Self::IndonesianComic => "indonesian_comic",
+            Self::Other => "other",
+            Self::Original => "original",
         }
     }
 
     pub fn from_db(value: &str) -> Option<Self> {
         match value {
             "manga" => Some(Self::Manga),
-            "anime" => Some(Self::Anime),
-            "book" => Some(Self::Book),
+            "manhwa" => Some(Self::Manhwa),
+            "manhua" => Some(Self::Manhua),
+            "western_comic" => Some(Self::WesternComic),
+            "ru_comic" => Some(Self::RuComic),
+            "indonesian_comic" => Some(Self::IndonesianComic),
+            "other" => Some(Self::Other),
+            "original" => Some(Self::Original),
             _ => None,
         }
     }
+
+    /// Человекочитаемое название типа у источника (Remanga `type.name`).
+    pub fn source_name(self) -> &'static str {
+        match self {
+            Self::Manga => "Манга",
+            Self::Manhwa => "Манхва",
+            Self::Manhua => "Маньхуа",
+            Self::WesternComic => "Западный комикс",
+            Self::RuComic => "Рукомикс",
+            Self::IndonesianComic => "Индонезийский комикс",
+            Self::Other => "Другое",
+            Self::Original => "Оригиналы",
+        }
+    }
+
+    /// Тип источника по человекочитаемому названию (Remanga `type.name`).
+    /// Неизвестное название не угадываем.
+    pub fn from_source_name(name: &str) -> Option<Self> {
+        let name = name.trim().to_lowercase();
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.source_name().to_lowercase() == name)
+    }
 }
 
-impl std::fmt::Display for MediaKind {
+impl std::fmt::Display for TitleKind {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -272,7 +330,7 @@ impl SourceCovers {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceTitle {
     pub external_id: ExternalId,
-    pub kind: MediaKind,
+    pub kind: TitleKind,
     pub name: String,
     pub alt_names: Vec<String>,
     pub description: Option<String>,
@@ -350,7 +408,8 @@ pub struct SourceText {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceSearchItem {
     pub external_id: ExternalId,
-    pub kind: MediaKind,
+    /// Тип из выдачи, если источник его отдаёт.
+    pub kind: Option<TitleKind>,
     pub name: String,
     pub alt_names: Vec<String>,
     pub cover_ref: Option<String>,
@@ -362,7 +421,6 @@ pub struct SourceSearchItem {
 #[derive(Debug, Clone)]
 pub struct SearchRequest {
     pub query: String,
-    pub kind: MediaKind,
     /// Непрозрачный курсор; адаптер сам решает, страница это или offset.
     pub cursor: Option<String>,
     pub filters: serde_json::Value,
@@ -378,6 +436,25 @@ pub struct SearchPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_kind_maps_every_remanga_type_name() {
+        for (name, kind) in [
+            ("Манга", TitleKind::Manga),
+            ("Манхва", TitleKind::Manhwa),
+            ("Маньхуа", TitleKind::Manhua),
+            ("Западный комикс", TitleKind::WesternComic),
+            ("Рукомикс", TitleKind::RuComic),
+            ("Индонезийский комикс", TitleKind::IndonesianComic),
+            ("Другое", TitleKind::Other),
+            ("Оригиналы", TitleKind::Original),
+        ] {
+            assert_eq!(TitleKind::from_source_name(name), Some(kind), "{name}");
+            assert_eq!(TitleKind::from_db(kind.as_str()), Some(kind));
+        }
+        assert_eq!(TitleKind::from_source_name("Аниме"), None);
+        assert_eq!(TitleKind::from_source_name("Книга"), None);
+    }
 
     #[test]
     fn external_id_accepts_opaque_unicode_and_rejects_unsafe_values() {

@@ -2,7 +2,7 @@ use reqwest::Url;
 
 use crate::sources::config::url_allowed;
 use crate::sources::dto::{
-    ExternalId, MediaKind, SearchPage, SearchRequest, SourceChapter, SourceContent, SourceTitle,
+    ExternalId, SearchPage, SearchRequest, SourceChapter, SourceContent, SourceTitle,
 };
 use crate::sources::error::SourceError;
 use crate::sources::http::{AdapterCtx, endpoint_url, get_text};
@@ -74,23 +74,18 @@ impl Remanga {
             .append_pair("page", &page.to_string());
 
         let raw = get_text(&self.ctx, url, &[("Accept", "application/json")]).await?;
-        parse::parse_search(&raw, request.kind)
+        parse::parse_search(&raw)
     }
 
-    pub async fn title(
-        &self,
-        _kind: MediaKind,
-        external_id: &ExternalId,
-    ) -> Result<SourceTitle, SourceError> {
+    pub async fn title(&self, external_id: &ExternalId) -> Result<SourceTitle, SourceError> {
         let raw = self.title_raw(external_id).await?;
-        let mut title = parse::parse_title(&raw, MediaKind::Manga)?;
+        let mut title = parse::parse_title(&raw)?;
         title.lang = Some(self.config.language.clone());
         Ok(title)
     }
 
     pub async fn chapters(
         &self,
-        _kind: MediaKind,
         external_id: &ExternalId,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         let raw = self.title_raw(external_id).await?;
@@ -137,11 +132,7 @@ impl Remanga {
         Ok(chapters)
     }
 
-    pub async fn content(
-        &self,
-        _kind: MediaKind,
-        chapter: &SourceChapter,
-    ) -> Result<SourceContent, SourceError> {
+    pub async fn content(&self, chapter: &SourceChapter) -> Result<SourceContent, SourceError> {
         let mut url = endpoint_url(&self.ctx, "/api/v2/titles/chapters/")?;
         url.set_path(&format!(
             "/api/v2/titles/chapters/{}/",
@@ -170,7 +161,6 @@ impl Remanga {
 
     pub async fn text(
         &self,
-        _kind: MediaKind,
         _chapter: &SourceChapter,
     ) -> Result<crate::sources::dto::SourceText, SourceError> {
         Err(SourceError::UnsupportedCapability)

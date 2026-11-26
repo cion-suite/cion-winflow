@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { MediaKind, TitleStatus } from "@/lib/catalog";
+import type { TitleKind, TitleStatus } from "@/lib/catalog";
 import { apiUrl, jsonMutation, request } from "./client";
 import { LIBRARY_QUERY_KEY, LIBRARY_TABS_QUERY_KEY } from "./library";
 
@@ -8,7 +8,8 @@ export type DiscoverItem = {
   code: string;
   source_name: string;
   external_id: string;
-  kind: MediaKind;
+  /** Тип из выдачи источника, если он его отдаёт. */
+  title_kind: TitleKind | null;
   name: string;
   alt_names: string[];
   cover_ref: string | null;
@@ -33,7 +34,6 @@ export type DiscoverSearchResponse = {
 export type DiscoverAddInput = {
   code: string;
   externalId: string;
-  kind: MediaKind;
 };
 
 export type DiscoverAddResponse = {
@@ -53,9 +53,8 @@ export function sourceCoverUrl(code: string, reference: string): string {
 }
 
 export const discoverApi = {
-  search: (query: string, kind?: MediaKind) => {
+  search: (query: string) => {
     const params = new URLSearchParams({ q: query });
-    if (kind) params.set("kind", kind);
     return request<DiscoverSearchResponse>(`/discover/search?${params.toString()}`);
   },
   add: (input: DiscoverAddInput) =>
@@ -64,15 +63,14 @@ export const discoverApi = {
       jsonMutation({
         code: input.code,
         external_id: input.externalId,
-        kind: input.kind,
       }),
     ),
 };
 
-export function useDiscoverSearchQuery(query: string, kind?: MediaKind) {
+export function useDiscoverSearchQuery(query: string) {
   return useQuery({
-    queryKey: [...DISCOVER_QUERY_KEY, query, kind ?? ""],
-    queryFn: () => discoverApi.search(query, kind),
+    queryKey: [...DISCOVER_QUERY_KEY, query],
+    queryFn: () => discoverApi.search(query),
     enabled: query.trim().length > 0,
     placeholderData: keepPreviousData,
     // Выдача источника меняется медленно: не дёргаем сеть при каждом фокусе.

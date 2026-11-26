@@ -8,8 +8,8 @@ use reqwest::Url;
 use crate::sources::config::{HostAllowlist, url_allowed};
 use crate::sources::descriptor::{Capability, SourceDescriptor};
 use crate::sources::dto::{
-    ChapterKind, ContentKind, ExternalId, MediaKind, SearchPage, SearchRequest, SourceChapter,
-    SourceContent, SourceCovers, SourcePage, SourceSearchItem, SourceText, SourceTitle,
+    ChapterKind, ContentKind, ExternalId, SearchPage, SearchRequest, SourceChapter, SourceContent,
+    SourceCovers, SourcePage, SourceSearchItem, SourceText, SourceTitle, TitleKind,
 };
 use crate::sources::error::SourceError;
 use crate::sources::http::AdapterCtx;
@@ -47,8 +47,6 @@ pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
     code: CODE,
     name: "Fixture",
     version: 1,
-    kinds: &[MediaKind::Manga],
-    default_kind: MediaKind::Manga,
     capabilities: &[Capability::Search, Capability::Chapters, Capability::Images],
     config: &[],
     filters: &[],
@@ -79,7 +77,7 @@ impl Fixture {
 
         let item = SourceSearchItem {
             external_id: ExternalId::new("fixture-title")?,
-            kind: MediaKind::Manga,
+            kind: Some(TitleKind::Manga),
             name: "Fixture Title".to_owned(),
             alt_names: vec!["Fixture Alt".to_owned()],
             cover_ref: Some("/cover.jpg".to_owned()),
@@ -95,11 +93,7 @@ impl Fixture {
         })
     }
 
-    pub async fn title(
-        &self,
-        _kind: MediaKind,
-        external_id: &ExternalId,
-    ) -> Result<SourceTitle, SourceError> {
+    pub async fn title(&self, external_id: &ExternalId) -> Result<SourceTitle, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
         if !known_title(external_id) {
             return Err(SourceError::NotFound);
@@ -107,7 +101,7 @@ impl Fixture {
 
         Ok(SourceTitle {
             external_id: external_id.clone(),
-            kind: MediaKind::Manga,
+            kind: TitleKind::Manga,
             name: title_name(external_id).to_owned(),
             alt_names: vec!["Fixture Alt".to_owned()],
             description: Some("Fixture description".to_owned()),
@@ -128,7 +122,6 @@ impl Fixture {
 
     pub async fn chapters(
         &self,
-        _kind: MediaKind,
         external_id: &ExternalId,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
@@ -160,11 +153,7 @@ impl Fixture {
         ])
     }
 
-    pub async fn content(
-        &self,
-        _kind: MediaKind,
-        chapter: &SourceChapter,
-    ) -> Result<SourceContent, SourceError> {
+    pub async fn content(&self, chapter: &SourceChapter) -> Result<SourceContent, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
         if chapter.is_locked {
             return Err(SourceError::Locked);
@@ -184,11 +173,7 @@ impl Fixture {
         Ok(SourceContent::Images { pages })
     }
 
-    pub async fn text(
-        &self,
-        _kind: MediaKind,
-        _chapter: &SourceChapter,
-    ) -> Result<SourceText, SourceError> {
+    pub async fn text(&self, _chapter: &SourceChapter) -> Result<SourceText, SourceError> {
         Err(SourceError::UnsupportedCapability)
     }
 

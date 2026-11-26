@@ -1,7 +1,7 @@
 import { type FormEvent, type ReactNode, useState } from "react";
 
 import {
-  MEDIA_KINDS,
+  TITLE_KINDS,
   TITLE_STATUSES,
   type TitleFormValues,
 } from "@/lib/catalog";
@@ -56,9 +56,9 @@ export function TitleForm({
   const t = useT();
   const [values, setValues] = useState<TitleFormValues>(initial);
 
-  const kindOptions = MEDIA_KINDS.map((kind) => ({
+  const kindOptions = TITLE_KINDS.map((kind) => ({
     value: kind,
-    label: t(`catalog.kinds.${kind}`),
+    label: t(`catalog.types.${kind}`),
   }));
   const statusOptions = [
     { value: null, label: t("title.unset") },
@@ -154,7 +154,7 @@ export function TitleForm({
           />
         </Field>
 
-        <Field label={t("title.genres")}>
+        <Field label={t("title.tags")}>
           <Input
             name="genres"
             placeholder={t("title.listHint")}

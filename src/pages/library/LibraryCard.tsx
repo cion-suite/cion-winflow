@@ -1,4 +1,4 @@
-import { BookOpenIcon, HeartIcon } from "lucide-react";
+import { HeartIcon, StarIcon } from "lucide-react";
 import { Link } from "react-router";
 
 import { titleCoverUrl, type LibraryItem } from "@/api";
@@ -27,16 +27,22 @@ export function LibraryCard({ item }: { item: LibraryItem }) {
             <span className="sr-only">{t("library.statuses.favorite")}</span>
           </span>
         )}
+        {item.score !== null && (
+          <span className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-full bg-background/85 px-2 py-1 text-xs font-semibold text-foreground shadow-sm">
+            <StarIcon className="size-3.5 fill-current" aria-hidden />
+            <span className="tabular-nums">{item.score}</span>
+            <span className="sr-only">{t("library.score")}</span>
+          </span>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span className="truncate">
-          {t(`catalog.kinds.${item.title.kind}`)}
+          {t(`catalog.types.${item.title.kind}`)}
           {item.title.year !== null ? ` ${item.title.year}` : ""}
         </span>
         {hasProgress && (
           <span className="inline-flex shrink-0 items-center gap-1 tabular-nums">
-            <BookOpenIcon className="size-3.5 text-primary" aria-hidden />
             {Math.min(item.read_count, item.chapter_count)}/{item.chapter_count}
           </span>
         )}

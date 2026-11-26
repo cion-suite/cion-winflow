@@ -28,12 +28,21 @@ import { ReaderHeader } from "./ReaderHeader";
 
 const EMPTY_PAGES: ContentPage[] = [];
 const SAVE_DEBOUNCE_MS = 800;
+/** Сколько страниц держим выше и ниже текущей.
+ *  Страницы монтируются по одной, поэтому память ограничена окном,
+ *  а не размером главы. */
 const AROUND = 2;
-const AHEAD = 6;
+const AHEAD = 4;
+/** Сколько страниц грузим заранее за пределами окна. */
+const PREFETCH = 2;
+/** Запасная пропорция, пока фактические размеры картинки неизвестны. */
+const DEFAULT_PAGE_RATIO = 1.4;
 /** Небольшая прокрутка вниз прячет панели, как клик по странице. */
 const CHROME_SCROLL_THRESHOLD = 32;
 /** Программный скролл не должен считаться жестом читателя. */
 const PROGRAMMATIC_SCROLL_MS = 500;
+
+type PageSize = { width: number; height: number };
 
 /** Бинарный поиск страницы по накопленным высотам. */
 function pageAt(offsets: number[], scrollTop: number): number {
@@ -100,6 +109,8 @@ function ReaderView({
   const [columnWidth, setColumnWidth] = useState(0);
   const [current, setCurrent] = useState(0);
   const [chromeHidden, setChromeHidden] = useState(false);
+  /** Фактические размеры, если источник их не отдал: чиним после onLoad. */
+  const [measuredSizes, setMeasuredSizes] = useState<Record<number, PageSize>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const columnRef = useRef<HTMLDivElement>(null);
   const offsetsRef = useRef<number[]>([]);
@@ -109,17 +120,65 @@ function ReaderView({
   const lastScrollTopRef = useRef(0);
   const scrollAccumulatorRef = useRef(0);
   const suppressAutoHideUntilRef = useRef(0);
+  /** Декодированные префетч-картинки за пределами окна чтения. */
+  const preloadedRef = useRef<Map<number, HTMLImageElement>>(new Map());
 
-  const heights = useMemo(
+  // Каждая страница сохраняет свою ширину и пропорции: кадры бывают
+  // уже и шире колонки, а первые страницы — низкими. Принудительная
+  // полноширинная рамка давала огромные вертикальные пробелы.
+  // Шире колонки — масштабируем, уже — показываем в натуральную ширину.
+  const metrics = useMemo(
     () =>
       pages.map((page) => {
+        // До первого измерения колонки ничего не рисуем: иначе на один
+        // кадр мелькали бы картинки в натуральную ширину.
+        if (columnWidth <= 0) return { width: 0, height: 0 };
+        const measured = measuredSizes[page.id];
+        const naturalWidth = measured?.width ?? page.width ?? 0;
+        const naturalHeight = measured?.height ?? page.height ?? 0;
         const ratio =
-          page.width !== null && page.height !== null && page.width > 0
-            ? page.height / page.width
-            : 1.4;
-        return Math.max(160, columnWidth * ratio);
+          naturalWidth > 0 && naturalHeight > 0
+            ? naturalHeight / naturalWidth
+            : DEFAULT_PAGE_RATIO;
+        const displayWidth =
+          naturalWidth > 0 ? Math.min(columnWidth, naturalWidth) : columnWidth;
+        return { width: displayWidth, height: displayWidth * ratio };
       }),
-    [pages, columnWidth],
+    [pages, columnWidth, measuredSizes],
+  );
+
+  const heights = useMemo(() => metrics.map((metric) => metric.height), [metrics]);
+
+  const handleImageLoad = useCallback(
+    (
+      pageId: number,
+      declaredWidth: number | null,
+      declaredHeight: number | null,
+      image: HTMLImageElement,
+    ) => {
+      if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+      // Источник уже отдал верные размеры — не тратим лишний рендер.
+      if (
+        declaredWidth === image.naturalWidth &&
+        declaredHeight === image.naturalHeight
+      ) {
+        return;
+      }
+      setMeasuredSizes((currentSizes) => {
+        const existing = currentSizes[pageId];
+        if (
+          existing?.width === image.naturalWidth &&
+          existing?.height === image.naturalHeight
+        ) {
+          return currentSizes;
+        }
+        return {
+          ...currentSizes,
+          [pageId]: { width: image.naturalWidth, height: image.naturalHeight },
+        };
+      });
+    },
+    [],
   );
 
   const offsets = useMemo(() => {
@@ -363,12 +422,44 @@ function ReaderView({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [pages.length, scrollToPosition]);
 
-  // Prefetch ближайших страниц: следующая должна быть готова до скролла
+  // Префетч идёт по одной странице за окном чтения: следующая начинает
+  // грузиться только когда предыдущая декодирована. Держим ссылки только
+  // на ближайший хвост, остальное освобождаем — глава не занимает память
+  // целиком.
   useEffect(() => {
-    for (let index = current + 1; index <= Math.min(pages.length - 1, current + 3); index += 1) {
-      const image = new Image();
-      image.src = pageImageUrl(pages[index].id);
+    // slice(start, end) не включает end, поэтому последняя отрисованная
+    // страница — current + AHEAD - 1; префетч начинается сразу после неё.
+    const renderEnd = Math.min(pages.length - 1, current + AHEAD - 1);
+    const prefetchEnd = Math.min(pages.length - 1, renderEnd + PREFETCH);
+
+    for (const [index, image] of preloadedRef.current) {
+      // Оставляем только хвост за окном: страницы внутри окна уже
+      // отрисованы и декодируются браузером, вторая ссылка только ест память.
+      if (index <= renderEnd || index > prefetchEnd) {
+        // Пустой src браузер иногда трактует как URL текущей страницы.
+        image.src = "data:,";
+        preloadedRef.current.delete(index);
+      }
     }
+
+    let cancelled = false;
+    void (async () => {
+      for (let index = renderEnd + 1; index <= prefetchEnd; index += 1) {
+        if (cancelled) return;
+        if (preloadedRef.current.has(index)) continue;
+        const image = new Image();
+        image.decoding = "async";
+        preloadedRef.current.set(index, image);
+        image.src = pageImageUrl(pages[index].id);
+        await image.decode().catch(() => {
+          // Ошибку не кэшируем: следующий проход попробует снова.
+          preloadedRef.current.delete(index);
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [current, pages]);
 
   const library = titleQuery.data?.library ?? null;
@@ -476,20 +567,34 @@ function ReaderView({
 
             {pages.slice(start, end).map((page, offset) => {
               const index = start + offset;
+              const metric = metrics[index];
               return (
                 <div
                   key={page.id}
-                  style={{ height: heights[index] }}
-                  className="relative w-full"
+                  style={{ height: metric.height }}
+                  className="flex w-full justify-center"
                   onClick={() => setChromeHidden((value) => !value)}
                 >
                   <img
                     src={pageImageUrl(page.id)}
                     alt={t("reader.pageAlt", { page: index + 1 })}
-                    loading={index <= current + 2 ? "eager" : "lazy"}
+                    width={Math.round(metric.width)}
+                    height={Math.round(metric.height)}
+                    style={{ width: metric.width, height: metric.height }}
+                    // Окно маленькое, поэтому грузим всё сразу: страница
+                    // должна быть готова до того, как читатель доскроллит.
+                    loading="eager"
                     decoding="async"
                     draggable={false}
-                    className="h-full w-full object-contain"
+                    onLoad={(event) =>
+                      handleImageLoad(
+                        page.id,
+                        page.width,
+                        page.height,
+                        event.currentTarget,
+                      )
+                    }
+                    className="block max-w-full object-contain"
                   />
                 </div>
               );

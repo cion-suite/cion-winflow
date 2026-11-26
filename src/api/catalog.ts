@@ -12,7 +12,7 @@ import {
   type ContentKind,
   type CoverSize,
   type LibraryStatus,
-  type MediaKind,
+  type TitleKind,
   type TitleFormValues,
   type TitleStatus,
 } from "@/lib/catalog";
@@ -20,7 +20,7 @@ import { apiUrl, jsonMutation, request } from "./client";
 
 export type TitleSummary = {
   id: number;
-  kind: MediaKind;
+  kind: TitleKind;
   name: string;
   year: number | null;
   status: TitleStatus | null;
@@ -139,7 +139,7 @@ export type SourceCoversResponse = {
 /** Полная замена: PUT присылает все поля, отсутствующие — пустые. */
 export type TitleInput = {
   name: string;
-  kind: MediaKind;
+  kind: TitleKind;
   alt_names: string[];
   authors: string[];
   genres: string[];

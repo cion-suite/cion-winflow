@@ -171,11 +171,12 @@ async fn catalog_search_is_case_insensitive_and_escapes_like() {
     let app = TestApp::new().await;
     app.create_admin().await;
     let admin = app.login_admin().await;
-    app.create_title(&admin, "Breaking Bad", "book").await;
+    app.create_title(&admin, "Breaking Bad", "other").await;
     app.create_title(&admin, "100% Wolf", "manga").await;
-    app.create_title(&admin, "Мастер и Маргарита", "book").await;
-    app.create_title(&admin, "A_B", "book").await;
-    app.create_title(&admin, "AXB", "book").await;
+    app.create_title(&admin, "Мастер и Маргарита", "other")
+        .await;
+    app.create_title(&admin, "A_B", "other").await;
+    app.create_title(&admin, "AXB", "other").await;
 
     let response = app
         .request(with_cookie(get("/api/catalog?q=breaking"), &admin))
@@ -226,10 +227,10 @@ async fn catalog_filters_by_kind_and_paginates() {
     let admin = app.login_admin().await;
     app.create_title(&admin, "Alpha", "manga").await;
     app.create_title(&admin, "Beta", "manga").await;
-    app.create_title(&admin, "Gamma", "anime").await;
+    app.create_title(&admin, "Gamma", "manhwa").await;
 
     let response = app
-        .request(with_cookie(get("/api/catalog?kind=anime"), &admin))
+        .request(with_cookie(get("/api/catalog?kind=manhwa"), &admin))
         .await;
     let json = body_json(response).await;
     assert_eq!(json["total"], 1);
@@ -333,7 +334,7 @@ async fn unknown_title_is_404() {
 }
 
 #[tokio::test]
-async fn update_title_changes_fields_but_kind_is_locked_with_sources() {
+async fn update_title_changes_fields_including_kind() {
     let app = TestApp::new().await;
     app.create_admin().await;
     let admin = app.login_admin().await;
@@ -368,20 +369,20 @@ async fn update_title_changes_fields_but_kind_is_locked_with_sources() {
     let json = body_json(response).await;
     assert_eq!(json["total"], 0);
 
-    // Пока источников нет, kind менять можно
+    // Тип можно менять: источник больше не привязан к типу тайтла.
     let response = app
         .request(with_cookie(
             json_request(
                 Method::PUT,
                 &format!("/api/titles/{id}"),
-                &title_body("Interim", "anime"),
+                &title_body("Interim", "manhwa"),
             ),
             &admin,
         ))
         .await;
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert_eq!(json["title"]["kind"], "anime");
+    assert_eq!(json["title"]["kind"], "manhwa");
 
     let response = app
         .request(with_cookie(
@@ -403,8 +404,8 @@ async fn update_title_changes_fields_but_kind_is_locked_with_sources() {
     .await
     .expect("source");
     sqlx::query(
-        "INSERT INTO source_entries (title_id, source_id, kind, external_id) \
-         VALUES (?, ?, 'manga', 'external-1')",
+        "INSERT INTO source_entries (title_id, source_id, external_id) \
+         VALUES (?, ?, 'external-1')",
     )
     .bind(id)
     .bind(source_id)
@@ -412,25 +413,26 @@ async fn update_title_changes_fields_but_kind_is_locked_with_sources() {
     .await
     .expect("source entry");
 
+    // Привязанный источник не мешает смене типа.
     let response = app
         .request(with_cookie(
             json_request(
                 Method::PUT,
                 &format!("/api/titles/{id}"),
-                &title_body("New Name", "anime"),
+                &title_body("New Name", "manhwa"),
             ),
             &admin,
         ))
         .await;
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert_eq!(json["code"], "kind_locked");
+    assert_eq!(json["title"]["kind"], "manhwa");
 
     let response = app
         .request(with_cookie(get(&format!("/api/titles/{id}")), &admin))
         .await;
     let json = body_json(response).await;
-    assert_eq!(json["title"]["kind"], "manga");
+    assert_eq!(json["title"]["kind"], "manhwa");
     assert_eq!(json["title"]["name"], "New Name");
 
     // Смена остальных полей при привязанном источнике разрешена

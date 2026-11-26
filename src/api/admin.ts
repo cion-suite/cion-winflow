@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { MediaKind, TitleStatus } from "@/lib/catalog";
+import type { TitleKind, TitleStatus } from "@/lib/catalog";
 import { jsonMutation, request } from "./client";
 import { titleQueryKey, type ChapterAlias } from "./catalog";
 import { progressQueryKey } from "./progress";
@@ -9,8 +9,6 @@ export type SourceState = {
   code: string;
   name: string;
   version: number;
-  kinds: MediaKind[];
-  default_kind: MediaKind;
   capabilities: string[];
   config_schema: unknown[];
   filters_schema: unknown[];
@@ -29,7 +27,8 @@ export type SourceListResponse = {
 
 export type SourceSearchItem = {
   external_id: string;
-  kind: MediaKind;
+  /** Тип из выдачи источника, если он его отдаёт. */
+  kind: TitleKind | null;
   name: string;
   alt_names: string[];
   cover_ref: string | null;
@@ -46,7 +45,6 @@ export type SourceSearchResponse = {
 
 export type SourceSearchInput = {
   query: string;
-  kind?: MediaKind;
   cursor?: string;
   filters?: unknown;
 };
@@ -60,7 +58,6 @@ export type SourcePriority = {
 };
 
 export type SourcePrioritiesResponse = {
-  kind: MediaKind;
   lang: string;
   sources: SourcePriority[];
 };
@@ -68,7 +65,6 @@ export type SourcePrioritiesResponse = {
 export type AttachSourceInput = {
   code: string;
   external_id: string;
-  kind?: MediaKind;
 };
 
 export type AttachSourceResponse = {
@@ -126,19 +122,14 @@ export const adminApi = {
   probe: (code: string) => request<ProbeResponse>(`${sourcePath(code)}/probe`, jsonMutation({})),
   search: (code: string, input: SourceSearchInput) =>
     request<SourceSearchResponse>(`${sourcePath(code)}/search`, jsonMutation(input)),
-  priorities: (kind: MediaKind, lang: string) => {
-    const params = new URLSearchParams({ kind, lang });
+  priorities: (lang: string) => {
+    const params = new URLSearchParams({ lang });
     return request<SourcePrioritiesResponse>(`/admin/source-priorities?${params.toString()}`);
   },
-  savePriorities: (kind: MediaKind, lang: string, sourceCodes: string[]) =>
+  savePriorities: (lang: string, sourceCodes: string[]) =>
     request<SourcePrioritiesResponse>(
       "/admin/source-priorities",
-      jsonMutation({ kind, lang, source_codes: sourceCodes }, "PUT"),
-    ),
-  importTitle: (code: string, externalId: string, kind: MediaKind) =>
-    request<AttachSourceResponse>(
-      `${sourcePath(code)}/import`,
-      jsonMutation({ external_id: externalId, kind }),
+      jsonMutation({ lang, source_codes: sourceCodes }, "PUT"),
     ),
   attach: (titleId: number, input: AttachSourceInput) =>
     request<AttachSourceResponse>(`/titles/${titleId}/sources`, jsonMutation(input)),
@@ -165,10 +156,10 @@ export function useSourcesQuery() {
   });
 }
 
-export function useSourcePrioritiesQuery(kind: MediaKind, lang: string) {
+export function useSourcePrioritiesQuery(lang: string) {
   return useQuery({
-    queryKey: [...SOURCE_PRIORITIES_QUERY_KEY, kind, lang],
-    queryFn: () => adminApi.priorities(kind, lang),
+    queryKey: [...SOURCE_PRIORITIES_QUERY_KEY, lang],
+    queryFn: () => adminApi.priorities(lang),
   });
 }
 
@@ -212,15 +203,8 @@ export function useSourceSearchMutation() {
 export function useSaveSourcePrioritiesMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      kind,
-      lang,
-      sourceCodes,
-    }: {
-      kind: MediaKind;
-      lang: string;
-      sourceCodes: string[];
-    }) => adminApi.savePriorities(kind, lang, sourceCodes),
+    mutationFn: ({ lang, sourceCodes }: { lang: string; sourceCodes: string[] }) =>
+      adminApi.savePriorities(lang, sourceCodes),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: SOURCE_PRIORITIES_QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: ["title"] });
@@ -236,22 +220,6 @@ function invalidateTitle(queryClient: ReturnType<typeof useQueryClient>, titleId
   // Attach/refresh/import могут добрать обложки: has_cover и updated_at
   // видны в карточках библиотеки и поиске по шапке.
   void queryClient.invalidateQueries({ queryKey: ["library"] });
-}
-
-export function useImportSourceMutation() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      code,
-      externalId,
-      kind,
-    }: {
-      code: string;
-      externalId: string;
-      kind: MediaKind;
-    }) => adminApi.importTitle(code, externalId, kind),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["title"] }),
-  });
 }
 
 export function useAttachSourceMutation(titleId: number) {

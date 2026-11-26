@@ -102,7 +102,7 @@ pub async fn save_progress(
         .await?
         .ok_or_else(|| AppError::not_found("chapter_not_found", "chapter not found"))?;
 
-    let ranks = selection::load_priorities(&state.pool, &title.kind, title.lang.as_deref()).await?;
+    let ranks = selection::load_priorities(&state.pool, title.lang.as_deref()).await?;
     let candidates = selection::candidates(&state.pool, title_id, &canonical).await?;
     if candidates.is_empty() {
         return Err(AppError::not_found(

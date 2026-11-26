@@ -90,7 +90,7 @@ pub async fn title_chapters(
     title: &TitleInfo,
 ) -> Result<TitleChapters, AppError> {
     let now = now_unix();
-    let ranks = selection::load_priorities(pool, &title.kind, title.lang.as_deref()).await?;
+    let ranks = selection::load_priorities(pool, title.lang.as_deref()).await?;
 
     let aliases: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
         "SELECT alias_key, canonical_key FROM chapter_aliases WHERE title_id = ?",

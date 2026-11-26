@@ -7,7 +7,7 @@ use crate::{
     auth::session::now_unix,
     error::AppError,
     source_admin::service::{self as source_admin, ImportInput},
-    sources::{Capability, ExternalId, MediaKind, SearchRequest, SourceError, SourceKind},
+    sources::{Capability, ExternalId, SearchRequest, SourceError, SourceKind, TitleKind},
     state::AppState,
 };
 
@@ -17,7 +17,6 @@ const MAX_ITEMS_PER_SOURCE: usize = 12;
 #[derive(Debug, Default, Deserialize)]
 pub struct DiscoverSearchParams {
     pub q: String,
-    pub kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -25,7 +24,8 @@ pub struct DiscoverItemDto {
     pub code: String,
     pub source_name: String,
     pub external_id: String,
-    pub kind: &'static str,
+    /// Тип из выдачи источника, если он его отдаёт.
+    pub title_kind: Option<&'static str>,
     pub name: String,
     pub alt_names: Vec<String>,
     pub cover_ref: Option<String>,
@@ -54,7 +54,6 @@ pub struct DiscoverSearchResponse {
 pub struct DiscoverAddInput {
     pub code: String,
     pub external_id: String,
-    pub kind: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,7 +70,6 @@ struct SearchJob {
     name: String,
     source_id: i64,
     adapter: SourceKind,
-    kind: MediaKind,
 }
 
 pub async fn search(
@@ -92,12 +90,6 @@ pub async fn search(
             format!("query must be at most {MAX_QUERY_CHARS} characters"),
         ));
     }
-    let requested_kind = match params.kind.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(raw) => Some(MediaKind::from_db(&raw.to_lowercase()).ok_or_else(|| {
-            AppError::bad_request("validation", "kind must be one of: manga, anime, book")
-        })?),
-    };
 
     // Guard реестра не держим через сетевые .await: забираем снимок задач.
     let jobs = {
@@ -111,11 +103,6 @@ pub async fn search(
             if !descriptor.has(Capability::Search) || !descriptor.has(Capability::Chapters) {
                 continue;
             }
-            let kind = match requested_kind {
-                Some(kind) if descriptor.supports(kind) => kind,
-                Some(_) => continue,
-                None => descriptor.default_kind,
-            };
             let Ok(adapter) = runtime.adapter() else {
                 continue;
             };
@@ -124,7 +111,6 @@ pub async fn search(
                 name: descriptor.name.to_owned(),
                 source_id: runtime.id,
                 adapter: adapter.clone(),
-                kind,
             });
         }
         jobs
@@ -137,23 +123,21 @@ pub async fn search(
         let code = job.code.clone();
         let name = job.name.clone();
         let source_id = job.source_id;
-        let kind = job.kind;
         let handle = tokio::spawn(async move {
             job.adapter
                 .search(SearchRequest {
                     query,
-                    kind,
                     cursor: None,
                     filters: Value::Null,
                 })
                 .await
         });
-        handles.push((code, name, source_id, kind, handle));
+        handles.push((code, name, source_id, handle));
     }
 
     let mut batches: Vec<(String, String, i64, Vec<crate::sources::SourceSearchItem>)> = Vec::new();
     let mut errors = Vec::new();
-    for (code, name, source_id, _kind, handle) in handles {
+    for (code, name, source_id, handle) in handles {
         match handle.await {
             Ok(Ok(page)) => batches.push((name, code, source_id, page.items)),
             Ok(Err(error)) => errors.push(DiscoverSourceError {
@@ -172,16 +156,16 @@ pub async fn search(
     // Порядок источников стабилен, порядок элементов внутри — релевантность.
     batches.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut entry_map: HashMap<(i64, String, String), i64> = HashMap::new();
+    let mut entry_map: HashMap<(i64, String), i64> = HashMap::new();
     for (_, _, source_id, _) in &batches {
-        let rows = sqlx::query_as::<_, (String, String, i64)>(
-            "SELECT external_id, kind, title_id FROM source_entries WHERE source_id = ?",
+        let rows = sqlx::query_as::<_, (String, i64)>(
+            "SELECT external_id, title_id FROM source_entries WHERE source_id = ?",
         )
         .bind(source_id)
         .fetch_all(&state.pool)
         .await?;
-        for (external_id, kind, title_id) in rows {
-            entry_map.insert((*source_id, kind, external_id), title_id);
+        for (external_id, title_id) in rows {
+            entry_map.insert((*source_id, external_id), title_id);
         }
     }
 
@@ -196,15 +180,13 @@ pub async fn search(
     let mut items = Vec::new();
     for (source_name, code, source_id, source_items) in batches {
         for item in source_items.into_iter().take(MAX_ITEMS_PER_SOURCE) {
-            let kind = item.kind.as_str().to_owned();
-            let title_id = entry_map
-                .get(&(source_id, kind, item.external_id.as_str().to_owned()))
-                .copied();
+            let external_id = item.external_id.as_str().to_owned();
+            let title_id = entry_map.get(&(source_id, external_id.clone())).copied();
             items.push(DiscoverItemDto {
                 code: code.clone(),
                 source_name: source_name.clone(),
-                external_id: item.external_id.as_str().to_owned(),
-                kind: item.kind.as_str(),
+                external_id,
+                title_kind: item.kind.map(TitleKind::as_str),
                 name: item.name,
                 alt_names: item.alt_names,
                 cover_ref: item.cover_ref,
@@ -228,12 +210,6 @@ pub async fn add(
         .ok_or_else(|| AppError::not_found("source_not_found", "unknown source"))?;
 
     let descriptor = runtime.descriptor;
-    let kind = MediaKind::from_db(&input.kind.trim().to_lowercase()).ok_or_else(|| {
-        AppError::bad_request("validation", "kind must be one of: manga, anime, book")
-    })?;
-    if !descriptor.supports(kind) {
-        return Err(SourceError::UnsupportedKind(kind.as_str().to_owned()).into());
-    }
     if !descriptor.has(Capability::Chapters) {
         return Err(AppError::bad_request(
             "source_bad_request",
@@ -250,10 +226,9 @@ pub async fn add(
 
     let existing = sqlx::query_as::<_, (i64, i64)>(
         "SELECT id, title_id FROM source_entries \
-         WHERE source_id = ? AND kind = ? AND external_id = ?",
+         WHERE source_id = ? AND external_id = ?",
     )
     .bind(runtime.id)
-    .bind(kind.as_str())
     .bind(external_id.as_str())
     .fetch_optional(&state.pool)
     .await?;
@@ -273,7 +248,7 @@ pub async fn add(
                 match runtime.adapter() {
                     Ok(adapter) => {
                         let adapter = adapter.clone();
-                        match adapter.title(kind, &external_id).await {
+                        match adapter.title(&external_id).await {
                             Ok(source_title) => {
                                 crate::catalog::cover::import_source_covers(
                                     state,
@@ -302,7 +277,6 @@ pub async fn add(
                 &runtime.code,
                 ImportInput {
                     external_id: external_id.as_str().to_owned(),
-                    kind: kind.as_str().to_owned(),
                     title_id: None,
                 },
             )

@@ -164,10 +164,6 @@ pub fn router(state: AppState) -> Router {
             "/sources/{code}/search",
             post(source_admin::handlers::search),
         )
-        .route(
-            "/sources/{code}/import",
-            post(source_admin::handlers::import),
-        )
         .route("/sources/{code}/probe", post(source_admin::handlers::probe))
         .route("/sources/{code}/cover", get(images::handlers::source_cover))
         .fallback(error::api_not_found)

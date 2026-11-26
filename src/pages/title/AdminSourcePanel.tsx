@@ -10,7 +10,6 @@ import {
   useSourcesQuery,
   type TitleSource,
 } from "@/api";
-import type { MediaKind } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { Badge } from "@/ui/shadcn/badge";
 import { Button } from "@/ui/shadcn/button";
@@ -26,12 +25,11 @@ import {
 
 type Props = {
   titleId: number;
-  titleKind: MediaKind;
   sources: TitleSource[];
   preferredSourceId: number | null;
 };
 
-export function AdminSourcePanel({ titleId, titleKind, sources, preferredSourceId }: Props) {
+export function AdminSourcePanel({ titleId, sources, preferredSourceId }: Props) {
   const t = useT();
   const registry = useSourcesQuery();
   const search = useSourceSearchMutation();
@@ -56,11 +54,10 @@ export function AdminSourcePanel({ titleId, titleKind, sources, preferredSourceI
         (source) =>
           source.configured &&
           source.enabled &&
-          source.kinds.includes(titleKind) &&
           source.capabilities.includes("search") &&
           source.capabilities.includes("chapters"),
       ),
-    [registry.data, titleKind],
+    [registry.data],
   );
 
   // Выбранный код не храним отдельно от списка: при смене тайтла/источников
@@ -77,7 +74,7 @@ export function AdminSourcePanel({ titleId, titleKind, sources, preferredSourceI
     event.preventDefault();
     const value = query.trim();
     if (value === "" || code === "") return;
-    search.mutate({ code, input: { query: value, kind: titleKind } });
+    search.mutate({ code, input: { query: value } });
   }
 
   return (
@@ -147,7 +144,6 @@ export function AdminSourcePanel({ titleId, titleKind, sources, preferredSourceI
                     attach.mutate({
                       code: search.variables?.code ?? code,
                       external_id: item.external_id,
-                      kind: titleKind,
                     })
                   }
                 >

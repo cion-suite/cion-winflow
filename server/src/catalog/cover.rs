@@ -18,7 +18,7 @@ use crate::{
     error::AppError,
     extract::{ApiJson, ApiPath, ApiQuery},
     sources::{
-        CoverSize, ExternalId, MediaKind, SourceCovers, SourceKind,
+        CoverSize, ExternalId, SourceCovers, SourceKind,
         http::{IMAGE_BODY_LIMIT, fetch_bytes},
     },
     state::AppState,
@@ -449,14 +449,12 @@ pub async fn refresh_source_covers(
     title_id: i64,
     replace_manual: bool,
 ) -> Result<SourceCoversResponse, AppError> {
-    let (raw_kind, preferred_source_id) = sqlx::query_as::<_, (String, Option<i64>)>(
-        "SELECT kind, preferred_source_id FROM titles WHERE id = ?",
-    )
-    .bind(title_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
-    let kind = MediaKind::from_db(&raw_kind).ok_or(AppError::Internal)?;
+    let preferred_source_id =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT preferred_source_id FROM titles WHERE id = ?")
+            .bind(title_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
 
     let mut entries = sqlx::query_as::<_, CoverSourceEntry>(
         "SELECT e.id AS entry_id, e.source_id, e.external_id, s.code, e.is_primary \
@@ -515,7 +513,7 @@ pub async fn refresh_source_covers(
             }
         };
 
-        let source_title = match adapter.title(kind, &external_id).await {
+        let source_title = match adapter.title(&external_id).await {
             Ok(source_title) => source_title,
             Err(error) => {
                 response.errors.push(source_cover_error(
