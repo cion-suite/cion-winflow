@@ -21,7 +21,17 @@ fn descriptor_is_sane(descriptor: &SourceDescriptor) {
         descriptor.code
     );
     assert!(!descriptor.name.is_empty());
+    assert!(!descriptor.site_url.is_empty());
+    assert!(!descriptor.lang.is_empty());
     assert!(descriptor.version > 0);
+    if !descriptor.default_base_url.is_empty() {
+        let url = reqwest::Url::parse(descriptor.default_base_url)
+            .expect("default_base_url must be an absolute URL");
+        assert!(
+            matches!(url.scheme(), "http" | "https"),
+            "default_base_url must be http(s)"
+        );
+    }
 
     let mut config_keys = HashSet::new();
     for field in descriptor.config {
@@ -138,6 +148,101 @@ fn remanga_passes_contract() {
         if let Some(expected) = chapter.content_kind {
             assert_eq!(expected, ContentKind::Images);
         }
+    }
+}
+
+#[test]
+fn mangamir_passes_contract() {
+    descriptor_is_sane(&crate::sources::mangamir::DESCRIPTOR);
+
+    let site = reqwest::Url::parse("https://mangamir.com").expect("site");
+    let search =
+        super::mangamir::parse::parse_search(include_str!("mangamir/fixtures/search.html"), &site)
+            .expect("search fixture");
+    assert!(!search.items.is_empty());
+    let mut external_ids = HashSet::new();
+    for item in &search.items {
+        assert!(!item.name.is_empty());
+        assert!(
+            external_ids.insert(item.external_id.clone()),
+            "duplicate external id"
+        );
+    }
+
+    let external_id =
+        crate::sources::ExternalId::new(search.items[0].external_id.as_str()).expect("external id");
+    let title = super::mangamir::parse::parse_title(
+        include_str!("mangamir/fixtures/title.html"),
+        &site,
+        &external_id,
+        "ru",
+    )
+    .expect("title fixture");
+    assert_eq!(title.kind, TitleKind::Manhwa);
+    assert!(!title.name.is_empty());
+
+    let chapters = super::mangamir::parse::parse_chapters(
+        include_str!("mangamir/fixtures/title.html"),
+        &site,
+        "ru",
+    )
+    .expect("chapters fixture");
+    assert!(!chapters.is_empty());
+
+    let mut keys = HashSet::new();
+    for chapter in &chapters {
+        assert!(!chapter.chapter_key.is_empty());
+        assert!(
+            keys.insert(chapter.chapter_key.clone()),
+            "duplicate chapter key"
+        );
+        assert!(
+            chapter
+                .number_text
+                .as_deref()
+                .is_none_or(|number| !number.contains(',')),
+            "number must be normalized"
+        );
+        assert_eq!(chapter.content_kind, Some(ContentKind::Images));
+    }
+    assert!(
+        chapters
+            .iter()
+            .any(|chapter| chapter.chapter_kind != ChapterKind::Normal),
+        "fixture must cover a non-normal chapter"
+    );
+    assert!(
+        chapters.iter().any(|chapter| chapter.number_text.is_none()),
+        "fixture must cover a chapter without a number"
+    );
+
+    let repeated = super::mangamir::parse::parse_chapters(
+        include_str!("mangamir/fixtures/title.html"),
+        &site,
+        "ru",
+    )
+    .expect("chapters fixture");
+    let first_keys: Vec<&str> = chapters
+        .iter()
+        .map(|chapter| chapter.chapter_key.as_str())
+        .collect();
+    let repeated_keys: Vec<&str> = repeated
+        .iter()
+        .map(|chapter| chapter.chapter_key.as_str())
+        .collect();
+    assert_eq!(first_keys, repeated_keys, "chapter_key must be stable");
+
+    let content =
+        super::mangamir::parse::parse_content(include_str!("mangamir/fixtures/content.html"))
+            .expect("content fixture");
+    assert_eq!(content.kind(), ContentKind::Images);
+    let crate::sources::SourceContent::Images { pages } = content else {
+        panic!("expected images");
+    };
+    assert!(!pages.is_empty());
+    for (position, page) in pages.iter().enumerate() {
+        assert_eq!(page.index as usize, position);
+        assert!(!page.image_ref.is_empty());
     }
 }
 

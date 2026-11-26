@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -10,12 +10,13 @@ use crate::{
     catalog::selection,
     error::{AppError, FieldError},
     sources::{
-        ConfigField, FieldType, SourceDescriptor, SourceError, TitleKind,
+        ConfigField, FieldType, SourceDescriptor, SourceError, SourceTitle, TitleKind,
         config::{mask_config, merge_config, validate_config, validate_outbound_url},
         descriptor::Capability,
         dto::SearchRequest,
         registry,
         registry::SourceRuntime,
+        text::{dedupe, normalize_name, truncate_chars},
     },
     state::AppState,
 };
@@ -24,6 +25,12 @@ use crate::{
 pub struct SourceStateDto {
     pub code: &'static str,
     pub name: &'static str,
+    /// Сайт для подписи; у Remanga отличается от API-хоста `base_url`.
+    pub site_url: &'static str,
+    /// Стандартный адрес, который подставляется при включении источника.
+    pub default_base_url: &'static str,
+    /// Языковая группа: по ней источники раскладываются по колонкам админки.
+    pub lang: &'static str,
     pub version: u32,
     pub capabilities: Vec<&'static str>,
     pub config_schema: Vec<Value>,
@@ -339,6 +346,18 @@ pub async fn import(
     .fetch_optional(&mut *tx)
     .await?;
 
+    // Добавление того же произведения из другого источника должно привязать
+    // его к общей карточке, а не создать дубль: без ручной привязки это
+    // единственный путь получить главы из нескольких источников.
+    let auto_title_id = if input.title_id.is_none() {
+        find_title_by_names(&mut tx, &source_title).await?
+    } else {
+        None
+    };
+    if let Some(title_id) = auto_title_id {
+        tracing::info!(title_id, source = %code, "auto-linked source title by name");
+    }
+
     let (title_id, title_created) = match existing {
         Some((_, existing_title_id)) => {
             if let Some(requested) = input.title_id
@@ -351,7 +370,7 @@ pub async fn import(
             }
             (existing_title_id, false)
         }
-        None => match input.title_id {
+        None => match input.title_id.or(auto_title_id) {
             Some(title_id) => {
                 sqlx::query_scalar::<_, i64>("SELECT 1 FROM titles WHERE id = ?")
                     .bind(title_id)
@@ -523,6 +542,55 @@ pub async fn probe(state: &AppState, code: &str) -> Result<ProbeResponse, AppErr
         message,
         checked_at,
     })
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TitleNameRow {
+    id: i64,
+    name: String,
+    alt_names_json: String,
+}
+
+/// Ищет уже существующий тайтл с тем же названием (или альтернативным),
+/// чтобы добавление того же произведения из другого источника привязало
+/// его к общей карточке, а не создало дубль. Совпадение точное после
+/// нормализации; сомнительные случаи пользователь правит вручную.
+async fn find_title_by_names(
+    tx: &mut Transaction<'_, Sqlite>,
+    source_title: &SourceTitle,
+) -> Result<Option<i64>, AppError> {
+    let rows = sqlx::query_as::<_, TitleNameRow>(
+        "SELECT id, name, alt_names_json FROM titles ORDER BY id",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let mut incoming: Vec<String> = std::iter::once(source_title.name.clone())
+        .chain(source_title.alt_names.iter().cloned())
+        .map(|name| normalize_name(&name))
+        .filter(|name| !name.is_empty())
+        .collect();
+    dedupe(&mut incoming);
+    let incoming: HashSet<String> = incoming.into_iter().collect();
+
+    let mut best: Option<(usize, i64)> = None;
+    for row in rows {
+        let mut candidate = vec![normalize_name(&row.name)];
+        candidate.extend(
+            decode_list(&row.alt_names_json)
+                .iter()
+                .map(|name| normalize_name(name)),
+        );
+        let score = candidate
+            .iter()
+            .filter(|name| incoming.contains(*name))
+            .count();
+        if score > 0 && best.is_none_or(|(best_score, _)| score > best_score) {
+            best = Some((score, row.id));
+        }
+    }
+
+    Ok(best.map(|(_, id)| id))
 }
 
 async fn create_title(
@@ -721,6 +789,9 @@ fn state_dto(
     SourceStateDto {
         code: descriptor.code,
         name: descriptor.name,
+        site_url: descriptor.site_url,
+        default_base_url: descriptor.default_base_url,
+        lang: descriptor.lang,
         version: descriptor.version,
         capabilities: descriptor
             .capabilities
@@ -793,9 +864,138 @@ pub struct RefreshResponse {
     pub preferred_source_id: Option<i64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SyncResponse {
+    pub title_id: i64,
+    /// false — данные ещё свежие, сеть не трогали.
+    pub refreshed: bool,
+    pub preferred_source_id: Option<i64>,
+    pub metadata_updated: bool,
+    pub entries: Vec<RefreshEntryDto>,
+}
+
+/// Снимок метаданных, который последним применился из источников.
+/// Нужен, чтобы отличать автозначение от ручной правки: если поле
+/// изменилось относительно снимка, синхронизация его не трогает.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct MetadataSnapshot {
+    kind: Option<String>,
+    name: Option<String>,
+    alt_names: Vec<String>,
+    authors: Vec<String>,
+    genres: Vec<String>,
+    description: Option<String>,
+    status: Option<String>,
+    year: Option<i64>,
+    lang: Option<String>,
+    rating: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceMetadata {
+    entry_id: i64,
+    source_id: i64,
+    title: SourceTitle,
+}
+
+/// Автосинхронизация при открытии страницы тайтла. Ограничение по времени
+/// защищает источники от запроса на каждый рендер; ручной refresh админа
+/// его не учитывает.
+const SYNC_TTL_SECS: i64 = 10 * 60;
+
 /// Обновляет главы всех источников тайтла. Сеть идёт до транзакции,
 /// ошибка одного источника не отменяет остальные.
 pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshResponse, AppError> {
+    let (entries, _) = refresh_entries(state, title_id, true).await?;
+    let preferred_source_id = selection::recompute_preferred(&state.pool, title_id).await?;
+    Ok(RefreshResponse {
+        title_id,
+        entries,
+        preferred_source_id,
+    })
+}
+
+/// Полное обновление страницы тайтла: главы, обложки и общие метаданные.
+/// Метаданные собираются из всех привязанных источников в порядке
+/// приоритета: первый непустой источник заполняет поле, остальные —
+/// только пропуски. Это позволяет тайтлу без Remanga получить тип,
+/// описание и обложки из другого источника, даже если там их меньше.
+pub async fn sync_title(state: &AppState, title_id: i64) -> Result<SyncResponse, AppError> {
+    let (preferred_source_id, synced_at) = sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
+        "SELECT preferred_source_id, metadata_synced_at FROM titles WHERE id = ?",
+    )
+    .bind(title_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
+
+    let now = now_unix();
+    if synced_at.is_some_and(|last| now.saturating_sub(last) < SYNC_TTL_SECS) {
+        return Ok(SyncResponse {
+            title_id,
+            refreshed: false,
+            preferred_source_id,
+            metadata_updated: false,
+            entries: Vec::new(),
+        });
+    }
+
+    let (entries, mut metadata) = refresh_entries(state, title_id, false).await?;
+    let mut preferred_source_id = selection::recompute_preferred(&state.pool, title_id).await?;
+
+    // Порядок метаданных: preferred → rank → is_primary → привязка.
+    let title = selection::load_title_info(&state.pool, title_id).await?;
+    let ranks = selection::load_priorities(&state.pool, title.lang.as_deref()).await?;
+    metadata.sort_by_key(|source| {
+        (
+            Some(source.source_id) != preferred_source_id,
+            selection::rank_of(&ranks, source.source_id),
+            source.entry_id,
+        )
+    });
+
+    let merged = merge_source_metadata(&metadata);
+    let metadata_updated = match merged {
+        Some(merged) => apply_source_metadata(state, title_id, &merged).await?,
+        None => false,
+    };
+
+    // Язык мог измениться вместе с метаданными: набор приоритетов другой.
+    let info = selection::load_title_info(&state.pool, title_id).await?;
+    if info.lang != title.lang {
+        preferred_source_id = selection::recompute_preferred(&state.pool, title_id).await?;
+    }
+
+    // Обложки: preferred (уже с учётом нового языка) заполняет размеры
+    // первым, остальные источники — только пропуски. Ручные не трогаем.
+    if let Err(error) = crate::catalog::cover::refresh_source_covers(state, title_id, false).await {
+        tracing::warn!(title_id, %error, "cannot refresh source covers during sync");
+    }
+
+    sqlx::query("UPDATE titles SET metadata_synced_at = ? WHERE id = ?")
+        .bind(now)
+        .bind(title_id)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(SyncResponse {
+        title_id,
+        refreshed: true,
+        preferred_source_id,
+        metadata_updated,
+        entries,
+    })
+}
+
+/// Общая часть refresh/sync: главы всех entry и метаданные успешных
+/// `title()`. `import_covers` включает старое поведение ручного refresh —
+/// заполнить пустые размеры обложек сразу.
+async fn refresh_entries(
+    state: &AppState,
+    title_id: i64,
+    import_covers: bool,
+) -> Result<(Vec<RefreshEntryDto>, Vec<SourceMetadata>), AppError> {
     sqlx::query_scalar::<_, i64>("SELECT 1 FROM titles WHERE id = ?")
         .bind(title_id)
         .fetch_optional(&state.pool)
@@ -812,6 +1012,8 @@ pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshRes
     .await?;
 
     let mut results = Vec::with_capacity(entries.len());
+    let mut metadata = Vec::new();
+
     for (entry_id, source_id, external_id, code) in entries {
         let runtime = {
             let registry = state.sources.read().await;
@@ -846,26 +1048,30 @@ pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshRes
             }
         };
 
-        // Refresh — ручная операция: добирает обложки для тайтлов,
-        // импортированных до появления автоскачивания. Пустые размеры
-        // только заполняются, ручные не перетираются.
         match adapter.title(&external_id).await {
             Ok(source_title) => {
-                crate::catalog::cover::import_source_covers(
-                    state,
-                    title_id,
+                if import_covers {
+                    crate::catalog::cover::import_source_covers(
+                        state,
+                        title_id,
+                        source_id,
+                        &adapter,
+                        &source_title.covers,
+                    )
+                    .await;
+                }
+                metadata.push(SourceMetadata {
+                    entry_id,
                     source_id,
-                    &adapter,
-                    &source_title.covers,
-                )
-                .await;
+                    title: source_title,
+                });
             }
             Err(error) => {
                 tracing::warn!(
                     entry_id,
                     code = %code,
                     error = %error,
-                    "cannot refresh source covers"
+                    "cannot refresh source metadata"
                 );
             }
         }
@@ -906,12 +1112,238 @@ pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshRes
         }
     }
 
-    let preferred_source_id = selection::recompute_preferred(&state.pool, title_id).await?;
-    Ok(RefreshResponse {
-        title_id,
-        entries: results,
-        preferred_source_id,
+    Ok((results, metadata))
+}
+
+/// Приводит метаданные разных источников к одному виду: первый источник в
+/// порядке приоритета заполняет поле, остальные только пропуски. Списки
+/// объединяются, тип берётся первый конкретный (не `other`), числовые поля
+/// проверяются по тем же ограничениям, что и схема БД.
+fn merge_source_metadata(sources: &[SourceMetadata]) -> Option<MetadataSnapshot> {
+    let mut name = None;
+    let mut kind = TitleKind::Other;
+    let mut alt_names = Vec::new();
+    let mut authors = Vec::new();
+    let mut genres = Vec::new();
+    let mut description = None;
+    let mut status = None;
+    let mut year = None;
+    let mut lang = None;
+    let mut rating = None;
+
+    for source in sources {
+        let title = &source.title;
+        if name.is_none() && !title.name.trim().is_empty() {
+            name = Some(truncate_chars(&title.name, 300));
+        }
+        if kind == TitleKind::Other && title.kind != TitleKind::Other {
+            kind = title.kind;
+        }
+        alt_names.extend(title.alt_names.iter().cloned());
+        authors.extend(title.authors.iter().cloned());
+        genres.extend(title.genres.iter().cloned());
+
+        if description.is_none()
+            && let Some(text) = title.description.as_deref()
+            && !text.trim().is_empty()
+        {
+            description = Some(truncate_chars(text, 20_000));
+        }
+        if status.is_none() {
+            status = title.status.map(|status| status.as_str().to_owned());
+        }
+        if year.is_none() {
+            year = title
+                .year
+                .map(i64::from)
+                .filter(|year| (1800..=2200).contains(year));
+        }
+        if lang.is_none() {
+            lang = title
+                .lang
+                .as_deref()
+                .map(str::trim)
+                .filter(|lang| !lang.is_empty())
+                .map(|lang| lang.chars().take(16).collect());
+        }
+        if rating.is_none() {
+            rating = title
+                .rating
+                .map(f64::from)
+                .filter(|rating| rating.is_finite() && (0.0..=10.0).contains(rating));
+        }
+    }
+
+    let name = name?;
+    for list in [&mut alt_names, &mut authors, &mut genres] {
+        dedupe(list);
+        list.truncate(50);
+        for item in list.iter_mut() {
+            *item = truncate_chars(item, 200);
+        }
+    }
+
+    Some(MetadataSnapshot {
+        kind: Some(kind.as_str().to_owned()),
+        name: Some(name),
+        alt_names,
+        authors,
+        genres,
+        description,
+        status,
+        year,
+        lang,
+        rating,
     })
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct CurrentMetadata {
+    kind: String,
+    name: String,
+    alt_names_json: String,
+    authors_json: String,
+    genres_json: String,
+    description: Option<String>,
+    status: Option<String>,
+    year: Option<i64>,
+    lang: Option<String>,
+    rating: Option<f64>,
+    source_metadata_json: Option<String>,
+}
+
+fn decode_list(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+fn pick_value<T: PartialEq>(current: T, previous: Option<&T>, next: T) -> T {
+    match previous {
+        Some(previous) if current != *previous => current,
+        _ => next,
+    }
+}
+
+/// Применяет объединённые метаданные, сохраняя ручные правки полей.
+/// Поле считается ручным, если оно отличается от прошлого снимка источника.
+async fn apply_source_metadata(
+    state: &AppState,
+    title_id: i64,
+    merged: &MetadataSnapshot,
+) -> Result<bool, AppError> {
+    let current = sqlx::query_as::<_, CurrentMetadata>(
+        "SELECT kind, name, alt_names_json, authors_json, genres_json, description, \
+                status, year, lang, rating, source_metadata_json \
+         FROM titles WHERE id = ?",
+    )
+    .bind(title_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let previous = current
+        .source_metadata_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<MetadataSnapshot>(raw).ok());
+
+    let kind = pick_value(
+        current.kind.clone(),
+        previous
+            .as_ref()
+            .and_then(|snapshot| snapshot.kind.as_ref()),
+        merged.kind.clone().unwrap_or_else(|| current.kind.clone()),
+    );
+    let name = pick_value(
+        current.name.clone(),
+        previous
+            .as_ref()
+            .and_then(|snapshot| snapshot.name.as_ref()),
+        merged.name.clone().unwrap_or_else(|| current.name.clone()),
+    );
+    let alt_names = pick_value(
+        decode_list(&current.alt_names_json),
+        previous.as_ref().map(|snapshot| &snapshot.alt_names),
+        merged.alt_names.clone(),
+    );
+    let authors = pick_value(
+        decode_list(&current.authors_json),
+        previous.as_ref().map(|snapshot| &snapshot.authors),
+        merged.authors.clone(),
+    );
+    let genres = pick_value(
+        decode_list(&current.genres_json),
+        previous.as_ref().map(|snapshot| &snapshot.genres),
+        merged.genres.clone(),
+    );
+    let description = pick_value(
+        current.description.clone(),
+        previous.as_ref().map(|snapshot| &snapshot.description),
+        merged.description.clone(),
+    );
+    let status = pick_value(
+        current.status.clone(),
+        previous.as_ref().map(|snapshot| &snapshot.status),
+        merged.status.clone(),
+    );
+    let year = pick_value(
+        current.year,
+        previous.as_ref().map(|snapshot| &snapshot.year),
+        merged.year,
+    );
+    let lang = pick_value(
+        current.lang.clone(),
+        previous.as_ref().map(|snapshot| &snapshot.lang),
+        merged.lang.clone(),
+    );
+    let rating = pick_value(
+        current.rating,
+        previous.as_ref().map(|snapshot| &snapshot.rating),
+        merged.rating,
+    );
+
+    let changed = kind != current.kind
+        || name != current.name
+        || alt_names != decode_list(&current.alt_names_json)
+        || authors != decode_list(&current.authors_json)
+        || genres != decode_list(&current.genres_json)
+        || description != current.description
+        || status != current.status
+        || year != current.year
+        || lang != current.lang
+        || rating != current.rating;
+
+    let snapshot = serde_json::to_string(merged).ok();
+
+    if changed {
+        let name_lower = name.to_lowercase();
+        sqlx::query(
+            "UPDATE titles SET kind = ?, name = ?, name_lower = ?, alt_names_json = ?, \
+                              authors_json = ?, genres_json = ?, description = ?, status = ?, \
+                              year = ?, lang = ?, rating = ?, updated_at = max(?, updated_at + 1) \
+             WHERE id = ?",
+        )
+        .bind(&kind)
+        .bind(&name)
+        .bind(name_lower)
+        .bind(Value::from(alt_names).to_string())
+        .bind(Value::from(authors).to_string())
+        .bind(Value::from(genres).to_string())
+        .bind(description.as_deref())
+        .bind(status.as_deref())
+        .bind(year)
+        .bind(lang.as_deref())
+        .bind(rating)
+        .bind(now_unix())
+        .bind(title_id)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    sqlx::query("UPDATE titles SET source_metadata_json = ? WHERE id = ?")
+        .bind(snapshot)
+        .bind(title_id)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(changed)
 }
 
 fn failed(source_entry_id: i64, code: String, error: String) -> RefreshEntryDto {
@@ -939,4 +1371,80 @@ async fn store_sync_error(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sources::{ExternalId, SourceCovers, TitleStatus};
+
+    fn source(entry_id: i64, source_id: i64, title: SourceTitle) -> SourceMetadata {
+        SourceMetadata {
+            entry_id,
+            source_id,
+            title,
+        }
+    }
+
+    fn empty_title(name: &str) -> SourceTitle {
+        SourceTitle {
+            external_id: ExternalId::new("fixture-title").expect("external id"),
+            kind: TitleKind::Other,
+            name: name.to_owned(),
+            alt_names: Vec::new(),
+            description: None,
+            covers: SourceCovers::default(),
+            authors: Vec::new(),
+            genres: Vec::new(),
+            status: None,
+            year: None,
+            rating: None,
+            lang: None,
+            external_url: None,
+            raw_json: None,
+        }
+    }
+
+    #[test]
+    fn merges_metadata_in_priority_order_and_fills_gaps() {
+        let mut first = empty_title("First");
+        first.genres = vec!["A".to_owned(), "A".to_owned()];
+        first.alt_names = vec!["Alt".to_owned()];
+        // Некорректные числа не должны попасть в общий тайтл.
+        first.year = Some(1500);
+        first.rating = Some(11.0);
+
+        let mut second = empty_title("Second");
+        second.kind = TitleKind::Manhwa;
+        second.description = Some("Description".to_owned());
+        second.genres = vec!["A".to_owned(), "B".to_owned()];
+        second.authors = vec!["Author".to_owned()];
+        second.status = Some(TitleStatus::Ongoing);
+        second.year = Some(2020);
+        second.rating = Some(9.5);
+        second.lang = Some("ru".to_owned());
+
+        let merged =
+            merge_source_metadata(&[source(1, 10, first), source(2, 20, second)]).expect("merged");
+
+        assert_eq!(merged.name.as_deref(), Some("First"));
+        assert_eq!(merged.kind.as_deref(), Some("manhwa"));
+        assert_eq!(merged.description.as_deref(), Some("Description"));
+        assert_eq!(merged.genres, vec!["A", "B"]);
+        assert_eq!(merged.authors, vec!["Author"]);
+        assert_eq!(merged.alt_names, vec!["Alt"]);
+        assert_eq!(merged.status.as_deref(), Some("ongoing"));
+        assert_eq!(merged.year, Some(2020));
+        assert_eq!(merged.rating, Some(9.5));
+        assert_eq!(merged.lang.as_deref(), Some("ru"));
+    }
+
+    #[test]
+    fn unknown_kind_stays_other_and_empty_list_has_no_snapshot() {
+        assert!(merge_source_metadata(&[]).is_none());
+
+        let merged = merge_source_metadata(&[source(1, 10, empty_title("Only"))]).expect("merged");
+        assert_eq!(merged.kind.as_deref(), Some("other"));
+        assert_eq!(merged.name.as_deref(), Some("Only"));
+    }
 }

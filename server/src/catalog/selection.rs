@@ -188,7 +188,12 @@ pub fn rank_of(ranks: &HashMap<i64, i64>, source_id: i64) -> i64 {
     ranks.get(&source_id).copied().unwrap_or(i64::MAX)
 }
 
-/// Preferred source → доступность → приоритет → is_primary → ordinal_site → id.
+/// Приоритет источника важнее полноты: главы, которые есть на более
+/// приоритетном источнике, берутся с него, даже если другой источник
+/// содержит больше глав. Известная недоступность (locked/missing) уводит
+/// вариант в конец, но `unknown` ещё не повод отдавать главу другому
+/// источнику — иначе первый импорт «перебивал» бы Remanga.
+/// Дальше: приоритет → preferred → is_primary → ordinal_site → id.
 pub fn order(
     mut list: Vec<ChapterCandidate>,
     preferred_source_id: Option<i64>,
@@ -198,9 +203,9 @@ pub fn order(
     list.sort_by_key(|candidate| {
         (
             i32::from(!candidate.source_enabled),
-            i32::from(preferred_source_id != Some(candidate.source_id)),
-            view(candidate, now) as i32,
+            i32::from(view(candidate, now) == AvailabilityView::Unavailable),
             rank_of(ranks, candidate.source_id),
+            i32::from(preferred_source_id != Some(candidate.source_id)),
             i32::from(!candidate.is_primary),
             candidate.ordinal_site,
             candidate.chapter_id,
@@ -298,8 +303,10 @@ pub async fn recompute_all_titles(pool: &SqlitePool) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Максимальный `chapter_count`; ничья — приоритет, `is_primary`, id.
-/// Источник без доступных глав не выбирается, пока есть доступные.
+/// Приоритет источника — главный критерий: именно он задаёт, чьи метаданные
+/// и главы считаются основными. Полнота и `is_primary` решают только ничью
+/// внутри одного ранга. Источник с 0 доступных глав всё равно может быть
+/// preferred: его метаданные валидны, а главы доберут другие источники.
 pub async fn recompute_preferred(
     pool: &SqlitePool,
     title_id: i64,
@@ -317,17 +324,14 @@ pub async fn recompute_preferred(
     .fetch_all(pool)
     .await?;
 
-    let has_available = entries.iter().any(|(_, _, available, _)| *available > 0);
-    let mut eligible: Vec<_> = entries
-        .into_iter()
-        .filter(|(_, _, available, _)| !has_available || *available > 0)
-        .collect();
+    let mut eligible: Vec<_> = entries.into_iter().collect();
 
-    eligible.sort_by_key(|(source_id, chapter_count, _, is_primary)| {
+    eligible.sort_by_key(|(source_id, chapter_count, available_count, is_primary)| {
         (
-            Reverse(*chapter_count),
             rank_of(&ranks, *source_id),
             i32::from(!*is_primary),
+            Reverse(*chapter_count),
+            Reverse(*available_count),
             *source_id,
         )
     });

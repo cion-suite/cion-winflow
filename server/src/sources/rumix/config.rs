@@ -20,6 +20,9 @@ pub const DEFAULT_USER_AGENT: &str = concat!(
 pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
     code: CODE,
     name: "RuMix",
+    site_url: "https://rumix.me",
+    default_base_url: "https://rumix.me",
+    lang: "ru",
     version: 1,
     capabilities: &[
         Capability::Search,

@@ -449,12 +449,14 @@ pub async fn refresh_source_covers(
     title_id: i64,
     replace_manual: bool,
 ) -> Result<SourceCoversResponse, AppError> {
-    let preferred_source_id =
-        sqlx::query_scalar::<_, Option<i64>>("SELECT preferred_source_id FROM titles WHERE id = ?")
-            .bind(title_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
+    let (preferred_source_id, lang) = sqlx::query_as::<_, (Option<i64>, Option<String>)>(
+        "SELECT preferred_source_id, lang FROM titles WHERE id = ?",
+    )
+    .bind(title_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
+    let ranks = crate::catalog::selection::load_priorities(&state.pool, lang.as_deref()).await?;
 
     let mut entries = sqlx::query_as::<_, CoverSourceEntry>(
         "SELECT e.id AS entry_id, e.source_id, e.external_id, s.code, e.is_primary \
@@ -467,6 +469,7 @@ pub async fn refresh_source_covers(
     entries.sort_by_key(|entry| {
         (
             Some(entry.source_id) != preferred_source_id,
+            crate::catalog::selection::rank_of(&ranks, entry.source_id),
             !entry.is_primary,
             entry.entry_id,
         )

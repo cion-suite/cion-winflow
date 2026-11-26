@@ -5,14 +5,20 @@ use serde_json::Value;
 
 use crate::{
     auth::session::now_unix,
+    catalog::selection,
     error::AppError,
     source_admin::service::{self as source_admin, ImportInput},
-    sources::{Capability, ExternalId, SearchRequest, SourceError, SourceKind, TitleKind},
+    sources::{
+        Capability, ExternalId, SearchRequest, SourceError, SourceKind, TitleKind,
+        text::normalize_name,
+    },
     state::AppState,
 };
 
 const MAX_QUERY_CHARS: usize = 200;
 const MAX_ITEMS_PER_SOURCE: usize = 12;
+/// Сколько альтернативных названий пробовать в поиске других источников.
+const MAX_ALT_NAME_QUERIES: usize = 5;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct DiscoverSearchParams {
@@ -69,7 +75,30 @@ struct SearchJob {
     code: String,
     name: String,
     source_id: i64,
+    lang: &'static str,
     adapter: SourceKind,
+}
+
+/// Результаты одного источника вместе с его приоритетом: они нужны, чтобы
+/// оставить один результат на тайтл — от самого приоритетного источника.
+struct SearchBatch {
+    source_name: String,
+    code: String,
+    source_id: i64,
+    rank: i64,
+    items: Vec<crate::sources::SourceSearchItem>,
+}
+
+struct LinkJob {
+    code: String,
+    source_id: i64,
+    adapter: SourceKind,
+}
+
+struct TitleNames {
+    name: String,
+    alt_names: Vec<String>,
+    lang: Option<String>,
 }
 
 pub async fn search(
@@ -110,18 +139,32 @@ pub async fn search(
                 code: runtime.code.clone(),
                 name: descriptor.name.to_owned(),
                 source_id: runtime.id,
+                lang: descriptor.lang,
                 adapter: adapter.clone(),
             });
         }
         jobs
     };
 
+    // Приоритет нужен и для порядка выдачи, и для дедупликации: одинаковый
+    // тайтл показываем один раз — карточкой самого приоритетного источника.
+    let mut priorities: HashMap<&'static str, HashMap<i64, i64>> = HashMap::new();
+    for job in &jobs {
+        if !priorities.contains_key(job.lang) {
+            let ranks = selection::load_priorities(&state.pool, Some(job.lang))
+                .await
+                .unwrap_or_default();
+            priorities.insert(job.lang, ranks);
+        }
+    }
+
     let query = query.to_owned();
     let mut handles = Vec::with_capacity(jobs.len());
     for job in jobs {
+        let rank = selection::rank_of(&priorities[job.lang], job.source_id);
         let query = query.clone();
-        let code = job.code.clone();
-        let name = job.name.clone();
+        let code = job.code;
+        let name = job.name;
         let source_id = job.source_id;
         let handle = tokio::spawn(async move {
             job.adapter
@@ -132,40 +175,46 @@ pub async fn search(
                 })
                 .await
         });
-        handles.push((code, name, source_id, handle));
+        handles.push((name, code, source_id, rank, handle));
     }
 
-    let mut batches: Vec<(String, String, i64, Vec<crate::sources::SourceSearchItem>)> = Vec::new();
+    let mut batches = Vec::new();
     let mut errors = Vec::new();
-    for (code, name, source_id, handle) in handles {
+    for (source_name, code, source_id, rank, handle) in handles {
         match handle.await {
-            Ok(Ok(page)) => batches.push((name, code, source_id, page.items)),
+            Ok(Ok(page)) => batches.push(SearchBatch {
+                source_name,
+                code,
+                source_id,
+                rank,
+                items: page.items,
+            }),
             Ok(Err(error)) => errors.push(DiscoverSourceError {
                 code,
-                source_name: name,
+                source_name,
                 message: short_error(&error),
             }),
             Err(error) => errors.push(DiscoverSourceError {
                 code,
-                source_name: name,
+                source_name,
                 message: format!("source request failed: {error}"),
             }),
         }
     }
 
-    // Порядок источников стабилен, порядок элементов внутри — релевантность.
-    batches.sort_by(|left, right| left.0.cmp(&right.0));
+    sort_batches_by_priority(&mut batches);
+    retain_unique_titles(&mut batches);
 
     let mut entry_map: HashMap<(i64, String), i64> = HashMap::new();
-    for (_, _, source_id, _) in &batches {
+    for batch in &batches {
         let rows = sqlx::query_as::<_, (String, i64)>(
             "SELECT external_id, title_id FROM source_entries WHERE source_id = ?",
         )
-        .bind(source_id)
+        .bind(batch.source_id)
         .fetch_all(&state.pool)
         .await?;
         for (external_id, title_id) in rows {
-            entry_map.insert((*source_id, external_id), title_id);
+            entry_map.insert((batch.source_id, external_id), title_id);
         }
     }
 
@@ -178,13 +227,15 @@ pub async fn search(
             .collect();
 
     let mut items = Vec::new();
-    for (source_name, code, source_id, source_items) in batches {
-        for item in source_items.into_iter().take(MAX_ITEMS_PER_SOURCE) {
+    for batch in batches {
+        for item in batch.items.into_iter().take(MAX_ITEMS_PER_SOURCE) {
             let external_id = item.external_id.as_str().to_owned();
-            let title_id = entry_map.get(&(source_id, external_id.clone())).copied();
+            let title_id = entry_map
+                .get(&(batch.source_id, external_id.clone()))
+                .copied();
             items.push(DiscoverItemDto {
-                code: code.clone(),
-                source_name: source_name.clone(),
+                code: batch.code.clone(),
+                source_name: batch.source_name.clone(),
                 external_id,
                 title_kind: item.kind.map(TitleKind::as_str),
                 name: item.name,
@@ -199,6 +250,232 @@ pub async fn search(
     }
 
     Ok(DiscoverSearchResponse { items, errors })
+}
+
+/// Порядок источников — приоритет, затем код; порядок элементов внутри
+/// источника остаётся релевантностью выдачи.
+fn sort_batches_by_priority(batches: &mut [SearchBatch]) {
+    batches.sort_by(|left, right| {
+        left.rank
+            .cmp(&right.rank)
+            .then_with(|| left.code.cmp(&right.code))
+    });
+}
+
+/// Оставляет один результат на нормализованное название: первый в порядке
+/// приоритета источника. Пустые названия не объединяются.
+fn retain_unique_titles(batches: &mut [SearchBatch]) {
+    let mut seen: HashSet<String> = HashSet::new();
+    for batch in batches.iter_mut() {
+        batch.items.retain(|item| {
+            let key = normalize_name(&item.name);
+            key.is_empty() || seen.insert(key)
+        });
+    }
+}
+
+/// После добавления ищет тот же тайтл на остальных включённых источниках:
+/// сначала по основному названию, затем по альтернативным. Привязка идёт тем
+/// же импортом, что и ручное добавление, поэтому дублей не создаёт.
+/// Ошибки отдельных источников не отменяют добавление.
+async fn auto_link_sources(state: &AppState, title_id: i64, origin_source_id: i64) -> Vec<String> {
+    let Ok(Some(names)) = title_names(state, title_id).await else {
+        return Vec::new();
+    };
+    let main_key = normalize_name(&names.name);
+    if main_key.is_empty() {
+        return Vec::new();
+    }
+    let mut wanted: HashSet<String> = names
+        .alt_names
+        .iter()
+        .map(|name| normalize_name(name))
+        .filter(|name| !name.is_empty())
+        .collect();
+    wanted.insert(main_key.clone());
+
+    let attached: HashSet<i64> =
+        sqlx::query_scalar::<_, i64>("SELECT source_id FROM source_entries WHERE title_id = ?")
+            .bind(title_id)
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+    let mut jobs = {
+        let registry = state.sources.read().await;
+        let mut jobs = Vec::new();
+        for runtime in registry.entries() {
+            if !runtime.enabled || runtime.id == origin_source_id || attached.contains(&runtime.id)
+            {
+                continue;
+            }
+            let descriptor = runtime.descriptor;
+            if !descriptor.has(Capability::Search) || !descriptor.has(Capability::Chapters) {
+                continue;
+            }
+            // Тайтл принадлежит одному языку: английская копия не должна
+            // подмешиваться к русской карточке.
+            if let Some(lang) = names.lang.as_deref()
+                && descriptor.lang != lang
+            {
+                continue;
+            }
+            let Ok(adapter) = runtime.adapter() else {
+                continue;
+            };
+            jobs.push(LinkJob {
+                code: runtime.code.clone(),
+                source_id: runtime.id,
+                adapter: adapter.clone(),
+            });
+        }
+        jobs
+    };
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+
+    let ranks = selection::load_priorities(&state.pool, names.lang.as_deref())
+        .await
+        .unwrap_or_default();
+    jobs.sort_by(|left, right| {
+        selection::rank_of(&ranks, left.source_id)
+            .cmp(&selection::rank_of(&ranks, right.source_id))
+            .then_with(|| left.code.cmp(&right.code))
+    });
+
+    let mut linked = Vec::new();
+    for job in jobs {
+        let mut candidate = None;
+        if names.name.chars().count() <= MAX_QUERY_CHARS {
+            candidate = find_by_main_name(&job.adapter, names.name.trim(), &main_key).await;
+        }
+        if candidate.is_none() {
+            candidate = find_by_alt_names(&job.adapter, &names.alt_names, &wanted).await;
+        }
+        let Some(external_id) = candidate else {
+            continue;
+        };
+
+        match source_admin::import(
+            state,
+            &job.code,
+            ImportInput {
+                external_id: external_id.as_str().to_owned(),
+                title_id: Some(title_id),
+            },
+        )
+        .await
+        {
+            Ok(response) => {
+                tracing::info!(
+                    title_id,
+                    source = %job.code,
+                    chapters = response.imported_chapters,
+                    "auto-linked source by title name"
+                );
+                linked.push(job.code);
+            }
+            Err(error) => {
+                tracing::warn!(title_id, source = %job.code, %error, "auto-link failed");
+            }
+        }
+    }
+
+    linked
+}
+
+async fn title_names(state: &AppState, title_id: i64) -> Result<Option<TitleNames>, AppError> {
+    let row = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT name, alt_names_json, lang FROM titles WHERE id = ?",
+    )
+    .bind(title_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    Ok(row.map(|(name, alt_names_json, lang)| TitleNames {
+        name,
+        alt_names: serde_json::from_str(&alt_names_json).unwrap_or_default(),
+        lang,
+    }))
+}
+
+/// Строгое совпадение по основному названию — первый проход.
+async fn find_by_main_name(
+    adapter: &SourceKind,
+    query: &str,
+    main_key: &str,
+) -> Option<ExternalId> {
+    let page = adapter
+        .search(SearchRequest {
+            query: query.to_owned(),
+            cursor: None,
+            filters: Value::Null,
+        })
+        .await
+        .ok()?;
+
+    page.items
+        .into_iter()
+        .find(|item| normalize_name(&item.name) == main_key)
+        .map(|item| item.external_id)
+}
+
+/// Второй проход: поиск по альтернативным названиям, совпадение —
+/// основное или альтернативное имя кандидата из набора названий тайтла.
+async fn find_by_alt_names(
+    adapter: &SourceKind,
+    alt_names: &[String],
+    wanted: &HashSet<String>,
+) -> Option<ExternalId> {
+    let mut queries = Vec::new();
+    let mut seen = HashSet::new();
+    for alt_name in alt_names {
+        let query = alt_name.trim();
+        let key = normalize_name(query);
+        if key.is_empty() || query.chars().count() > MAX_QUERY_CHARS || !seen.insert(key) {
+            continue;
+        }
+        queries.push(query.to_owned());
+        if queries.len() >= MAX_ALT_NAME_QUERIES {
+            break;
+        }
+    }
+
+    for query in queries {
+        let Ok(page) = adapter
+            .search(SearchRequest {
+                query,
+                cursor: None,
+                filters: Value::Null,
+            })
+            .await
+        else {
+            continue;
+        };
+
+        if let Some(item) = page
+            .items
+            .into_iter()
+            .find(|item| item_matches_names(item, wanted))
+        {
+            return Some(item.external_id);
+        }
+    }
+
+    None
+}
+
+/// Основное или альтернативное имя кандидата совпадает с набором названий
+/// искомого тайтла.
+fn item_matches_names(item: &crate::sources::SourceSearchItem, wanted: &HashSet<String>) -> bool {
+    wanted.contains(&normalize_name(&item.name))
+        || item
+            .alt_names
+            .iter()
+            .any(|alt_name| wanted.contains(&normalize_name(alt_name)))
 }
 
 pub async fn add(
@@ -310,6 +587,14 @@ pub async fn add(
     .fetch_one(&state.pool)
     .await?;
 
+    // Добавление одного источника автоматически привязывает тот же тайтл
+    // с остальных включённых источников: пользователь не повторяет это
+    // вручную для каждого произведения.
+    let linked = auto_link_sources(state, title_id, runtime.id).await;
+    if !linked.is_empty() {
+        tracing::info!(title_id, sources = ?linked, "auto-linked missing sources");
+    }
+
     Ok(DiscoverAddResponse {
         title_id,
         title_created,
@@ -321,4 +606,80 @@ pub async fn add(
 
 fn short_error(error: &SourceError) -> String {
     error.to_string().chars().take(200).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sources::SourceSearchItem;
+
+    fn item(external_id: &str, name: &str, alt_names: &[&str]) -> SourceSearchItem {
+        SourceSearchItem {
+            external_id: ExternalId::new(external_id).expect("external id"),
+            kind: None,
+            name: name.to_owned(),
+            alt_names: alt_names.iter().map(|name| (*name).to_owned()).collect(),
+            cover_ref: None,
+            year: None,
+            status: None,
+            external_url: None,
+        }
+    }
+
+    fn batch(code: &str, rank: i64, items: Vec<SourceSearchItem>) -> SearchBatch {
+        SearchBatch {
+            source_name: code.to_owned(),
+            code: code.to_owned(),
+            source_id: i64::from(items.len() as u32),
+            rank,
+            items,
+        }
+    }
+
+    #[test]
+    fn search_dedupes_same_title_by_source_priority() {
+        let mut batches = vec![
+            batch(
+                "mangamir",
+                1,
+                vec![
+                    item("m1", "Во Всеоружии", &[]),
+                    item("m2", "Третий тайтл", &[]),
+                ],
+            ),
+            batch("remanga", 0, vec![item("r1", "во всеоружии", &[])]),
+        ];
+
+        sort_batches_by_priority(&mut batches);
+        retain_unique_titles(&mut batches);
+
+        assert_eq!(batches[0].code, "remanga");
+        assert_eq!(batches[0].items.len(), 1);
+        assert_eq!(batches[1].items.len(), 1);
+        assert_eq!(batches[1].items[0].external_id.as_str(), "m2");
+    }
+
+    #[test]
+    fn alt_name_matches_any_title_name() {
+        let wanted: HashSet<String> = [
+            "хроники демонического культа",
+            "chronicles of the demon faction",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+
+        assert!(item_matches_names(
+            &item("a", "Chronicles of the Demon Faction", &[]),
+            &wanted
+        ));
+        assert!(item_matches_names(
+            &item("b", "Совсем другое", &["Хроники Демонического Культа"]),
+            &wanted
+        ));
+        assert!(!item_matches_names(
+            &item("c", "Совсем другое", &["Не то"]),
+            &wanted
+        ));
+    }
 }

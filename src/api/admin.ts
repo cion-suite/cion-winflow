@@ -8,6 +8,12 @@ import { progressQueryKey } from "./progress";
 export type SourceState = {
   code: string;
   name: string;
+  /** Сайт для подписи: у Remanga отличается от API-хоста base_url. */
+  site_url: string;
+  /** Адрес, который подставляется при первом включении источника. */
+  default_base_url: string;
+  /** Языковая колонка админки: ru или en. */
+  lang: string;
   version: number;
   capabilities: string[];
   config_schema: unknown[];
@@ -179,8 +185,10 @@ export function useToggleSourceMutation() {
       void queryClient.invalidateQueries({ queryKey: SOURCES_QUERY_KEY });
       // Новый источник появляется в списке приоритетов после настройки.
       void queryClient.invalidateQueries({ queryKey: SOURCE_PRIORITIES_QUERY_KEY });
-      // Выключение меняет preferred source у тайтлов
+      // Выключение меняет preferred source и выбранный вариант главы.
       void queryClient.invalidateQueries({ queryKey: ["title"] });
+      void queryClient.invalidateQueries({ queryKey: ["chapter-content"] });
+      void queryClient.invalidateQueries({ queryKey: ["progress"] });
     },
   });
 }
@@ -208,6 +216,8 @@ export function useSaveSourcePrioritiesMutation() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: SOURCE_PRIORITIES_QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: ["title"] });
+      void queryClient.invalidateQueries({ queryKey: ["chapter-content"] });
+      void queryClient.invalidateQueries({ queryKey: ["progress"] });
     },
   });
 }

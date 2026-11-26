@@ -10,6 +10,7 @@ use std::{
 use reqwest::{
     Client, Response, Url,
     dns::{Addrs, Name, Resolve, Resolving},
+    header::{CONTENT_TYPE, COOKIE, SET_COOKIE},
 };
 use tokio::sync::Semaphore;
 
@@ -208,13 +209,30 @@ impl AdapterCtx {
     }
 }
 
+/// Тело ответа и куки сессии из `Set-Cookie`. Нужны источникам, у которых
+/// следующий запрос обязан идти в той же сессии (CSRF/Livewire).
+pub struct TextResponse {
+    pub body: String,
+    /// Пары `name=value` без атрибутов `Path`/`Expires`.
+    pub cookies: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum Payload<'a> {
+    None,
+    Form(&'a [(&'a str, &'a str)]),
+    Json(&'a str),
+}
+
 /// Забирает текст метаданных с двумя ретраями на сеть и 5xx.
 pub async fn get_text(
     ctx: &AdapterCtx,
     url: Url,
     headers: &[(&str, &str)],
 ) -> Result<String, SourceError> {
-    send_text(ctx, url, headers, None).await
+    Ok(send_text(ctx, &url, headers, Payload::None, &[])
+        .await?
+        .body)
 }
 
 /// POST-форма для источников, у которых поиск не GET (например, RuMix).
@@ -225,15 +243,38 @@ pub async fn post_form_text(
     headers: &[(&str, &str)],
     form: &[(&str, &str)],
 ) -> Result<String, SourceError> {
-    send_text(ctx, url, headers, Some(form)).await
+    Ok(send_text(ctx, &url, headers, Payload::Form(form), &[])
+        .await?
+        .body)
+}
+
+/// GET, который сохраняет `Set-Cookie`: следующий POST идёт в той же сессии.
+pub async fn get_text_with_cookies(
+    ctx: &AdapterCtx,
+    url: Url,
+    headers: &[(&str, &str)],
+) -> Result<TextResponse, SourceError> {
+    send_text(ctx, &url, headers, Payload::None, &[]).await
+}
+
+/// JSON-POST с куками из `get_text_with_cookies` (Livewire/CSRF).
+pub async fn post_json_with_cookies(
+    ctx: &AdapterCtx,
+    url: Url,
+    headers: &[(&str, &str)],
+    json: &str,
+    cookies: &[String],
+) -> Result<TextResponse, SourceError> {
+    send_text(ctx, &url, headers, Payload::Json(json), cookies).await
 }
 
 async fn send_text(
     ctx: &AdapterCtx,
-    url: Url,
+    url: &Url,
     headers: &[(&str, &str)],
-    form: Option<&[(&str, &str)]>,
-) -> Result<String, SourceError> {
+    payload: Payload<'_>,
+    cookies: &[String],
+) -> Result<TextResponse, SourceError> {
     if !ctx.breaker.allow() {
         return Err(SourceError::CircuitOpen);
     }
@@ -246,24 +287,34 @@ async fn send_text(
 
     let mut last_status = None;
     for attempt in 0..MAX_ATTEMPTS {
-        let mut request = match form {
-            Some(form) => ctx.client.post(url.clone()).form(form),
-            None => ctx.client.get(url.clone()),
+        let mut request = match payload {
+            Payload::None => ctx.client.get(url.clone()),
+            Payload::Form(form) => ctx.client.post(url.clone()).form(form),
+            Payload::Json(body) => ctx
+                .client
+                .post(url.clone())
+                .header(CONTENT_TYPE, "application/json")
+                .body(body.to_owned()),
         };
         for (name, value) in headers {
             request = request.header(*name, *value);
+        }
+        if !cookies.is_empty() {
+            request = request.header(COOKIE, cookies.join("; "));
         }
 
         match request.send().await {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
+                    let cookies = collect_cookies(&response);
                     let body = read_body_capped(response, METADATA_BODY_LIMIT).await?;
                     ctx.breaker.record_success();
-                    return String::from_utf8(body).map_err(|_| SourceError::Parse {
+                    let body = String::from_utf8(body).map_err(|_| SourceError::Parse {
                         stage: "body",
                         detail: "response is not UTF-8".to_owned(),
-                    });
+                    })?;
+                    return Ok(TextResponse { body, cookies });
                 }
 
                 // Редиректы не следуем: источник может уводить на оплату
@@ -314,6 +365,21 @@ async fn send_text(
     Err(SourceError::Http {
         status: last_status,
     })
+}
+
+/// Только пары `name=value`: атрибуты `Path`, `Secure` и срок жизни
+/// заголовка `Cookie` не нужны, повторный запрос идёт сразу за GET.
+fn collect_cookies(response: &Response) -> Vec<String> {
+    response
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter_map(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 pub struct FetchResponse {

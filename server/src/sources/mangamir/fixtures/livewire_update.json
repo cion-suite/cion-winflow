@@ -1,0 +1,17 @@
+{
+  "components": [
+    {
+      "snapshot": "{\"data\": {\"slug\": \"vo-vseoruzhii\", \"showingAllChapters\": true, \"tocPage\": 1}, \"memo\": {\"id\": \"F33eL4KYmQHS1C0CfCta\", \"name\": \"pages::book.show\"}}",
+      "effects": {
+        "returns": [
+          null
+        ],
+        "partials": [],
+        "islandFragments": [
+          "<!--[if FRAGMENT:type=island|name=ab27de34-1|token=ab27de34-1|mode=morph]><![endif]--><li wire:key=\"list-all-1\" class=\"relative group/toc\"><div class=\"hidden absolute inset-0 z-20 justify-center\"><span class=\"iconify mdi--loading w-8 h-8\"></span></div><ul><li class=\"list-row px-2 py-3\" data-chapter-slug=\"tom-1-glava-212\"><a wire:navigate href=\"/manga/vo-vseoruzhii/tom-1-glava-212\" title=\"Том 1 Глава 212\" class=\"flex-1 flex items-center gap-2\"><span>Том 1 Глава 212</span></a><div class=\"flex items-center gap-2\"><time datetime=\"2026-11-25T22:20:05+00:00\" title=\"2026-11-25 22:20:05\">17 часов назад</time></div></li><li class=\"list-row px-2 py-3\" data-chapter-slug=\"tom-1-glava-5\"><a href=\"/manga/vo-vseoruzhii/tom-1-glava-5\" title=\"Том 1 Глава 5\"><span>Том 1 Глава 5</span></a></li><li class=\"list-row px-2 py-3\" data-chapter-slug=\"tom-1-glava-1-6lulbf\"><a href=\"/manga/vo-vseoruzhii/tom-1-glava-1-6lulbf\" title=\"Том 1 Глава 1\"><span>Том 1 Глава 1</span></a></li></ul></li>"
+        ]
+      }
+    }
+  ],
+  "assets": []
+}

@@ -36,6 +36,13 @@ pub struct SourceDescriptor {
     /// Ключ в `sources.code`; совпадает с именем модуля адаптера.
     pub code: &'static str,
     pub name: &'static str,
+    /// Сайт для подписи в админке; может отличаться от `base_url` (API-хост).
+    pub site_url: &'static str,
+    /// Стандартный `base_url`: подставляется при первом включении источника.
+    /// Пустая строка — у источника нет осмысленного значения по умолчанию.
+    pub default_base_url: &'static str,
+    /// Языковая группа приоритетов (`ru`, `en`). Приоритеты задаются на язык.
+    pub lang: &'static str,
     /// Растёт при смене семантики парсинга или контракта.
     pub version: u32,
     pub capabilities: &'static [Capability],

@@ -46,6 +46,10 @@ fn title_name(external_id: &ExternalId) -> &'static str {
 pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
     code: CODE,
     name: "Fixture",
+    site_url: "https://fixture.example",
+    // Тестовый адаптер настраивается только через PUT /api/sources/{code}.
+    default_base_url: "",
+    lang: "ru",
     version: 1,
     capabilities: &[Capability::Search, Capability::Chapters, Capability::Images],
     config: &[],

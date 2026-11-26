@@ -32,6 +32,7 @@ export {
   useCreateTitleMutation,
   useDeleteCoverMutation,
   useFetchSourceCoversMutation,
+  useSyncTitleMutation,
   useTitleQuery,
   useUpdateTitleMutation,
   useUploadCoverMutation,
@@ -51,6 +52,8 @@ export type {
   TitleResponse,
   TitleSource,
   TitleSummary,
+  TitleSyncEntry,
+  TitleSyncResponse,
   UploadCoverInput,
 } from "./catalog";
 export {

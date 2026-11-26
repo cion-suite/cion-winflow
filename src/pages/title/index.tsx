@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -22,11 +22,13 @@ import {
   useProgressQuery,
   useRemoveLibraryMutation,
   useSetChapterReadMutation,
+  useSyncTitleMutation,
   useTitleQuery,
   useUpdateTitleMutation,
   useUpsertLibraryMutation,
   type LibraryTab,
   type TitleChapter,
+  type TitleSource,
 } from "@/api";
 import {
   customStatusValue,
@@ -40,6 +42,7 @@ import { useLocale, useT } from "@/lib/i18n";
 import { readerPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { CoverImage } from "@/ui/CoverImage";
+import { SourceIcon } from "@/ui/SourceIcon";
 import { TitleForm } from "@/ui/TitleForm";
 import { Badge } from "@/ui/shadcn/badge";
 import { Button, buttonVariants } from "@/ui/shadcn/button";
@@ -60,6 +63,14 @@ import {
 } from "@/ui/shadcn/empty";
 import { Input } from "@/ui/shadcn/input";
 import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@/ui/shadcn/item";
+import {
   Select,
   SelectContent,
   SelectGroup,
@@ -71,7 +82,6 @@ import {
 } from "@/ui/shadcn/select";
 import { Skeleton } from "@/ui/shadcn/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/shadcn/tabs";
-import { AdminSourcePanel } from "./AdminSourcePanel";
 import { AliasesPanel } from "./AliasesPanel";
 import { CoverEditorDialog } from "./CoverEditorDialog";
 import { LibraryPanel } from "./LibraryPanel";
@@ -138,6 +148,105 @@ function ScoreSelect({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function RatingBlock({
+  rating,
+  score,
+  disabled,
+  onScore,
+}: {
+  rating: number | null;
+  score: number | null;
+  disabled: boolean;
+  onScore: (score: number | null) => void;
+}) {
+  const t = useT();
+
+  return (
+    <div className="flex flex-col items-start gap-1 lg:items-end">
+      {rating !== null ? (
+        <span className="text-2xl font-semibold text-success">
+          {rating.toFixed(1)}
+        </span>
+      ) : (
+        <span className="text-sm text-muted-foreground">
+          {t("title.noRating")}
+        </span>
+      )}
+      <span className="text-xs text-muted-foreground">
+        {t("title.sourceRating")}
+      </span>
+      <div className="flex items-center gap-2 pt-1">
+        <span className="text-xs text-muted-foreground">
+          {t("title.yourScore")}
+        </span>
+        <ScoreSelect value={score} disabled={disabled} onChange={onScore} />
+      </div>
+    </div>
+  );
+}
+
+function TitleSources({
+  sources,
+  preferredSourceId,
+}: {
+  sources: TitleSource[];
+  preferredSourceId: number | null;
+}) {
+  const t = useT();
+  const visible = useMemo(
+    () =>
+      [...sources]
+        .filter((source) => source.available_count > 0)
+        .sort(
+          (left, right) =>
+            Number(right.source_id === preferredSourceId) -
+              Number(left.source_id === preferredSourceId) ||
+            Number(right.is_primary) - Number(left.is_primary) ||
+            right.available_count - left.available_count ||
+            left.name.localeCompare(right.name),
+        ),
+    [sources, preferredSourceId],
+  );
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">{t("title.sources")}</h2>
+      {visible.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {t("title.sourcesEmpty")}
+        </p>
+      ) : (
+        <ItemGroup className="gap-2">
+          {visible.map((source) => (
+            <Item
+              key={source.source_entry_id}
+              variant="muted"
+              size="sm"
+              className="cursor-default"
+            >
+              <ItemMedia className="size-9 rounded-md bg-background p-1.5 ring-1 ring-border">
+                <SourceIcon code={source.code} />
+              </ItemMedia>
+              <ItemContent>
+                <ItemTitle>{source.name}</ItemTitle>
+                <ItemDescription>
+                  {t("title.sourceStats", {
+                    chapters: source.chapter_count,
+                    available: source.available_count,
+                  })}
+                </ItemDescription>
+              </ItemContent>
+              {!source.enabled && (
+                <Badge variant="outline">{t("title.sourceDisabled")}</Badge>
+              )}
+            </Item>
+          ))}
+        </ItemGroup>
+      )}
+    </section>
   );
 }
 
@@ -267,6 +376,16 @@ export function TitlePage() {
   const upsert = useUpsertLibraryMutation(titleId ?? 0);
   const remove = useRemoveLibraryMutation(titleId ?? 0);
   const setRead = useSetChapterReadMutation(titleId ?? 0);
+  const sync = useSyncTitleMutation(titleId ?? 0);
+  const syncedTitleIdRef = useRef<number | null>(null);
+
+  // Страница показывает кэш сразу, а источники обновляются в фоне.
+  // Сервер сам решает, устарели ли данные (не чаще раза в 10 минут).
+  useEffect(() => {
+    if (titleId === null || syncedTitleIdRef.current === titleId) return;
+    syncedTitleIdRef.current = titleId;
+    sync.mutate();
+  }, [titleId, sync]);
 
   const [tab, setTab] = useState("chapters");
   const [editing, setEditing] = useState(false);
@@ -339,12 +458,21 @@ export function TitlePage() {
     return saved?.chapter_key ?? firstChapterKey;
   }, [availableChapters, progressKey, firstChapterKey]);
 
-  // «Продолжить» — прогресс не на первой главе, «Прочитано» — на последней.
+  // «Прочитано» — только когда прогресс на последней главе и страница
+  // последняя или предпоследняя. Одного факта открытия последней главы мало.
   const hasSavedProgress =
     progressKey !== null &&
     availableChapters.some((chapter) => chapter.chapter_key === progressKey);
-  const atLastChapter = hasSavedProgress && readTarget === lastChapterKey;
-  const readLabel = atLastChapter
+  const lastChapterPageCount =
+    ascendingChapters[ascendingChapters.length - 1]?.page_count ?? null;
+  const progressPage = progressQuery.data?.progress?.page ?? null;
+  const atLastPages =
+    lastChapterPageCount !== null &&
+    progressPage !== null &&
+    progressPage >= Math.max(0, lastChapterPageCount - 2);
+  const finished =
+    hasSavedProgress && readTarget === lastChapterKey && atLastPages;
+  const readLabel = finished
     ? t("title.finished")
     : hasSavedProgress && readTarget !== firstChapterKey
       ? t("title.continue")
@@ -476,7 +604,7 @@ export function TitlePage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
-      <div className="grid gap-8 md:grid-cols-[260px_minmax(0,1fr)]">
+      <div className="grid gap-8 md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)_240px]">
         <aside className="flex flex-col gap-3 md:sticky md:top-6 md:self-start">
           <CoverImage
             src={title.has_cover ? titleCoverUrl(title, "high") : null}
@@ -485,21 +613,21 @@ export function TitlePage() {
             className="aspect-2/3 w-full rounded-xl ring-1 ring-foreground/10"
           />
 
-          {readTarget ? (
+          {readTarget && !finished ? (
             <Link
               to={readerPath(titleId, readTarget)}
               className={cn(buttonVariants(), "w-full")}
             >
-              {atLastChapter ? (
-                <CheckIcon data-icon="inline-start" />
-              ) : (
-                <BookOpenIcon data-icon="inline-start" />
-              )}
+              <BookOpenIcon data-icon="inline-start" />
               {readLabel}
             </Link>
           ) : (
             <Button type="button" className="w-full" disabled>
-              <BookOpenIcon data-icon="inline-start" />
+              {finished ? (
+                <CheckIcon data-icon="inline-start" />
+              ) : (
+                <BookOpenIcon data-icon="inline-start" />
+              )}
               {readLabel}
             </Button>
           )}
@@ -602,29 +730,13 @@ export function TitlePage() {
               </p>
             </div>
 
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              {title.rating !== null ? (
-                <span className="text-2xl font-semibold text-success">
-                  {title.rating.toFixed(1)}
-                </span>
-              ) : (
-                <span className="text-sm text-muted-foreground">
-                  {t("title.noRating")}
-                </span>
-              )}
-              <span className="text-xs text-muted-foreground">
-                {t("title.sourceRating")}
-              </span>
-              <div className="flex items-center gap-2 pt-1">
-                <span className="text-xs text-muted-foreground">
-                  {t("title.yourScore")}
-                </span>
-                <ScoreSelect
-                  value={library?.score ?? null}
-                  disabled={mutationPending}
-                  onChange={handleScore}
-                />
-              </div>
+            <div className="shrink-0 lg:hidden">
+              <RatingBlock
+                rating={title.rating}
+                score={library?.score ?? null}
+                disabled={mutationPending}
+                onScore={handleScore}
+              />
             </div>
           </div>
 
@@ -784,62 +896,6 @@ export function TitlePage() {
                   )}
                 </div>
 
-                {isAdmin && sources.length > 0 && (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>{t("title.sources")}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="flex flex-col gap-2">
-                      {sources.map((source) => (
-                        <div
-                          key={source.source_entry_id}
-                          className="flex flex-col gap-1"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{source.name}</span>
-                              {source.is_primary && (
-                                <Badge variant="secondary">
-                                  {t("title.primarySource")}
-                                </Badge>
-                              )}
-                              {title.preferred_source_id === source.source_id && (
-                                <Badge>{t("title.preferredSource")}</Badge>
-                              )}
-                              {!source.enabled && (
-                                <Badge variant="outline">
-                                  {t("title.sourceDisabled")}
-                                </Badge>
-                              )}
-                            </div>
-                            <span className="text-muted-foreground">
-                              {t("title.sourceStats", {
-                                chapters: source.chapter_count,
-                                available: source.available_count,
-                              })}
-                            </span>
-                          </div>
-                          {source.last_error !== null && (
-                            <p className="text-xs text-destructive">
-                              {t("title.sourceError", {
-                                message: source.last_error,
-                              })}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </CardContent>
-                  </Card>
-                )}
-
-                {isAdmin && (
-                  <AdminSourcePanel
-                    titleId={titleId}
-                    sources={sources}
-                    preferredSourceId={title.preferred_source_id}
-                  />
-                )}
-
                 {isAdmin && (
                   <AliasesPanel titleId={titleId} chapters={query.data.chapters} aliases={aliases} />
                 )}
@@ -847,6 +903,23 @@ export function TitlePage() {
             </TabsContent>
           </Tabs>
         </div>
+
+        <aside className="md:col-span-2 lg:col-span-1 lg:sticky lg:top-6 lg:self-start">
+          <div className="flex flex-col gap-6">
+            <div className="hidden lg:flex lg:justify-end">
+              <RatingBlock
+                rating={title.rating}
+                score={library?.score ?? null}
+                disabled={mutationPending}
+                onScore={handleScore}
+              />
+            </div>
+            <TitleSources
+              sources={sources}
+              preferredSourceId={title.preferred_source_id}
+            />
+          </div>
+        </aside>
       </div>
 
       {isAdmin && (

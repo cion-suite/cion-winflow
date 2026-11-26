@@ -573,7 +573,7 @@ async fn discover_add_rejects_bad_id_and_unknown_source() {
         .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    // Источник не зарегистрирован в БД — его нельзя использовать
+    // Источник есть в реестре, но не настроен (base_url NULL) — использовать нельзя
     let response = app
         .request(with_cookie(
             json_request(
@@ -584,7 +584,8 @@ async fn discover_add_rejects_bad_id_and_unknown_source() {
             &admin,
         ))
         .await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body_json(response).await["code"], "source_disabled");
 
     let response = app
         .request(with_cookie(
@@ -597,6 +598,150 @@ async fn discover_add_rejects_bad_id_and_unknown_source() {
         ))
         .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn discover_add_links_same_name_to_existing_title() {
+    let _guard = lock().await;
+    let (base_url, _server) = start_image_server().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    configure_fixture(&app, &admin, &base_url).await;
+
+    let manual_id = app.create_title(&admin, "Fixture Title", "manga").await;
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                "/api/discover/add",
+                &json!({ "code": "fixture", "external_id": "fixture-title" }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let added = body_json(response).await;
+    assert_eq!(added["title_id"], manual_id);
+    assert_eq!(added["title_created"], false);
+
+    let title = get_json(&app, &format!("/api/titles/{manual_id}"), &admin).await;
+    let sources = title["sources"].as_array().expect("sources");
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["code"], "fixture");
+    assert_eq!(sources[0]["chapter_count"], 3);
+}
+
+#[tokio::test]
+async fn title_sync_refreshes_and_keeps_manual_edits() {
+    let _guard = lock().await;
+    let (base_url, _server) = start_image_server().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    configure_fixture(&app, &admin, &base_url).await;
+    let imported = import_fixture(&app, &admin).await;
+    let title_id = imported["title_id"].as_i64().expect("title id");
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/sync"),
+                &json!({}),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let sync = body_json(response).await;
+    assert_eq!(sync["refreshed"], true);
+    // Импорт уже записал те же метаданные, поэтому поля не изменились.
+    assert_eq!(sync["metadata_updated"], false);
+    assert_eq!(sync["entries"][0]["status"], "ok");
+
+    let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
+    assert_eq!(title["title"]["name"], "Fixture Title");
+    assert_eq!(title["title"]["description"], "Fixture description");
+    assert_eq!(title["title"]["kind"], "manga");
+
+    // Повторный вызов в пределах TTL не ходит в сеть.
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/sync"),
+                &json!({}),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(body_json(response).await["refreshed"], false);
+
+    // Ручная правка переживает следующую синхронизацию.
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::PUT,
+                &format!("/api/titles/{title_id}"),
+                &json!({
+                    "name": "Fixture Title",
+                    "kind": "manga",
+                    "description": "Manual description",
+                }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    sqlx::query("UPDATE titles SET metadata_synced_at = NULL WHERE id = ?")
+        .bind(title_id)
+        .execute(&app.pool)
+        .await
+        .expect("reset sync timestamp");
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/sync"),
+                &json!({}),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["refreshed"], true);
+
+    let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
+    assert_eq!(title["title"]["description"], "Manual description");
+}
+
+#[tokio::test]
+async fn title_sync_without_sources_is_a_noop() {
+    let _guard = lock().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    let title_id = app.create_title(&admin, "Manual only", "manga").await;
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/sync"),
+                &json!({}),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let sync = body_json(response).await;
+    assert_eq!(sync["refreshed"], true);
+    assert_eq!(sync["metadata_updated"], false);
+    assert_eq!(sync["entries"], json!([]));
 }
 
 async fn fetch_cover(app: &TestApp, title_id: i64, size: &str, cookie: &str) -> Vec<u8> {

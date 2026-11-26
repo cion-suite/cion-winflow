@@ -202,7 +202,8 @@ async fn priorities_replace_and_preferred_source_recompute() {
     let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
     assert_eq!(title["title"]["preferred_source_id"], fixture_id);
 
-    // Глав больше у Remanga — полнота важнее приоритета.
+    // Полнота больше не перебивает приоритет: fixture остаётся первым,
+    // хотя у Remanga стало больше глав.
     sqlx::query("UPDATE source_entries SET chapter_count = 4 WHERE id = ?")
         .bind(remanga_id)
         .execute(&app.pool)
@@ -225,7 +226,7 @@ async fn priorities_replace_and_preferred_source_recompute() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
-    assert_eq!(title["title"]["preferred_source_id"], remanga_source_id);
+    assert_eq!(title["title"]["preferred_source_id"], fixture_id);
 }
 
 #[tokio::test]
@@ -339,7 +340,7 @@ async fn priorities_validation_is_typed() {
 }
 
 #[tokio::test]
-async fn fallback_from_locked_preferred_source_and_aliases() {
+async fn locked_preferred_source_uses_available_variant_and_aliases() {
     let _guard = lock().await;
     let app = TestApp::new().await;
     app.create_admin().await;
@@ -351,7 +352,8 @@ async fn fallback_from_locked_preferred_source_and_aliases() {
     let _remanga_entry = seed_remanga_entry(&app, &admin, title_id, 3, 2).await;
     let remanga_source_id = source_id(&app, "remanga").await;
 
-    // Preferred — Remanga; его c1 свежий locked, поэтому fallback на fixture.
+    // Preferred — Remanga; его c1 свежий locked, поэтому для показа сразу
+    // выбирается доступный fixture: известная недоступность важнее приоритета.
     sqlx::query("UPDATE titles SET preferred_source_id = ? WHERE id = ?")
         .bind(remanga_source_id)
         .bind(title_id)
@@ -366,8 +368,10 @@ async fn fallback_from_locked_preferred_source_and_aliases() {
     )
     .await;
     assert_eq!(content["source"]["code"], "fixture");
-    assert_eq!(content["fallback"]["from_source"]["code"], "remanga");
-    assert_eq!(content["fallback"]["reason"], "locked");
+    assert!(
+        content["fallback"].is_null(),
+        "locked variant is skipped before the network request"
+    );
 
     // Для отображения выбран доступный вариант, а не locked preferred.
     let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
@@ -429,7 +433,10 @@ async fn fallback_from_locked_preferred_source_and_aliases() {
     )
     .await;
     assert_eq!(content["source"]["code"], "fixture");
-    assert_eq!(content["fallback"]["from_source"]["code"], "remanga");
+    assert!(
+        content["fallback"].is_null(),
+        "alias variant is ordered by availability too"
+    );
 
     let response = app
         .request(delete_request(

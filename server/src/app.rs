@@ -61,6 +61,14 @@ pub fn router(state: AppState) -> Router {
         6,
         4,
     );
+    // Синхронизация страницы тайтла ходит во все привязанные источники.
+    // Сервис дополнительно не чаще раза в 10 минут на тайтл.
+    let title_sync = with_rate_limit(
+        post(source_admin::handlers::sync_title),
+        state.config.trusted_proxies.clone(),
+        10,
+        2,
+    );
 
     let api = Router::new()
         .route("/health", get(health))
@@ -78,6 +86,7 @@ pub fn router(state: AppState) -> Router {
             "/titles/{id}",
             get(catalog::handlers::get_title).put(catalog::handlers::update_title),
         )
+        .route("/titles/{id}/sync", title_sync)
         .route(
             "/titles/{id}/cover",
             // Дефолтные 2 МиБ не пропустят 5-мегабайтный файл

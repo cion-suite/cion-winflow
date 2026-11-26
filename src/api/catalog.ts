@@ -17,6 +17,7 @@ import {
   type TitleStatus,
 } from "@/lib/catalog";
 import { apiUrl, jsonMutation, request } from "./client";
+import { progressQueryKey } from "./progress";
 
 export type TitleSummary = {
   id: number;
@@ -117,6 +118,23 @@ export type TitlePayload = {
   title: Title;
 };
 
+export type TitleSyncEntry = {
+  source_entry_id: number;
+  code: string;
+  status: "ok" | "error";
+  imported_chapters: number;
+  error: string | null;
+};
+
+export type TitleSyncResponse = {
+  title_id: number;
+  /** false — данные ещё свежие, сервер не ходил в источники. */
+  refreshed: boolean;
+  preferred_source_id: number | null;
+  metadata_updated: boolean;
+  entries: TitleSyncEntry[];
+};
+
 export type CoverResponse = {
   has_cover: boolean;
   updated_at: number;
@@ -182,6 +200,8 @@ export const catalogApi = {
       `/titles/${id}/cover/from-source`,
       jsonMutation({ replace_manual: replaceManual }),
     ),
+  sync: (id: number) =>
+    request<TitleSyncResponse>(`/titles/${id}/sync`, jsonMutation({}, "POST")),
 };
 
 export function useTitleQuery(id: number | null) {
@@ -192,6 +212,25 @@ export function useTitleQuery(id: number | null) {
       return catalogApi.title(id);
     },
     enabled: id !== null,
+  });
+}
+
+/**
+ * Фоновая синхронизация при открытии страницы тайтла. Сервер сам решает,
+ * устарели ли данные; ошибки источников приходят внутри ответа, а не 5xx.
+ */
+export function useSyncTitleMutation(id: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => catalogApi.sync(id),
+    onSuccess: (data) => {
+      if (!data.refreshed) return;
+      void queryClient.invalidateQueries({ queryKey: titleQueryKey(id) });
+      void queryClient.invalidateQueries({ queryKey: ["library"] });
+      void queryClient.invalidateQueries({ queryKey: ["chapter-content", id] });
+      void queryClient.invalidateQueries({ queryKey: progressQueryKey(id) });
+    },
   });
 }
 

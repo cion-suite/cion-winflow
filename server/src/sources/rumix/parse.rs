@@ -10,7 +10,7 @@ use crate::sources::dto::{
 };
 use crate::sources::error::SourceError;
 use crate::sources::keys::build_chapter_key;
-use crate::sources::text::{dedupe, normalize_ws, truncate_chars};
+use crate::sources::text::{dedupe, detect_chapter_kind, normalize_ws, truncate_chars};
 
 const MAX_NAME_CHARS: usize = 300;
 const MAX_LIST_ITEMS: usize = 50;
@@ -388,7 +388,7 @@ pub fn parse_chapters(
         let chapter_kind = if row.select(&extra_selector).next().is_some() {
             ChapterKind::Extra
         } else {
-            detect_kind(&link_text)
+            detect_chapter_kind(&link_text)
         };
         let chapter_key =
             build_chapter_key(volume, chapter_kind, number_text.as_deref(), &external_id);
@@ -432,23 +432,6 @@ fn tenths_text(value: i64) -> String {
         (value / 10).to_string()
     } else {
         format!("{}.{}", value / 10, value % 10)
-    }
-}
-
-fn detect_kind(text: &str) -> ChapterKind {
-    let lower = text.to_lowercase();
-    if lower.contains("экстра") || lower.contains("extra") {
-        ChapterKind::Extra
-    } else if lower.contains("ваншот") || lower.contains("one shot") || lower.contains("one-shot")
-    {
-        ChapterKind::Oneshot
-    } else if lower.contains("спешл") || lower.contains("special") || lower.contains("спецвыпуск")
-    {
-        ChapterKind::Special
-    } else if lower.contains("превью") || lower.contains("preview") {
-        ChapterKind::Preview
-    } else {
-        ChapterKind::Normal
     }
 }
 

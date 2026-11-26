@@ -9,6 +9,9 @@ pub const CODE: &str = "remanga";
 pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
     code: CODE,
     name: "Remanga",
+    site_url: "https://remanga.org",
+    default_base_url: "https://api.remanga.org",
+    lang: "ru",
     version: 1,
     capabilities: &[
         Capability::Search,

@@ -14,6 +14,7 @@ use crate::sources::{
     descriptor::SourceDescriptor,
     error::SourceError,
     http::AdapterCtx,
+    mangamir::{self, MangamirConfig},
     remanga::{self, RemangaConfig},
     rumix::{self, RumixConfig},
 };
@@ -74,6 +75,11 @@ pub struct SourceRegistry {
 
 impl SourceRegistry {
     pub async fn load(pool: &SqlitePool, client: Arc<Client>) -> Result<Self, AppError> {
+        // Строки нужны и для приоритетов: список языковой колонки строится
+        // из `sources`, а не только из настроенных адаптеров. `base_url`
+        // остаётся NULL: источник появится в списке, но не включится сам.
+        seed_descriptors(pool).await?;
+
         let rows = sqlx::query_as::<_, SourceRow>(
             "SELECT id, code, base_url, enabled, config_json, config_error, \
                     last_checked_at, last_error \
@@ -145,6 +151,70 @@ impl SourceRegistry {
     }
 }
 
+/// Добавляет недостающие строки для скомпилированных источников.
+/// `ON CONFLICT` не трогает `base_url` и `enabled`: ручная настройка
+/// администратора важнее дефолта, а пустой `default_base_url` (fixture)
+/// означает, что строка появится только после явного PUT.
+async fn seed_descriptors(pool: &SqlitePool) -> Result<(), AppError> {
+    let now = crate::auth::session::now_unix();
+    let mut langs: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+
+    for descriptor in descriptors() {
+        if descriptor.default_base_url.is_empty() {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO sources (code, name, base_url, enabled, config_json, descriptor_version, created_at) \
+             VALUES (?, ?, NULL, 0, '{}', ?, ?) \
+             ON CONFLICT (code) DO UPDATE SET \
+                 name = excluded.name, \
+                 descriptor_version = excluded.descriptor_version",
+        )
+        .bind(descriptor.code)
+        .bind(descriptor.name)
+        .bind(i64::from(descriptor.version))
+        .bind(now)
+        .execute(pool)
+        .await?;
+        langs
+            .entry(descriptor.lang)
+            .or_default()
+            .push(descriptor.code);
+    }
+
+    // Приоритет по умолчанию — порядок дескрипторов: Remanga → RuMix →
+    // Mangamir. Существующий список администратора не перетираем.
+    for (lang, codes) in langs {
+        let ranked: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM source_priorities WHERE lang = ?")
+                .bind(lang)
+                .fetch_one(pool)
+                .await?;
+        if ranked > 0 {
+            continue;
+        }
+
+        for (rank, code) in codes.into_iter().enumerate() {
+            let source_id = sqlx::query_scalar::<_, i64>("SELECT id FROM sources WHERE code = ?")
+                .bind(code)
+                .fetch_one(pool)
+                .await?;
+            sqlx::query(
+                "INSERT INTO source_priorities (lang, source_id, rank, created_at) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(lang)
+            .bind(source_id)
+            .bind(i64::try_from(rank).unwrap_or(i64::MAX))
+            .bind(now)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
 fn build_runtime(
     row: SourceRow,
     descriptor: &'static SourceDescriptor,
@@ -210,6 +280,12 @@ fn build_adapter(
                 .map(SourceKind::Rumix)
                 .map_err(|error| error.to_string())
         }
+        mangamir::CODE => {
+            let config = MangamirConfig::from_value(config)?;
+            mangamir::Mangamir::new(ctx, config)
+                .map(SourceKind::Mangamir)
+                .map_err(|error| error.to_string())
+        }
         #[cfg(debug_assertions)]
         crate::sources::fixture::CODE => crate::sources::fixture::Fixture::new(ctx)
             .map(SourceKind::Fixture)
@@ -219,7 +295,11 @@ fn build_adapter(
 }
 
 pub fn descriptors() -> Vec<&'static SourceDescriptor> {
-    let mut list = vec![&remanga::DESCRIPTOR, &rumix::DESCRIPTOR];
+    let mut list = vec![
+        &remanga::DESCRIPTOR,
+        &rumix::DESCRIPTOR,
+        &mangamir::DESCRIPTOR,
+    ];
     #[cfg(debug_assertions)]
     list.push(&crate::sources::fixture::DESCRIPTOR);
     list
