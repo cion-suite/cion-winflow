@@ -82,9 +82,10 @@ import {
 } from "@/ui/shadcn/select";
 import { Skeleton } from "@/ui/shadcn/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/shadcn/tabs";
-import { AliasesPanel } from "./AliasesPanel";
+import { sourceOrder } from "./aliases";
 import { CoverEditorDialog } from "./CoverEditorDialog";
 import { LibraryPanel } from "./LibraryPanel";
+import { TitleSettingsTab } from "./TitleSettingsTab";
 
 function chapterLabel(
   chapter: TitleChapter,
@@ -198,16 +199,9 @@ function TitleSources({
   const t = useT();
   const visible = useMemo(
     () =>
-      [...sources]
-        .filter((source) => source.available_count > 0)
-        .sort(
-          (left, right) =>
-            Number(right.source_id === preferredSourceId) -
-              Number(left.source_id === preferredSourceId) ||
-            Number(right.is_primary) - Number(left.is_primary) ||
-            right.available_count - left.available_count ||
-            left.name.localeCompare(right.name),
-        ),
+      sourceOrder(sources, preferredSourceId).filter(
+        (source) => source.available_count > 0,
+      ),
     [sources, preferredSourceId],
   );
 
@@ -239,6 +233,9 @@ function TitleSources({
                   })}
                 </ItemDescription>
               </ItemContent>
+              {source.source_id === preferredSourceId && (
+                <Badge>{t("title.preferredSource")}</Badge>
+              )}
               {!source.enabled && (
                 <Badge variant="outline">{t("title.sourceDisabled")}</Badge>
               )}
@@ -399,6 +396,9 @@ export function TitlePage() {
   const mutationError = useErrorText(upsert.error ?? remove.error);
   const mutationPending = upsert.isPending || remove.isPending;
   const isAdmin = user?.role === "admin";
+  // В «Настройках» порядок источников уже показан слева, а alias-строкам
+  // нужна ширина: правую колонку с рейтингом и источниками убираем.
+  const settingsOpen = tab === "settings" && isAdmin;
 
   const availableChapters = useMemo(
     () => (query.data?.chapters ?? []).filter(isAvailableChapter),
@@ -593,7 +593,7 @@ export function TitlePage() {
   function toggleEditing(): void {
     update.reset();
     setEditing((value) => !value);
-    setTab("main");
+    setTab("about");
   }
 
   function handleUpdate(values: TitleFormValues): void {
@@ -604,7 +604,12 @@ export function TitlePage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
-      <div className="grid gap-8 md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)_240px]">
+      <div
+        className={cn(
+          "grid gap-8 md:grid-cols-[260px_minmax(0,1fr)]",
+          !settingsOpen && "lg:grid-cols-[260px_minmax(0,1fr)_240px]",
+        )}
+      >
         <aside className="flex flex-col gap-3 md:sticky md:top-6 md:self-start">
           <CoverImage
             src={title.has_cover ? titleCoverUrl(title, "high") : null}
@@ -748,9 +753,14 @@ export function TitlePage() {
               <TabsTrigger value="chapters" className="flex-none">
                 {t("title.chapters")} ({availableChapters.length})
               </TabsTrigger>
-              <TabsTrigger value="main" className="flex-none">
-                {t("title.main")}
+              <TabsTrigger value="about" className="flex-none">
+                {t("title.about")}
               </TabsTrigger>
+              {isAdmin && (
+                <TabsTrigger value="settings" className="flex-none">
+                  {t("title.settings")}
+                </TabsTrigger>
+              )}
             </TabsList>
 
             <TabsContent value="chapters">
@@ -828,7 +838,7 @@ export function TitlePage() {
               </div>
             </TabsContent>
 
-            <TabsContent value="main">
+            <TabsContent value="about">
               <div className="flex flex-col gap-4">
                 {editing && isAdmin && (
                   <Card>
@@ -896,30 +906,41 @@ export function TitlePage() {
                   )}
                 </div>
 
-                {isAdmin && (
-                  <AliasesPanel titleId={titleId} chapters={query.data.chapters} aliases={aliases} />
-                )}
               </div>
             </TabsContent>
+
+            {isAdmin && (
+              <TabsContent value="settings">
+                <TitleSettingsTab
+                  titleId={titleId}
+                  sources={sources}
+                  chapters={query.data.chapters}
+                  aliases={aliases}
+                  preferredSourceId={title.preferred_source_id}
+                />
+              </TabsContent>
+            )}
           </Tabs>
         </div>
 
-        <aside className="md:col-span-2 lg:col-span-1 lg:sticky lg:top-6 lg:self-start">
-          <div className="flex flex-col gap-6">
-            <div className="hidden lg:flex lg:justify-end">
-              <RatingBlock
-                rating={title.rating}
-                score={library?.score ?? null}
-                disabled={mutationPending}
-                onScore={handleScore}
+        {!settingsOpen && (
+          <aside className="md:col-span-2 lg:col-span-1 lg:sticky lg:top-6 lg:self-start">
+            <div className="flex flex-col gap-6">
+              <div className="hidden lg:flex lg:justify-end">
+                <RatingBlock
+                  rating={title.rating}
+                  score={library?.score ?? null}
+                  disabled={mutationPending}
+                  onScore={handleScore}
+                />
+              </div>
+              <TitleSources
+                sources={sources}
+                preferredSourceId={title.preferred_source_id}
               />
             </div>
-            <TitleSources
-              sources={sources}
-              preferredSourceId={title.preferred_source_id}
-            />
-          </div>
-        </aside>
+          </aside>
+        )}
       </div>
 
       {isAdmin && (

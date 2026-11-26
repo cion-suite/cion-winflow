@@ -56,6 +56,11 @@ export type ChapterVariant = {
   chapter_id: number;
   /** Собственный ключ варианта: может отличаться от canonical. */
   chapter_key: string;
+  /** Нумерация именно этого варианта: у alias-главы может отличаться от canonical. */
+  volume: number | null;
+  number_text: string | null;
+  number_milli: number | null;
+  chapter_kind: string;
   source_id: number;
   source_code: string;
   source_name: string;
@@ -91,6 +96,8 @@ export type TitleSource = {
   name: string;
   enabled: boolean;
   is_primary: boolean;
+  /** Место в приоритете языка тайтла: 0 — самый важный, null — не задан. */
+  priority_rank: number | null;
   chapter_count: number;
   available_count: number;
   locked_count: number;

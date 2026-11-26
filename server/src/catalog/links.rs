@@ -2,10 +2,10 @@
 //! и ручные alias ключей глав. Прогресс и группировка резолвят alias
 //! в canonical, поэтому цепочки запрещены.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::{
     auth::session::now_unix,
@@ -16,6 +16,8 @@ use crate::{
 };
 
 const MAX_KEY_CHARS: usize = 256;
+/// Одна пачка — auto-match по номеру: страховка от тела на тысячи пар.
+const MAX_ALIASES_PER_REQUEST: usize = 500;
 
 #[derive(Debug, Deserialize)]
 pub struct AttachInput {
@@ -32,6 +34,11 @@ pub struct PrimaryInput {
 pub struct AliasInput {
     pub alias_key: String,
     pub canonical_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AliasBatchInput {
+    pub aliases: Vec<AliasInput>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -180,69 +187,207 @@ pub async fn add_alias(
     let alias_key = normalize_key(&input.alias_key, "alias_key")?;
     let canonical_key = normalize_key(&input.canonical_key, "canonical_key")?;
 
-    if alias_key == canonical_key {
-        return Err(AppError::bad_request(
-            "alias_invalid",
-            "alias_key and canonical_key must differ",
-        ));
-    }
-
-    let keys = chapter_keys(&state.pool, title_id).await?;
-    if !keys.contains(&alias_key) || !keys.contains(&canonical_key) {
-        return Err(AppError::not_found(
-            "chapter_not_found",
-            "alias and canonical keys must belong to the title",
-        ));
-    }
-
-    // Цепочка alias -> alias сделала бы резолв неоднозначным.
-    let canonical_is_alias = sqlx::query_scalar::<_, i64>(
-        "SELECT 1 FROM chapter_aliases WHERE title_id = ? AND alias_key = ?",
+    apply_aliases(
+        &state.pool,
+        title_id,
+        vec![(alias_key.clone(), canonical_key.clone())],
     )
-    .bind(title_id)
-    .bind(&canonical_key)
-    .fetch_optional(&state.pool)
-    .await?
-    .is_some();
-    if canonical_is_alias {
-        return Err(AppError::conflict(
-            "alias_chain",
-            "canonical_key is already an alias",
-        ));
-    }
-
-    let alias_is_canonical = sqlx::query_scalar::<_, i64>(
-        "SELECT 1 FROM chapter_aliases WHERE title_id = ? AND canonical_key = ? AND alias_key <> ?",
-    )
-    .bind(title_id)
-    .bind(&alias_key)
-    .bind(&alias_key)
-    .fetch_optional(&state.pool)
-    .await?
-    .is_some();
-    if alias_is_canonical {
-        return Err(AppError::conflict(
-            "alias_chain",
-            "alias_key is already a canonical key for another alias",
-        ));
-    }
-
-    sqlx::query(
-        "INSERT INTO chapter_aliases (title_id, canonical_key, alias_key, created_at) \
-         VALUES (?, ?, ?, ?) \
-         ON CONFLICT (title_id, alias_key) DO UPDATE SET canonical_key = excluded.canonical_key",
-    )
-    .bind(title_id)
-    .bind(&canonical_key)
-    .bind(&alias_key)
-    .bind(now_unix())
-    .execute(&state.pool)
     .await?;
 
     Ok(AliasDto {
         alias_key,
         canonical_key,
     })
+}
+
+/// Пачка alias одной транзакцией: auto-match связывает десятки глав, и
+/// частично применённая связка оставила бы список в неопределённом виде.
+pub async fn add_aliases(
+    state: &AppState,
+    title_id: i64,
+    input: AliasBatchInput,
+) -> Result<AliasListResponse, AppError> {
+    ensure_title(&state.pool, title_id).await?;
+
+    if input.aliases.is_empty() {
+        return Err(AppError::bad_request(
+            "validation",
+            "aliases must not be empty",
+        ));
+    }
+    if input.aliases.len() > MAX_ALIASES_PER_REQUEST {
+        return Err(AppError::bad_request(
+            "validation",
+            format!("at most {MAX_ALIASES_PER_REQUEST} aliases are allowed"),
+        ));
+    }
+
+    let mut pairs = Vec::with_capacity(input.aliases.len());
+    for alias in &input.aliases {
+        let alias_key = normalize_key(&alias.alias_key, "alias_key")?;
+        let canonical_key = normalize_key(&alias.canonical_key, "canonical_key")?;
+        pairs.push((alias_key, canonical_key));
+    }
+
+    apply_aliases(&state.pool, title_id, pairs).await?;
+
+    Ok(AliasListResponse {
+        aliases: load_aliases(&state.pool, title_id).await?,
+    })
+}
+
+/// Общая часть одиночной и пакетной связки. Сначала проверяются ключи,
+/// затем всё пишется в транзакции: цепочка или несуществующий ключ
+/// откатывают пачку целиком.
+async fn apply_aliases(
+    pool: &SqlitePool,
+    title_id: i64,
+    pairs: Vec<(String, String)>,
+) -> Result<(), AppError> {
+    let keys = chapter_keys(pool, title_id).await?;
+    let mut seen_aliases = HashSet::with_capacity(pairs.len());
+    for (alias_key, canonical_key) in &pairs {
+        // Два разных canonical для одного alias в одной пачке дали бы
+        // неоднозначный перенос прогресса: побеждала бы последняя пара.
+        if !seen_aliases.insert(alias_key.clone()) {
+            return Err(AppError::bad_request(
+                "alias_invalid",
+                "duplicate alias_key in request",
+            ));
+        }
+        if alias_key == canonical_key {
+            return Err(AppError::bad_request(
+                "alias_invalid",
+                "alias_key and canonical_key must differ",
+            ));
+        }
+        if !keys.contains(alias_key) || !keys.contains(canonical_key) {
+            return Err(AppError::not_found(
+                "chapter_not_found",
+                "alias and canonical keys must belong to the title",
+            ));
+        }
+    }
+
+    // Перепривязка готовая alias к другому canonical оставила бы прогресс
+    // на старом ключе, который больше не является ключом этой главы.
+    // Требуем явное удаление: так состояние чтения не теряется незаметно.
+    let existing: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
+        "SELECT alias_key, canonical_key FROM chapter_aliases WHERE title_id = ?",
+    )
+    .bind(title_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+    for (alias_key, canonical_key) in &pairs {
+        if let Some(previous) = existing.get(alias_key)
+            && previous != canonical_key
+        {
+            return Err(AppError::conflict(
+                "alias_exists",
+                "delete the existing alias before changing its canonical key",
+            ));
+        }
+    }
+
+    let mut tx = pool.begin().await?;
+    let now = now_unix();
+    for (alias_key, canonical_key) in &pairs {
+        sqlx::query(
+            "INSERT INTO chapter_aliases (title_id, canonical_key, alias_key, created_at) \
+             VALUES (?, ?, ?, ?) \
+             ON CONFLICT (title_id, alias_key) DO UPDATE SET canonical_key = excluded.canonical_key",
+        )
+        .bind(title_id)
+        .bind(canonical_key)
+        .bind(alias_key)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Цепочка alias -> alias сделала бы резолв неоднозначным. Проверяем
+    // всю таблицу: пачка могла создать цепочку с уже существующей связью.
+    if has_alias_chain(&mut tx, title_id).await? {
+        return Err(AppError::conflict(
+            "alias_chain",
+            "alias keys must resolve in one hop",
+        ));
+    }
+
+    for (alias_key, canonical_key) in &pairs {
+        migrate_reader_state(&mut tx, title_id, alias_key, canonical_key).await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn has_alias_chain(
+    tx: &mut Transaction<'_, Sqlite>,
+    title_id: i64,
+) -> Result<bool, AppError> {
+    let canonical_is_alias = sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM chapter_aliases a \
+         JOIN chapter_aliases b ON b.title_id = a.title_id AND b.alias_key = a.canonical_key \
+         WHERE a.title_id = ? LIMIT 1",
+    )
+    .bind(title_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .is_some();
+    if canonical_is_alias {
+        return Ok(true);
+    }
+
+    let alias_is_canonical = sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM chapter_aliases a \
+         JOIN chapter_aliases b ON b.title_id = a.title_id AND b.canonical_key = a.alias_key \
+         WHERE a.title_id = ? AND b.alias_key <> a.alias_key LIMIT 1",
+    )
+    .bind(title_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .is_some();
+
+    Ok(alias_is_canonical)
+}
+
+/// Прогресс и журнал прочитанного живут под каноническим ключом. После
+/// связки старая отметка под alias-ключом иначе перестала бы совпадать
+/// с ключом главы в списке и выглядела бы непрочитанной.
+async fn migrate_reader_state(
+    tx: &mut Transaction<'_, Sqlite>,
+    title_id: i64,
+    alias_key: &str,
+    canonical_key: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE progress SET chapter_key = ? WHERE title_id = ? AND chapter_key = ?")
+        .bind(canonical_key)
+        .bind(title_id)
+        .bind(alias_key)
+        .execute(&mut **tx)
+        .await?;
+
+    // INSERT OR IGNORE: канонический ключ мог быть отмечен раньше.
+    sqlx::query(
+        "INSERT OR IGNORE INTO chapter_reads (user_id, title_id, chapter_key, read_at) \
+         SELECT user_id, title_id, ?, read_at FROM chapter_reads \
+         WHERE title_id = ? AND chapter_key = ?",
+    )
+    .bind(canonical_key)
+    .bind(title_id)
+    .bind(alias_key)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query("DELETE FROM chapter_reads WHERE title_id = ? AND chapter_key = ?")
+        .bind(title_id)
+        .bind(alias_key)
+        .execute(&mut **tx)
+        .await?;
+
+    Ok(())
 }
 
 pub async fn delete_alias(

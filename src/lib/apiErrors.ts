@@ -28,6 +28,7 @@ const ERROR_KEYS: Partial<Record<string, string>> = {
   source_not_found: "errors.sourceNotFound",
   content_kind_unknown: "errors.contentKindUnknown",
   alias_invalid: "errors.aliasInvalid",
+  alias_exists: "errors.aliasExists",
   alias_chain: "errors.aliasChain",
   alias_not_found: "errors.aliasNotFound",
   source_entry_not_found: "errors.sourceEntryNotFound",

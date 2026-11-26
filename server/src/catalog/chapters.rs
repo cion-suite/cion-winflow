@@ -17,6 +17,10 @@ pub struct TitleChapterVariantDto {
     /// Собственный ключ варианта: у групп перевода он совпадает,
     /// у источников с разной нумерацией — отличается (кандидат в alias).
     pub chapter_key: String,
+    pub volume: Option<i64>,
+    pub number_text: Option<String>,
+    pub number_milli: Option<i64>,
+    pub chapter_kind: String,
     pub source_id: i64,
     pub source_code: String,
     pub source_name: String,
@@ -55,6 +59,8 @@ pub struct TitleSourceDto {
     pub name: String,
     pub enabled: bool,
     pub is_primary: bool,
+    /// Место в приоритете языка тайтла: 0 — самый важный, `null` — не задан.
+    pub priority_rank: Option<i64>,
     pub chapter_count: i64,
     pub available_count: i64,
     pub locked_count: i64,
@@ -146,12 +152,21 @@ pub async fn title_chapters(
             effective.iter().all(|variant| variant.is_locked)
         };
 
+        // Номер показывает каноническая глава, а не выбранный вариант:
+        // alias могли связать главу с неверным томом (например, источник
+        // забыл сменить том) с главой, где нумерация правильная. Читается
+        // при этом всё равно первый доступный вариант в порядке приоритета.
+        let numbering = variants
+            .iter()
+            .find(|variant| variant.chapter_key == key)
+            .unwrap_or(selected);
+
         chapters.push(TitleChapterDto {
             chapter_key: key,
-            number_text: selected.number_text.clone(),
-            number_milli: selected.number_milli,
-            volume: selected.volume,
-            chapter_kind: selected.chapter_kind.clone(),
+            number_text: numbering.number_text.clone(),
+            number_milli: numbering.number_milli,
+            volume: numbering.volume,
+            chapter_kind: numbering.chapter_kind.clone(),
             name: selected.name.clone(),
             content_kind: selected.content_kind.clone(),
             page_count: selected.page_count,
@@ -164,6 +179,10 @@ pub async fn title_chapters(
                 .map(|variant| TitleChapterVariantDto {
                     chapter_id: variant.chapter_id,
                     chapter_key: variant.chapter_key,
+                    volume: variant.volume,
+                    number_text: variant.number_text,
+                    number_milli: variant.number_milli,
+                    chapter_kind: variant.chapter_kind,
                     source_id: variant.source_id,
                     source_code: variant.source_code,
                     source_name: variant.source_name,
@@ -212,6 +231,7 @@ pub async fn title_chapters(
             name: entry.source_name,
             enabled: entry.source_enabled,
             is_primary: entry.is_primary,
+            priority_rank: ranks.get(&entry.source_id).copied(),
             chapter_count: entry.chapter_count,
             available_count: entry.available_count,
             locked_count: entry.locked_count,

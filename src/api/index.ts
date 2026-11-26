@@ -57,6 +57,7 @@ export type {
   UploadCoverInput,
 } from "./catalog";
 export {
+  useAddAliasesMutation,
   useAddAliasMutation,
   useAttachSourceMutation,
   useDeleteAliasMutation,
@@ -71,6 +72,7 @@ export {
   useToggleSourceMutation,
 } from "./admin";
 export type {
+  AliasBatchInput,
   AliasListResponse,
   AttachSourceInput,
   AttachSourceResponse,

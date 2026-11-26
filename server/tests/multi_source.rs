@@ -517,6 +517,214 @@ async fn locked_preferred_source_uses_available_variant_and_aliases() {
 }
 
 #[tokio::test]
+async fn bulk_aliases_use_canonical_numbering_and_merge_progress() {
+    let _guard = lock().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    configure_fixture(&app, &admin).await;
+
+    let imported = import_fixture(&app, &admin, None).await;
+    let title_id = imported["title_id"].as_i64().expect("title id");
+    let fixture_entry_id = imported["source_entry_id"]
+        .as_i64()
+        .expect("fixture entry id");
+    let remanga_entry_id = seed_remanga_entry(&app, &admin, title_id, 3, 2).await;
+
+    // Источники разошлись в томе: Remanga забыла сменить том, Mangamir
+    // (здесь fixture) пронумеровала главу правильно.
+    sqlx::query(
+        "UPDATE chapters SET chapter_key = 'v3:c1', volume = 3, number_text = '1', \
+                number_milli = 1000 \
+         WHERE source_entry_id = ? AND chapter_key = 'c1'",
+    )
+    .bind(fixture_entry_id)
+    .execute(&app.pool)
+    .await
+    .expect("rename fixture key");
+    sqlx::query(
+        "UPDATE chapters SET chapter_key = 'v2:c1', volume = 2, number_text = '1', \
+                number_milli = 1000 \
+         WHERE source_entry_id = ? AND chapter_key = 'c1'",
+    )
+    .bind(remanga_entry_id)
+    .execute(&app.pool)
+    .await
+    .expect("rename remanga key");
+
+    // Remanga доступна и предпочтительна: выбранный для чтения вариант
+    // (v2:c1, том 2) должен отличаться от канонического (v3:c1, том 3).
+    sqlx::query(
+        "UPDATE chapters SET availability = 'available', availability_checked_at = ?, \
+                is_locked = 0 \
+         WHERE source_entry_id = ? AND chapter_key = 'v2:c1'",
+    )
+    .bind(now_unix())
+    .bind(remanga_entry_id)
+    .execute(&app.pool)
+    .await
+    .expect("make remanga available");
+    let remanga_source_id = source_id(&app, "remanga").await;
+    sqlx::query("UPDATE titles SET preferred_source_id = ? WHERE id = ?")
+        .bind(remanga_source_id)
+        .bind(title_id)
+        .execute(&app.pool)
+        .await
+        .expect("prefer remanga");
+
+    // Прогресс до связки лежит под старым ключом.
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::PUT,
+                &format!("/api/progress/{title_id}"),
+                &json!({ "chapter_key": "v2:c1", "page": 0 }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["chapter_key"], "v2:c1");
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/chapter-aliases/bulk"),
+                &json!({
+                    "aliases": [
+                        { "alias_key": "v2:c1", "canonical_key": "v3:c1" },
+                    ],
+                }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["aliases"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+
+    // Прогресс и журнал переехали на канонический ключ.
+    let progress = get_json(&app, &format!("/api/progress/{title_id}"), &admin).await;
+    assert_eq!(progress["progress"]["chapter_key"], "v3:c1");
+
+    let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
+    assert!(
+        title["read_keys"]
+            .as_array()
+            .is_some_and(|keys| keys.iter().any(|key| key == "v3:c1")),
+        "read mark must follow the canonical key"
+    );
+    assert!(
+        title["read_keys"]
+            .as_array()
+            .is_some_and(|keys| !keys.iter().any(|key| key == "v2:c1")),
+        "old alias key must not stay in read_keys"
+    );
+
+    let chapter = title["chapters"]
+        .as_array()
+        .expect("chapters")
+        .iter()
+        .find(|chapter| chapter["chapter_key"] == "v3:c1")
+        .expect("canonical group");
+    // Нумерация берётся у canonical-главы, а не у выбранного варианта.
+    assert_eq!(chapter["volume"], 3);
+    assert_eq!(chapter["number_text"], "1");
+    let selected_id = chapter["selected_chapter_id"]
+        .as_i64()
+        .expect("selected id");
+    let selected = chapter["variants"]
+        .as_array()
+        .expect("variants")
+        .iter()
+        .find(|variant| variant["chapter_id"].as_i64() == Some(selected_id))
+        .expect("selected variant");
+    // Читается Remanga с неправильным томом, а показывается том canonical.
+    assert_eq!(selected["chapter_key"], "v2:c1");
+    assert_eq!(selected["volume"], 2);
+    let alias_variant = chapter["variants"]
+        .as_array()
+        .expect("variants")
+        .iter()
+        .find(|variant| variant["chapter_key"] == "v2:c1")
+        .expect("alias variant");
+    assert_eq!(alias_variant["volume"], 2);
+    assert_eq!(alias_variant["number_text"], "1");
+
+    // Перепривязка готового alias к другому canonical требует удаления,
+    // иначе прогресс остался бы на старом ключе.
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/chapter-aliases"),
+                &json!({ "alias_key": "v2:c1", "canonical_key": "c2" }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(response).await["code"], "alias_exists");
+
+    // Пачка откатывается целиком, если один ключ не существует.
+    sqlx::query(
+        "UPDATE chapters SET chapter_key = 'v2:c2', volume = 2, number_text = '2', \
+                number_milli = 2000 \
+         WHERE source_entry_id = ? AND chapter_key = 'c2'",
+    )
+    .bind(remanga_entry_id)
+    .execute(&app.pool)
+    .await
+    .expect("rename remanga c2");
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/chapter-aliases/bulk"),
+                &json!({
+                    "aliases": [
+                        { "alias_key": "v2:c2", "canonical_key": "c2" },
+                        { "alias_key": "v2:c3", "canonical_key": "c3" },
+                    ],
+                }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
+    assert!(
+        title["aliases"]
+            .as_array()
+            .is_some_and(|aliases| aliases.len() == 1),
+        "failed batch must not add any alias"
+    );
+
+    // Цепочка запрещена и для пачки: v3:c1 уже canonical для v2:c1.
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/chapter-aliases/bulk"),
+                &json!({
+                    "aliases": [
+                        { "alias_key": "v3:c1", "canonical_key": "c2" },
+                    ],
+                }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(response).await["code"], "alias_chain");
+}
+
+#[tokio::test]
 async fn translation_groups_share_one_chapter_and_unique_key_stats() {
     let _guard = lock().await;
     let app = TestApp::new().await;

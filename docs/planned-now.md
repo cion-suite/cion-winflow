@@ -248,6 +248,7 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `PUT /api/titles/{id}/primary-source` | задать `is_primary` (`{ source_entry_id }`) — тай-брейкер и признак отображения, не жёсткий override (admin) |
 | `GET /api/titles/{title_id}/chapter-aliases` | список alias → canonical (admin) |
 | `POST /api/titles/{title_id}/chapter-aliases` | связать `alias_key` с `canonical_key`; цепочки и несуществующие ключи — 4xx (admin) |
+| `POST /api/titles/{title_id}/chapter-aliases/bulk` | пачка связей до 500 одной транзакцией; переносит прогресс и отметки на canonical; перепривязка готового alias — 409 (admin) |
 | `DELETE /api/titles/{title_id}/chapter-aliases/{alias_key}` | убрать связь ключей (admin) |
 | `GET /api/admin/source-priorities?lang=` | список приоритетов источников для языка (admin) |
 | `PUT /api/admin/source-priorities` | заменить список `{ lang, source_codes: [...] }`; меньший индекс — выше приоритет (admin) |
@@ -782,7 +783,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - [x] вкладки библиотеки: статусы `in_progress|planned|favorite|completed|dropped|on_hold|not_interested` («Любимое» — статус, миграция 0006), до трёх своих закладок-статусов, сортировка `updated|added|title|score` и счётчики;
 - [x] `library_tabs` (миграция 0004) и `custom_tab_id` в `library` (миграция 0007); CRUD закладок, одна своя закладка на тайтл;
 - [x] `GET /api/discover/search` по всем включённым источникам с per-source `errors` и `POST /api/discover/add` (любая сессия, отдельный rate limit): импорт выполняется один раз, затем добавляется запись библиотеки; обложки выдачи доступны с сессией;
-- [x] страница тайтла: вкладки «Главы» (первая) и «Главная»; недоступные главы скрыты; поиск, сортировка по тому/номеру, дата и источник; глаз — кнопка отметки прочитанного, с выбором «только эта» или «эта и все предыдущие»; кнопка «Читать»/«Продолжить»/«Прочитано» зависит от прогресса; статус (включая «Любимое» и свои закладки) и оценка;
+- [x] страница тайтла: вкладки «Главы» (первая), «О тайтле» и «Настройки» (только админ); недоступные главы скрыты; поиск, сортировка по тому/номеру, дата и источник; глаз — кнопка отметки прочитанного, с выбором «только эта» или «эта и все предыдущие»; кнопка «Читать»/«Продолжить»/«Прочитано» зависит от прогресса; статус (включая «Любимое» и свои закладки) и оценка; в «Настройках» — порядок источников, alias по каноническим главам, auto-match по номеру и ручная связка; том/номер группы берутся у canonical-главы;
 - [x] `PUT /api/progress` пишет `chapter_reads`; `GET /api/titles/{id}` отдаёт `read_keys`, `published_at`, `source_enabled`; карточка библиотеки показывает `read_count/chapter_count`;
 - [x] тесты `library_tabs.rs` и `discover.rs`; `lint`, `build`, `test`, `fmt`, `clippy` зелёные.
 

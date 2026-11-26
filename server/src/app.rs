@@ -116,6 +116,10 @@ pub fn router(state: AppState) -> Router {
             get(catalog::handlers::list_aliases).post(catalog::handlers::add_alias),
         )
         .route(
+            "/titles/{title_id}/chapter-aliases/bulk",
+            post(catalog::handlers::add_aliases),
+        )
+        .route(
             "/titles/{title_id}/chapter-aliases/{alias_key}",
             delete(catalog::handlers::delete_alias),
         )

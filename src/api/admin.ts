@@ -90,6 +90,10 @@ export type AliasListResponse = {
   aliases: ChapterAlias[];
 };
 
+export type AliasBatchInput = {
+  aliases: ChapterAlias[];
+};
+
 export type RefreshEntry = {
   source_entry_id: number;
   code: string;
@@ -148,6 +152,11 @@ export const adminApi = {
     request<ChapterAlias>(
       `/titles/${titleId}/chapter-aliases`,
       jsonMutation({ alias_key: aliasKey, canonical_key: canonicalKey }),
+    ),
+  addAliases: (titleId: number, aliases: ChapterAlias[]) =>
+    request<AliasListResponse>(
+      `/titles/${titleId}/chapter-aliases/bulk`,
+      jsonMutation({ aliases }),
     ),
   deleteAlias: (titleId: number, aliasKey: string) =>
     request<undefined>(aliasPath(titleId, aliasKey), { method: "DELETE" }),
@@ -262,6 +271,29 @@ export function useAddAliasMutation(titleId: number) {
     mutationFn: ({ aliasKey, canonicalKey }: { aliasKey: string; canonicalKey: string }) =>
       adminApi.addAlias(titleId, aliasKey, canonicalKey),
     onSuccess: () => invalidateTitle(queryClient, titleId),
+  });
+}
+
+/** Сервер принимает не больше 500 связей за запрос: длинные тайтлы шлём пачками. */
+const ALIAS_BATCH_SIZE = 500;
+
+export function useAddAliasesMutation(titleId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (aliases: ChapterAlias[]) => {
+      let last: AliasListResponse | null = null;
+      for (let start = 0; start < aliases.length; start += ALIAS_BATCH_SIZE) {
+        last = await adminApi.addAliases(
+          titleId,
+          aliases.slice(start, start + ALIAS_BATCH_SIZE),
+        );
+      }
+      if (last === null) throw new Error("aliases must not be empty");
+      return last;
+    },
+    // Пачки идут последовательно: при сбое на поздней часть уже сохранённые
+    // связи должны появиться в списке, даже если запрос завершился ошибкой.
+    onSettled: () => invalidateTitle(queryClient, titleId),
   });
 }
 

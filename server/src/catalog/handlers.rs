@@ -9,7 +9,10 @@ use serde::Serialize;
 use crate::{
     auth::session::CurrentUser,
     catalog::{
-        links::{self, AliasDto, AliasInput, AliasListResponse, AttachInput, PrimaryInput},
+        links::{
+            self, AliasBatchInput, AliasDto, AliasInput, AliasListResponse, AttachInput,
+            PrimaryInput,
+        },
         service::{self, CatalogPage, CatalogParams, TitleDto, TitleInput, TitleResponse},
     },
     error::AppError,
@@ -111,6 +114,16 @@ pub async fn add_alias(
 ) -> Result<Json<AliasDto>, AppError> {
     user.require_admin()?;
     Ok(Json(links::add_alias(&state, title_id, input).await?))
+}
+
+pub async fn add_aliases(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(title_id): ApiPath<i64>,
+    ApiJson(input): ApiJson<AliasBatchInput>,
+) -> Result<Json<AliasListResponse>, AppError> {
+    user.require_admin()?;
+    Ok(Json(links::add_aliases(&state, title_id, input).await?))
 }
 
 pub async fn delete_alias(

@@ -1,135 +1,355 @@
-import { type FormEvent, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import {
+  CheckIcon,
+  Link2Icon,
+  PlusIcon,
+  Trash2Icon,
+} from "lucide-react";
 
 import {
-  useAddAliasMutation,
   useDeleteAliasMutation,
   useErrorText,
   type ChapterAlias,
+  type ChapterVariant,
   type TitleChapter,
+  type TitleSource,
 } from "@/api";
 import { useT } from "@/lib/i18n";
+import { SourceIcon } from "@/ui/SourceIcon";
+import { Badge } from "@/ui/shadcn/badge";
 import { Button } from "@/ui/shadcn/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui/shadcn/card";
-import { Input } from "@/ui/shadcn/input";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/ui/shadcn/empty";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@/ui/shadcn/item";
+import {
+  formatChapterLabel,
+  groupAliases,
+  type AliasGroup,
+} from "./aliases";
+import { AliasAddDialog } from "./AliasAddDialog";
+import { AliasMatchDialog } from "./AliasMatchDialog";
 
 type Props = {
   titleId: number;
+  sources: TitleSource[];
   chapters: TitleChapter[];
   aliases: ChapterAlias[];
+  preferredSourceId: number | null;
 };
 
-export function AliasesPanel({ titleId, chapters, aliases }: Props) {
+function VariantRow({
+  variant,
+  canonicalKey,
+  selected,
+  isAlias,
+  confirming,
+  pending,
+  onDelete,
+}: {
+  variant: ChapterVariant;
+  canonicalKey: string;
+  selected: boolean;
+  isAlias: boolean;
+  confirming: boolean;
+  pending: boolean;
+  onDelete: () => void;
+}) {
   const t = useT();
-  const add = useAddAliasMutation(titleId);
+  const unavailable =
+    !variant.source_enabled ||
+    variant.availability === "locked" ||
+    variant.availability === "missing";
+  const isCanonical = variant.chapter_key === canonicalKey;
+
+  return (
+    <Item size="sm" className="rounded-none border-transparent">
+      <ItemMedia className="size-5">
+        <SourceIcon code={variant.source_code} />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle>{variant.source_name}</ItemTitle>
+        <ItemDescription className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate">
+            {formatChapterLabel(
+              { volume: variant.volume, numberText: variant.number_text },
+              t,
+            )}
+          </span>
+          <code className="truncate rounded bg-muted px-1.5 py-0.5 text-xs">
+            {variant.chapter_key}
+          </code>
+        </ItemDescription>
+      </ItemContent>
+
+      <ItemActions className="gap-1">
+        {isCanonical && (
+          <Badge variant="outline">{t("title.aliasCanonical")}</Badge>
+        )}
+        {selected && (
+          <Badge variant="secondary">{t("title.aliasSelected")}</Badge>
+        )}
+        {unavailable && (
+          <Badge variant="outline">{t("title.aliasUnavailable")}</Badge>
+        )}
+        {isAlias && (
+          <Button
+            type="button"
+            variant={confirming ? "destructive" : "ghost"}
+            size="icon-sm"
+            aria-label={
+              confirming ? t("title.confirmDeleteAlias") : t("title.deleteAlias")
+            }
+            disabled={pending}
+            onClick={onDelete}
+          >
+            {confirming ? <CheckIcon aria-hidden /> : <Trash2Icon aria-hidden />}
+          </Button>
+        )}
+      </ItemActions>
+    </Item>
+  );
+}
+
+function GroupRow({
+  group,
+  confirming,
+  pending,
+  onDelete,
+}: {
+  group: AliasGroup;
+  confirming: string | null;
+  pending: boolean;
+  onDelete: (aliasKey: string) => void;
+}) {
+  const t = useT();
+  const variants = group.chapter?.variants ?? [];
+  const variantKeys = new Set(variants.map((variant) => variant.chapter_key));
+  const orphanKeys = [...group.aliasKeys].filter((key) => !variantKeys.has(key));
+
+  return (
+    <div className="rounded-xl border">
+      <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <Link2Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <span className="truncate text-sm font-medium">
+            {group.chapter === null
+              ? group.canonicalKey
+              : formatChapterLabel(
+                  {
+                    volume: group.chapter.volume,
+                    numberText: group.chapter.number_text,
+                  },
+                  t,
+                )}
+          </span>
+          <code className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
+            {group.canonicalKey}
+          </code>
+        </div>
+        <Badge variant="secondary">{group.aliasKeys.size}</Badge>
+      </div>
+
+      <ItemGroup className="gap-0 divide-y">
+        {variants.map((variant) => {
+          const isAlias = group.aliasKeys.has(variant.chapter_key);
+          return (
+            <VariantRow
+              key={variant.chapter_id}
+              variant={variant}
+              canonicalKey={group.canonicalKey}
+              selected={group.chapter?.selected_chapter_id === variant.chapter_id}
+              isAlias={isAlias}
+              confirming={confirming === variant.chapter_key}
+              pending={pending}
+              onDelete={() => onDelete(variant.chapter_key)}
+            />
+          );
+        })}
+
+        {orphanKeys.map((key) => (
+          <Item
+            key={key}
+            size="sm"
+            className="rounded-none border-transparent"
+          >
+            <ItemContent>
+              <ItemDescription className="flex items-center gap-2">
+                <code className="truncate rounded bg-muted px-1.5 py-0.5 text-xs">
+                  {key}
+                </code>
+                <span className="text-xs">{t("title.aliasOrphan")}</span>
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Button
+                type="button"
+                variant={confirming === key ? "destructive" : "ghost"}
+                size="icon-sm"
+                aria-label={
+                  confirming === key
+                    ? t("title.confirmDeleteAlias")
+                    : t("title.deleteAlias")
+                }
+                disabled={pending}
+                onClick={() => onDelete(key)}
+              >
+                {confirming === key ? (
+                  <CheckIcon aria-hidden />
+                ) : (
+                  <Trash2Icon aria-hidden />
+                )}
+              </Button>
+            </ItemActions>
+          </Item>
+        ))}
+      </ItemGroup>
+    </div>
+  );
+}
+
+export function AliasesPanel({
+  titleId,
+  sources,
+  chapters,
+  aliases,
+  preferredSourceId,
+}: Props) {
+  const t = useT();
   const remove = useDeleteAliasMutation(titleId);
-  const [aliasKey, setAliasKey] = useState("");
-  const [canonicalKey, setCanonicalKey] = useState("");
-  const [confirmKey, setConfirmKey] = useState<string | null>(null);
-
-  const addError = useErrorText(add.error);
   const removeError = useErrorText(remove.error);
-  const addSuccess = add.isSuccess ? t("admin.aliasAdded") : null;
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [matchOpen, setMatchOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
-  const keys = useMemo(() => {
-    const values = new Set<string>();
+  const groups = useMemo(
+    () => groupAliases(aliases, chapters),
+    [aliases, chapters],
+  );
+  const sourceCount = useMemo(() => {
+    const ids = new Set<number>();
     for (const chapter of chapters) {
-      values.add(chapter.chapter_key);
-      for (const variant of chapter.variants) values.add(variant.chapter_key);
+      for (const variant of chapter.variants) ids.add(variant.source_id);
     }
-    return [...values].sort();
+    return ids.size;
   }, [chapters]);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const alias = aliasKey.trim();
-    const canonical = canonicalKey.trim();
-    if (alias === "" || canonical === "") return;
-    add.mutate(
-      { aliasKey: alias, canonicalKey: canonical },
-      {
-        onSuccess: () => {
-          setAliasKey("");
-          setCanonicalKey("");
-        },
-      },
-    );
+  function deleteAlias(aliasKey: string): void {
+    if (confirming === aliasKey) {
+      remove.mutate(aliasKey, { onSuccess: () => setConfirming(null) });
+      return;
+    }
+    setConfirming(aliasKey);
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("admin.aliases")}</CardTitle>
-        <CardDescription>{t("admin.aliasesHint")}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <datalist id="chapter-keys">
-          {keys.map((key) => (
-            <option key={key} value={key} />
-          ))}
-        </datalist>
-
-        <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleSubmit}>
-          <Input
-            value={aliasKey}
-            list="chapter-keys"
-            placeholder={t("admin.aliasKey")}
-            aria-label={t("admin.aliasKey")}
-            onChange={(event) => setAliasKey(event.target.value)}
-          />
-          <Input
-            value={canonicalKey}
-            list="chapter-keys"
-            placeholder={t("admin.canonicalKey")}
-            aria-label={t("admin.canonicalKey")}
-            onChange={(event) => setCanonicalKey(event.target.value)}
-          />
-          <Button type="submit" variant="outline" disabled={add.isPending}>
-            {t("admin.addAlias")}
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h2 className="text-sm font-medium">{t("title.aliases")}</h2>
+          <p className="max-w-prose text-sm text-muted-foreground">
+            {t("title.aliasesHint")}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={sourceCount < 2}
+            onClick={() => setMatchOpen(true)}
+          >
+            <Link2Icon data-icon="inline-start" />
+            {t("title.linkByNumber")}
           </Button>
-        </form>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={sourceCount === 0}
+            onClick={() => setAddOpen(true)}
+          >
+            <PlusIcon data-icon="inline-start" />
+            {t("title.addAlias")}
+          </Button>
+        </div>
+      </div>
 
-        {addError && <p role="alert" className="text-sm text-destructive">{addError}</p>}
-        {addSuccess && <p className="text-sm text-muted-foreground">{addSuccess}</p>}
+      {removeError && (
+        <p role="alert" className="text-sm text-destructive">
+          {removeError}
+        </p>
+      )}
 
-        {aliases.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("admin.noAliases")}</p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {aliases.map((alias) => (
-              <li
-                key={alias.alias_key}
-                className="flex items-center justify-between gap-3 py-2"
-              >
-                <span className="min-w-0 truncate text-sm">
-                  <span className="font-medium">{alias.alias_key}</span>
-                  <span className="text-muted-foreground"> → </span>
-                  <span>{alias.canonical_key}</span>
-                </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={confirmKey === alias.alias_key ? "destructive" : "outline"}
-                  disabled={remove.isPending}
-                  onClick={() => {
-                    if (confirmKey === alias.alias_key) {
-                      remove.mutate(alias.alias_key);
-                      setConfirmKey(null);
-                    } else {
-                      setConfirmKey(alias.alias_key);
-                    }
-                  }}
-                >
-                  {confirmKey === alias.alias_key
-                    ? t("admin.confirmDelete")
-                    : t("admin.deleteAlias")}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
+      {groups.length === 0 ? (
+        <Empty className="border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Link2Icon />
+            </EmptyMedia>
+            <EmptyTitle>{t("title.aliasesEmptyTitle")}</EmptyTitle>
+            <EmptyDescription>
+              {t("title.aliasesEmptyDescription")}
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={sourceCount < 2}
+              onClick={() => setMatchOpen(true)}
+            >
+              <Link2Icon data-icon="inline-start" />
+              {t("title.linkByNumber")}
+            </Button>
+          </EmptyContent>
+        </Empty>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {groups.map((group) => (
+            <GroupRow
+              key={group.canonicalKey}
+              group={group}
+              confirming={confirming}
+              pending={remove.isPending}
+              onDelete={deleteAlias}
+            />
+          ))}
+        </div>
+      )}
 
-        {removeError && <p role="alert" className="text-sm text-destructive">{removeError}</p>}
-      </CardContent>
-    </Card>
+      <AliasMatchDialog
+        titleId={titleId}
+        sources={sources}
+        chapters={chapters}
+        aliases={aliases}
+        preferredSourceId={preferredSourceId}
+        open={matchOpen}
+        onOpenChange={setMatchOpen}
+      />
+      <AliasAddDialog
+        titleId={titleId}
+        sources={sources}
+        chapters={chapters}
+        aliases={aliases}
+        preferredSourceId={preferredSourceId}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+      />
+    </section>
   );
 }
