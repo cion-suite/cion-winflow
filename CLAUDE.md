@@ -44,7 +44,7 @@ src/
   shell/                   navbar/ (шапка, поиск по библиотеке, пользователь, язык, тема), layout/, nav.ts (ссылки шапки и меню)
   pages/                   экраны: library (карточки, вкладки, добавление), title (вкладки, главы), admin, reader, watch, changelog, settings, login, register
   api/                     client.ts (request/apiUrl/ApiError/jsonMutation/requestKeepalive), auth.tsx, catalog.ts, chapters.ts, library.ts, discover.ts, progress.ts, admin.ts, errors.ts (useErrorText), index.ts (области API)
-  ui/                      shadcn/ и общие компоненты: PageHeader.tsx, PlaceholderPage.tsx, AuthShell.tsx, TitleForm.tsx, CoverImage.tsx, Pagination.tsx, Select.tsx, Textarea.tsx
+  ui/                      shadcn/ и общие компоненты: PageHeader.tsx, PlaceholderPage.tsx, AuthShell.tsx, TitleForm.tsx, CoverImage.tsx, Pagination.tsx, Textarea.tsx
   lib/                     utils.ts (cn), settings.ts, routes.ts, catalog.ts (типы и статусы), apiErrors.ts, i18n/
 public/theme.js            тема до первой отрисовки; внешний файл для CSP
 server/
@@ -139,7 +139,7 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - Вызов бэкенда может завершиться ошибкой, всегда показывай её. Транспорт отдаёт `ApiError`, текст берётся из `error.message`; для известных кодов используй `useErrorText` (`api/errors.ts`), он переводит их через `lib/apiErrors.ts`.
 - Библиотека и закладки ходят через `api.library`, поиск/добавление — через `api.discover`, тайтл — через `api.catalog`; строковые статусы и типы (`manga|anime|book`, статусы тайтла и библиотеки) — константы в `lib/catalog.ts`, не дублируй их литералами.
 - Строки интерфейса не пиши в компонентах: добавляй ключи в `lib/i18n/locales/en.ts` и `ru.ts` и бери их через `useT()`. Настройки читай через `useSetting()`, пиши через `settings.set()`; прямой `localStorage` — только в `lib/settings.ts`, `shell/navbar/ThemeToggle.tsx` и `public/theme.js`.
-- Сайдбара нет. Ссылки шапки и меню пользователя задаются таблицей `shell/nav.ts` (`MAIN_NAV`, `MENU_NAV`); статические экраны и параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены списками `PAGES`/`PARAM_ROUTES` в `AppRouter`.
+- Сайдбара нет. Шапка — логотип со ссылкой на `/`, поиск и меню пользователя; его пункты задаёт таблица `shell/nav.ts` (`MENU_NAV`). Статические экраны и параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены списками `PAGES`/`PARAM_ROUTES` в `AppRouter`.
 - `Button` из Base UI без `type` рендерится как `type="button"` и форму не отправляет: кнопке отправки нужен явный `type="submit"`.
 - У `Button` вместо `asChild` проп `render`. Если он рендерит не `<button>`, добавь `nativeButton={false}`. Ссылку так не делай: она получит `role="button"`. Стилизуй её напрямую: `<a className={buttonVariants()} href="...">`.
 

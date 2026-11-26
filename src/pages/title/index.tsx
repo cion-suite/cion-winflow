@@ -32,7 +32,6 @@ import { useLocale, useT } from "@/lib/i18n";
 import { readerPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { CoverImage } from "@/ui/CoverImage";
-import { Select } from "@/ui/Select";
 import { TitleForm } from "@/ui/TitleForm";
 import { Badge } from "@/ui/shadcn/badge";
 import { Button, buttonVariants } from "@/ui/shadcn/button";
@@ -45,6 +44,13 @@ import {
   EmptyTitle,
 } from "@/ui/shadcn/empty";
 import { Input } from "@/ui/shadcn/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/shadcn/select";
 import { Skeleton } from "@/ui/shadcn/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/shadcn/tabs";
 import { AdminSourcePanel } from "./AdminSourcePanel";
@@ -88,23 +94,31 @@ function ScoreSelect({
   onChange: (score: number | null) => void;
 }) {
   const t = useT();
+  const scoreOptions = [
+    { value: null, label: t("library.noScore") },
+    ...Array.from({ length: 10 }, (_, index) => ({
+      value: index + 1,
+      label: String(index + 1),
+    })),
+  ];
 
   return (
     <Select
-      value={value === null ? "" : String(value)}
+      items={scoreOptions}
+      value={value}
       disabled={disabled}
-      className="h-7 w-20"
-      aria-label={t("library.score")}
-      onChange={(event) =>
-        onChange(event.target.value === "" ? null : Number(event.target.value))
-      }
+      onValueChange={(next) => onChange(next)}
     >
-      <option value="">{t("library.noScore")}</option>
-      {Array.from({ length: 10 }, (_, index) => String(index + 1)).map((score) => (
-        <option key={score} value={score}>
-          {score}
-        </option>
-      ))}
+      <SelectTrigger size="sm" className="w-20" aria-label={t("library.score")}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {scoreOptions.map((option) => (
+          <SelectItem key={option.value ?? "no-score"} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
     </Select>
   );
 }

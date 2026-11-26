@@ -2,7 +2,6 @@ export const en = {
   common: {
     retry: "Try again",
     nav: {
-      library: "Library",
       admin: "Admin",
       changelog: "What's new",
       settings: "Settings",
@@ -237,6 +236,10 @@ export const en = {
       logout: "Sign out",
       loading: "Loading…",
       retry: "Try again",
+      roles: {
+        admin: "Administrator",
+        user: "Reader",
+      },
       errors: {
         invalidCredentials: "Invalid username or password.",
         invalidInvite: "The invite is invalid, expired or already used.",

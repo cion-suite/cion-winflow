@@ -13,7 +13,6 @@ import type { LibraryStatus } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Pagination } from "@/ui/Pagination";
-import { Select } from "@/ui/Select";
 import { Button } from "@/ui/shadcn/button";
 import { Card, CardContent } from "@/ui/shadcn/card";
 import {
@@ -24,6 +23,13 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/ui/shadcn/empty";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/shadcn/select";
 import { Skeleton } from "@/ui/shadcn/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/ui/shadcn/tabs";
 import { AddTitleDialog } from "./AddTitleDialog";
@@ -120,6 +126,13 @@ export function LibraryPage() {
     setPage(1);
   }
 
+  const sortOptions = [
+    { value: "updated", label: t("library.sorts.updated") },
+    { value: "added", label: t("library.sorts.added") },
+    { value: "title", label: t("library.sorts.title") },
+    { value: "score", label: t("library.sorts.score") },
+  ] as const;
+
   return (
     <div className="flex w-full flex-col gap-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -193,15 +206,20 @@ export function LibraryPage() {
 
       <div className="flex justify-end">
         <Select
-          className="w-48"
+          items={sortOptions}
           value={sort}
-          aria-label={t("library.sortLabel")}
-          onChange={(event) => changeSort(event.target.value as LibrarySort)}
+          onValueChange={(value) => changeSort(value as LibrarySort)}
         >
-          <option value="updated">{t("library.sorts.updated")}</option>
-          <option value="added">{t("library.sorts.added")}</option>
-          <option value="title">{t("library.sorts.title")}</option>
-          <option value="score">{t("library.sorts.score")}</option>
+          <SelectTrigger className="w-48" aria-label={t("library.sortLabel")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {sortOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       </div>
 

@@ -13,7 +13,13 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/ui/shadcn/dropdown-menu";
-import { Select } from "@/ui/Select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/shadcn/select";
 
 type LibraryPanelProps = {
   entry: LibraryState | null;
@@ -42,6 +48,10 @@ export function LibraryPanel({
 }: LibraryPanelProps) {
   const t = useT();
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const statusOptions = LIBRARY_STATUSES.map((status) => ({
+    value: status,
+    label: t(`library.statuses.${status}`),
+  }));
 
   if (!entry) {
     return (
@@ -70,16 +80,21 @@ export function LibraryPanel({
       <label className="flex flex-col gap-1.5">
         <span className="text-xs text-muted-foreground">{t("library.status")}</span>
         <Select
+          items={statusOptions}
           value={entry.status}
           disabled={pending}
-          aria-label={t("library.status")}
-          onChange={(event) => onStatus(event.target.value as LibraryStatus)}
+          onValueChange={(value) => onStatus(value as LibraryStatus)}
         >
-          {LIBRARY_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {t(`library.statuses.${status}`)}
-            </option>
-          ))}
+          <SelectTrigger className="w-full" aria-label={t("library.status")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {statusOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       </label>
 

@@ -2,7 +2,6 @@ export const ru = {
   common: {
     retry: "Повторить",
     nav: {
-      library: "Библиотека",
       admin: "Админка",
       changelog: "Что нового",
       settings: "Настройки",
@@ -237,6 +236,10 @@ export const ru = {
       logout: "Выйти",
       loading: "Загрузка…",
       retry: "Повторить",
+      roles: {
+        admin: "Администратор",
+        user: "Читатель",
+      },
       errors: {
         invalidCredentials: "Неверное имя пользователя или пароль.",
         invalidInvite: "Инвайт недействителен, истёк или уже использован.",

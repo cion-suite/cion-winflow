@@ -12,7 +12,7 @@
 | `shell/` | оболочка окна: то, что не принадлежит ни одному экрану | `layout/`, `navbar/` (шапка, поиск по библиотеке, меню пользователя, язык, тема), `nav.ts` |
 | `pages/<имя>/` | экраны, по папке на экран | `title/`, `library/`, `admin/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
 | `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `discover.ts`, `progress.ts`, `admin.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
-| `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `Pagination.tsx`, `Select.tsx`, `Textarea.tsx` |
+| `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `Pagination.tsx`, `Textarea.tsx` |
 | `lib/` | утилиты, хуки и типы без UI | `utils.ts`, `settings.ts`, `routes.ts`, `catalog.ts`, `apiErrors.ts`, `i18n/` |
 
 Файл `.ts` или `.tsx` вне этих папок — ошибка линтера (`boundaries/no-unknown-files`).
@@ -41,7 +41,7 @@
 
 Экран — `pages/<имя>/index.tsx`, рядом лежат его компоненты. Файл называется `index`, а компонент — по экрану (`export function LibraryPage`), импорт выглядит так: `@/pages/library`. Импортировать экран может только `app`, экраны друг друга не импортируют.
 
-Сайдбара нет: корневой экран `/` — библиотека. Ссылки шапки и меню пользователя задаёт таблица `shell/nav.ts` (`MAIN_NAV`, `MENU_NAV`); администратор видит пункт «Админка». Статические маршруты `PAGES` перечислены в `AppRouter` явно, `/library` перенаправляет на `/`.
+Сайдбара нет: корневой экран `/` — библиотека. Шапка содержит только логотип со ссылкой на `/`, поиск по библиотеке и меню пользователя; его пункты задаёт таблица `shell/nav.ts` (`MENU_NAV`), администратор видит пункт «Админка». Статические маршруты `PAGES` перечислены в `AppRouter` явно, `/library` перенаправляет на `/`.
 
 Параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены отдельным списком `PARAM_ROUTES` в `AppRouter`. Ссылки на них собирай через `src/lib/routes.ts`: `chapterKey` содержит `:` и `.`, поэтому кодируется `encodeURIComponent`.
 

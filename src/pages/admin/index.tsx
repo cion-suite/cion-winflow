@@ -26,12 +26,18 @@ import {
 import { useT } from "@/lib/i18n";
 import { titlePath } from "@/lib/routes";
 import { PageHeader } from "@/ui/PageHeader";
-import { Select } from "@/ui/Select";
 import { TitleForm } from "@/ui/TitleForm";
 import { Badge } from "@/ui/shadcn/badge";
 import { Button } from "@/ui/shadcn/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui/shadcn/card";
 import { Input } from "@/ui/shadcn/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/shadcn/select";
 import { Skeleton } from "@/ui/shadcn/skeleton";
 
 function SourceRow({ source }: { source: SourceState }) {
@@ -192,6 +198,14 @@ function ImportFromSource({ sources }: { sources: SourceState[] }) {
   const effectiveKind = selected?.kinds.includes(kind)
     ? kind
     : (selected?.default_kind ?? "manga");
+  const sourceOptions = available.map((source) => ({
+    value: source.code,
+    label: source.name,
+  }));
+  const kindOptions = (selected?.kinds ?? []).map((value) => ({
+    value,
+    label: t(`catalog.kinds.${value}`),
+  }));
 
   function handleSearch(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -215,29 +229,39 @@ function ImportFromSource({ sources }: { sources: SourceState[] }) {
         ) : (
           <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleSearch}>
             <Select
-              className="sm:w-44"
-              value={selected?.code ?? ""}
-              aria-label={t("admin.source")}
-              onChange={(event) => setCode(event.target.value)}
+              items={sourceOptions}
+              value={selected?.code ?? null}
+              onValueChange={(value) => setCode(value ?? "")}
             >
-              {available.map((source) => (
-                <option key={source.code} value={source.code}>
-                  {source.name}
-                </option>
-              ))}
+              <SelectTrigger className="w-full sm:w-44" aria-label={t("admin.source")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {sourceOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
             {selected && selected.kinds.length > 1 && (
               <Select
-                className="sm:w-36"
+                items={kindOptions}
                 value={effectiveKind}
-                aria-label={t("title.kind")}
-                onChange={(event) => setKind(event.target.value as MediaKind)}
+                onValueChange={(value) => {
+                  if (value !== null) setKind(value);
+                }}
               >
-                {selected.kinds.map((value) => (
-                  <option key={value} value={value}>
-                    {t(`catalog.kinds.${value}`)}
-                  </option>
-                ))}
+                <SelectTrigger className="w-full sm:w-36" aria-label={t("title.kind")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {kindOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             )}
             <Input
@@ -489,6 +513,10 @@ function AdminContent() {
   const sourcesError = useErrorText(sources.error);
 
   const serverCodes = priorities.data?.sources.map((source) => source.code).join(",") ?? "";
+  const kindOptions = MEDIA_KINDS.map((value) => ({
+    value,
+    label: t(`catalog.kinds.${value}`),
+  }));
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
@@ -530,12 +558,23 @@ function AdminContent() {
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="flex flex-col gap-1.5 text-sm">
               <span className="font-medium">{t("title.kind")}</span>
-              <Select value={kind} onChange={(event) => setKind(event.target.value as MediaKind)}>
-                {MEDIA_KINDS.map((value) => (
-                  <option key={value} value={value}>
-                    {t(`catalog.kinds.${value}`)}
-                  </option>
-                ))}
+              <Select
+                items={kindOptions}
+                value={kind}
+                onValueChange={(value) => {
+                  if (value !== null) setKind(value);
+                }}
+              >
+                <SelectTrigger className="w-full" aria-label={t("title.kind")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {kindOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </label>
             <label className="flex flex-col gap-1.5 text-sm">

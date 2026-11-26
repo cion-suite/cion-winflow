@@ -12,11 +12,17 @@ import {
 } from "@/api";
 import type { MediaKind } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
-import { Select } from "@/ui/Select";
 import { Badge } from "@/ui/shadcn/badge";
 import { Button } from "@/ui/shadcn/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui/shadcn/card";
 import { Input } from "@/ui/shadcn/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/shadcn/select";
 
 type Props = {
   titleId: number;
@@ -62,6 +68,10 @@ export function AdminSourcePanel({ titleId, titleKind, sources, preferredSourceI
   const code = available.some((source) => source.code === selectedCode)
     ? selectedCode
     : (available[0]?.code ?? "");
+  const sourceOptions = available.map((source) => ({
+    value: source.code,
+    label: source.name,
+  }));
 
   function handleSearch(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -82,16 +92,20 @@ export function AdminSourcePanel({ titleId, titleKind, sources, preferredSourceI
         ) : (
           <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleSearch}>
             <Select
-              className="sm:w-48"
+              items={sourceOptions}
               value={code}
-              aria-label={t("admin.source")}
-              onChange={(event) => setSelectedCode(event.target.value)}
+              onValueChange={(value) => setSelectedCode(value ?? "")}
             >
-              {available.map((source) => (
-                <option key={source.code} value={source.code}>
-                  {source.name}
-                </option>
-              ))}
+              <SelectTrigger className="w-full sm:w-48" aria-label={t("admin.source")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {sourceOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
             <Input
               value={query}

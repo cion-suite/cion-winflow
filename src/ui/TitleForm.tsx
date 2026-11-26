@@ -3,15 +3,19 @@ import { type FormEvent, type ReactNode, useState } from "react";
 import {
   MEDIA_KINDS,
   TITLE_STATUSES,
-  type MediaKind,
   type TitleFormValues,
-  type TitleStatus,
 } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "@/ui/shadcn/button";
 import { Input } from "@/ui/shadcn/input";
-import { Select } from "@/ui/Select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/shadcn/select";
 import { Textarea } from "@/ui/Textarea";
 
 type TitleFormProps = {
@@ -52,6 +56,18 @@ export function TitleForm({
   const t = useT();
   const [values, setValues] = useState<TitleFormValues>(initial);
 
+  const kindOptions = MEDIA_KINDS.map((kind) => ({
+    value: kind,
+    label: t(`catalog.kinds.${kind}`),
+  }));
+  const statusOptions = [
+    { value: null, label: t("title.unset") },
+    ...TITLE_STATUSES.map((status) => ({
+      value: status,
+      label: t(`title.statuses.${status}`),
+    })),
+  ];
+
   function update<K extends keyof TitleFormValues>(
     key: K,
     value: TitleFormValues[K],
@@ -80,30 +96,43 @@ export function TitleForm({
 
         <Field label={t("title.kind")}>
           <Select
+            items={kindOptions}
             name="kind"
             value={values.kind}
-            onChange={(event) => update("kind", event.target.value as MediaKind)}
+            onValueChange={(next) => {
+              if (next !== null) update("kind", next);
+            }}
           >
-            {MEDIA_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {t(`catalog.kinds.${kind}`)}
-              </option>
-            ))}
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {kindOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         </Field>
 
         <Field label={t("title.status")}>
           <Select
+            items={statusOptions}
             name="status"
-            value={values.status}
-            onChange={(event) => update("status", event.target.value as "" | TitleStatus)}
+            value={values.status === "" ? null : values.status}
+            onValueChange={(next) => update("status", next ?? "")}
           >
-            <option value="">{t("title.unset")}</option>
-            {TITLE_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {t(`title.statuses.${status}`)}
-              </option>
-            ))}
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {statusOptions.map((option) => (
+                <SelectItem key={option.value ?? "unset"} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         </Field>
 
