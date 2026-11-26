@@ -1,2 +1,5 @@
 allowBuilds:
   unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@shadcn/registry@0.2.2'
+  - shadcn@4.23.1
