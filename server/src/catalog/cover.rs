@@ -16,9 +16,9 @@ use sqlx::SqlitePool;
 use crate::{
     auth::session::{self, CurrentUser},
     error::AppError,
-    extract::{ApiPath, ApiQuery},
+    extract::{ApiJson, ApiPath, ApiQuery},
     sources::{
-        CoverSize, SourceCovers, SourceKind,
+        CoverSize, ExternalId, MediaKind, SourceCovers, SourceKind,
         http::{IMAGE_BODY_LIMIT, fetch_bytes},
     },
     state::AppState,
@@ -61,6 +61,30 @@ impl CoverParams {
 pub struct CoverResponse {
     pub has_cover: bool,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FetchSourceCoversInput {
+    /// Подтверждённая замена ручных размеров; по умолчанию они остаются.
+    #[serde(default)]
+    pub replace_manual: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SourceCoverErrorDto {
+    pub source_code: String,
+    pub code: &'static str,
+    pub message: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct SourceCoversResponse {
+    /// Источники, чьи обложки записались, в порядке опроса.
+    pub sources: Vec<String>,
+    pub imported: Vec<CoverSize>,
+    pub skipped_manual: Vec<CoverSize>,
+    /// Ошибка одного источника не отменяет результат остальных.
+    pub errors: Vec<SourceCoverErrorDto>,
 }
 
 struct ProcessedCover {
@@ -357,6 +381,213 @@ pub async fn get_cover(
     Ok(response)
 }
 
+/// Явная admin-операция «получить из источника»: заново скачивает обложки
+/// привязанных источников. В отличие от автоимпорта обновляет и уже
+/// сохранённые source-размеры, а ручные заменяет только с `replace_manual`.
+pub async fn fetch_source_covers(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(title_id): ApiPath<i64>,
+    ApiJson(input): ApiJson<FetchSourceCoversInput>,
+) -> Result<Json<SourceCoversResponse>, AppError> {
+    user.require_admin()?;
+    Ok(Json(
+        refresh_source_covers(&state, title_id, input.replace_manual).await?,
+    ))
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct CoverSourceEntry {
+    entry_id: i64,
+    source_id: i64,
+    external_id: String,
+    code: String,
+    is_primary: bool,
+}
+
+fn source_cover_error(source_code: &str, code: &'static str, message: &str) -> SourceCoverErrorDto {
+    SourceCoverErrorDto {
+        source_code: source_code.to_owned(),
+        code,
+        message: message.to_owned(),
+    }
+}
+
+/// Ручной размер с файлом на диске: его нельзя менять без подтверждения.
+/// Проверка до скачивания экономит сеть; авторитетная проверка повторяется
+/// под локом в `store_source_cover_locked`.
+async fn has_manual_cover(state: &AppState, title_id: i64, size: CoverSize) -> bool {
+    let path = match sqlx::query_scalar::<_, String>(
+        "SELECT path FROM title_covers WHERE title_id = ? AND size = ? AND source_id IS NULL",
+    )
+    .bind(title_id)
+    .bind(size.as_str())
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(title_id, size = %size, %error, "cannot check manual cover");
+            return false;
+        }
+    };
+
+    match path {
+        Some(path) => tokio::fs::metadata(state.config.data_dir.join(path))
+            .await
+            .is_ok(),
+        None => false,
+    }
+}
+
+/// Перебирает привязанные источники в порядке preferred → primary → привязка
+/// и берёт каждый размер у первого источника, который его отдал. Размер,
+/// сохранённый вручную, без `replace_manual` остаётся нетронутым и дальше
+/// не ищется. Ошибки источников собираются в ответ, операцию не отменяют.
+pub async fn refresh_source_covers(
+    state: &AppState,
+    title_id: i64,
+    replace_manual: bool,
+) -> Result<SourceCoversResponse, AppError> {
+    let (raw_kind, preferred_source_id) = sqlx::query_as::<_, (String, Option<i64>)>(
+        "SELECT kind, preferred_source_id FROM titles WHERE id = ?",
+    )
+    .bind(title_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
+    let kind = MediaKind::from_db(&raw_kind).ok_or(AppError::Internal)?;
+
+    let mut entries = sqlx::query_as::<_, CoverSourceEntry>(
+        "SELECT e.id AS entry_id, e.source_id, e.external_id, s.code, e.is_primary \
+         FROM source_entries e JOIN sources s ON s.id = e.source_id \
+         WHERE e.title_id = ?",
+    )
+    .bind(title_id)
+    .fetch_all(&state.pool)
+    .await?;
+    entries.sort_by_key(|entry| {
+        (
+            Some(entry.source_id) != preferred_source_id,
+            !entry.is_primary,
+            entry.entry_id,
+        )
+    });
+
+    let mut response = SourceCoversResponse::default();
+    let mut handled = HashSet::new();
+
+    for entry in entries {
+        if handled.len() == CoverSize::ALL.len() {
+            break;
+        }
+
+        // Guard реестра не держим через await: PUT /api/sources его ждёт.
+        let runtime = {
+            let registry = state.sources.read().await;
+            registry.runtime_by_id(entry.source_id)
+        };
+        let Some(runtime) = runtime else {
+            response.errors.push(source_cover_error(
+                &entry.code,
+                "source_not_registered",
+                "source is not registered",
+            ));
+            continue;
+        };
+        // `enabled` уже учитывает `base_url` и `config_error`, поэтому
+        // единственная причина отказа здесь — выключенный источник:
+        // это штатный пропуск, а не ошибка.
+        let Ok(adapter) = runtime.adapter().cloned() else {
+            continue;
+        };
+        drop(runtime);
+
+        let external_id = match ExternalId::new(entry.external_id.clone()) {
+            Ok(external_id) => external_id,
+            Err(error) => {
+                response.errors.push(source_cover_error(
+                    &entry.code,
+                    error.reason(),
+                    &error.to_string(),
+                ));
+                continue;
+            }
+        };
+
+        let source_title = match adapter.title(kind, &external_id).await {
+            Ok(source_title) => source_title,
+            Err(error) => {
+                response.errors.push(source_cover_error(
+                    &entry.code,
+                    error.reason(),
+                    &error.to_string(),
+                ));
+                continue;
+            }
+        };
+
+        for (size, reference) in source_title.covers.entries() {
+            if handled.contains(&size) {
+                continue;
+            }
+            // Дешёвая проверка до скачивания: ручной размер без подтверждения
+            // не трогаем вовсе. Под локом provenance сверяется повторно.
+            if !replace_manual && has_manual_cover(state, title_id, size).await {
+                response.skipped_manual.push(size);
+                handled.insert(size);
+                continue;
+            }
+            match store_source_cover(
+                state,
+                title_id,
+                entry.source_id,
+                &adapter,
+                size,
+                reference,
+                SourceCoverMode::Refresh { replace_manual },
+            )
+            .await
+            {
+                Ok(CoverWrite::Written) => {
+                    response.imported.push(size);
+                    handled.insert(size);
+                    if !response.sources.iter().any(|code| code == &entry.code) {
+                        response.sources.push(entry.code.clone());
+                    }
+                }
+                Ok(CoverWrite::Kept) => {
+                    // В режиме Refresh Kept — это сохранённая ручная обложка.
+                    response.skipped_manual.push(size);
+                    handled.insert(size);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        title_id,
+                        size = %size,
+                        code = %entry.code,
+                        %error,
+                        "cannot refresh source cover"
+                    );
+                    response.errors.push(source_cover_error(
+                        &entry.code,
+                        "cover_failed",
+                        &error.to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    if !response.imported.is_empty()
+        && let Err(error) = bump_title_updated_at(&state.pool, title_id).await
+    {
+        tracing::warn!(title_id, %error, "cannot bump title after cover refresh");
+    }
+
+    Ok(response)
+}
+
 /// Автоматически скачивает обложки источника после импорта или привязки.
 /// Заполняет только отсутствующие размеры: ручную обложку не перетирает.
 /// Ошибка сети или разбора не ломает импорт — она только логируется.
@@ -401,9 +632,19 @@ pub async fn import_source_covers(
         if present.contains(size.as_str()) {
             continue;
         }
-        match store_source_cover(state, title_id, source_id, adapter, size, reference).await {
-            Ok(true) => stored += 1,
-            Ok(false) => {}
+        match store_source_cover(
+            state,
+            title_id,
+            source_id,
+            adapter,
+            size,
+            reference,
+            SourceCoverMode::FillMissing,
+        )
+        .await
+        {
+            Ok(CoverWrite::Written) => stored += 1,
+            Ok(CoverWrite::Kept) => {}
             Err(error) => {
                 tracing::warn!(
                     title_id,
@@ -424,6 +665,24 @@ pub async fn import_source_covers(
     stored
 }
 
+/// Режим записи обложки источника.
+#[derive(Debug, Clone, Copy)]
+enum SourceCoverMode {
+    /// Автоимпорт, привязка и refresh_title: занятый размер не трогаем.
+    FillMissing,
+    /// Явная операция «получить из источника»: source-размеры обновляем,
+    /// ручные — только с подтверждением.
+    Refresh { replace_manual: bool },
+}
+
+/// Что произошло с размером под локом.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoverWrite {
+    Written,
+    /// Файл на диске уже есть, а режим запрещает его перезапись.
+    Kept,
+}
+
 async fn store_source_cover(
     state: &AppState,
     title_id: i64,
@@ -431,7 +690,27 @@ async fn store_source_cover(
     adapter: &SourceKind,
     size: CoverSize,
     reference: &str,
-) -> Result<bool, AppError> {
+    mode: SourceCoverMode,
+) -> Result<CoverWrite, AppError> {
+    let processed = download_source_cover(state, adapter, size, reference).await?;
+
+    // Скачивание и декодирование — вне лока; сверка с ручной загрузкой
+    // и запись файла со строкой — под локом (title, size).
+    let lock = state.cover_lock(title_id, size);
+    let stored = {
+        let _guard = lock.lock().await;
+        store_source_cover_locked(state, title_id, source_id, size, &processed, mode).await
+    };
+    state.release_cover_lock(title_id, size);
+    stored
+}
+
+async fn download_source_cover(
+    state: &AppState,
+    adapter: &SourceKind,
+    size: CoverSize,
+    reference: &str,
+) -> Result<ProcessedCover, AppError> {
     let url = adapter.resolve_cover(reference)?;
 
     let bytes = {
@@ -451,30 +730,20 @@ async fn store_source_cover(
         response.body
     };
 
-    let processed = {
-        let _permit = state
-            .image_semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| AppError::Task)?;
-        tokio::task::spawn_blocking(move || process_cover(&bytes, size))
-            .await
-            .map_err(|error| {
-                tracing::error!(%error, "cover processing task failed");
-                AppError::Task
-            })??
-    };
-
-    // Скачивание и декодирование — вне лока; сверка с ручной загрузкой
-    // и запись файла со строкой — под локом (title, size).
-    let lock = state.cover_lock(title_id, size);
-    let stored = {
-        let _guard = lock.lock().await;
-        store_source_cover_locked(state, title_id, source_id, size, &processed).await
-    };
-    state.release_cover_lock(title_id, size);
-    stored
+    let permit = state
+        .image_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Task)?;
+    let processed = tokio::task::spawn_blocking(move || process_cover(&bytes, size))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "cover processing task failed");
+            AppError::Task
+        })??;
+    drop(permit);
+    Ok(processed)
 }
 
 async fn store_source_cover_locked(
@@ -483,23 +752,37 @@ async fn store_source_cover_locked(
     source_id: i64,
     size: CoverSize,
     processed: &ProcessedCover,
-) -> Result<bool, AppError> {
-    let existing = sqlx::query_scalar::<_, String>(
-        "SELECT path FROM title_covers WHERE title_id = ? AND size = ?",
+    mode: SourceCoverMode,
+) -> Result<CoverWrite, AppError> {
+    let existing = sqlx::query_as::<_, (String, Option<i64>)>(
+        "SELECT path, source_id FROM title_covers WHERE title_id = ? AND size = ?",
     )
     .bind(title_id)
     .bind(size.as_str())
     .fetch_optional(&state.pool)
     .await?;
 
-    // Пока шло скачивание, размер могла занять ручная загрузка или другой
-    // источник. Существующий файл не перетираем; отсутствующий — лечим.
-    if let Some(path) = &existing
-        && tokio::fs::metadata(state.config.data_dir.join(path))
+    // Файл на диске важнее строки: пропавший файл лечится в любом режиме.
+    let file_present = match &existing {
+        Some((path, _)) => tokio::fs::metadata(state.config.data_dir.join(path))
             .await
-            .is_ok()
-    {
-        return Ok(false);
+            .is_ok(),
+        None => false,
+    };
+    if file_present {
+        match mode {
+            SourceCoverMode::FillMissing => return Ok(CoverWrite::Kept),
+            SourceCoverMode::Refresh { replace_manual } => {
+                // NULL — ручная загрузка или строка миграции 0005: обе
+                // считаются ручными, пока админ не подтвердил замену.
+                let source_owned = existing
+                    .as_ref()
+                    .is_some_and(|(_, origin)| origin.is_some());
+                if !source_owned && !replace_manual {
+                    return Ok(CoverWrite::Kept);
+                }
+            }
+        }
     }
 
     let relative = format!("covers/{title_id}");
@@ -530,13 +813,13 @@ async fn store_source_cover_locked(
     .execute(&state.pool)
     .await?;
 
-    if let Some(old_path) = existing
-        && old_path != path
+    if let Some((old_path, _)) = &existing
+        && old_path != &path
     {
-        remove_unreferenced_cover_file(state, &old_path).await;
+        remove_unreferenced_cover_file(state, old_path).await;
     }
 
-    Ok(true)
+    Ok(CoverWrite::Written)
 }
 
 async fn title_exists(pool: &SqlitePool, title_id: i64) -> Result<bool, AppError> {

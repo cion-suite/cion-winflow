@@ -132,6 +132,17 @@ export const en = {
       coverMissing: "Not uploaded",
       replaceCover: "Replace",
       removeCover: "Remove",
+      coverFromSource: "Fetch from source",
+      coverFromSourceHint: "Updates covers from attached sources.",
+      coverFromSourceNoEnabled: "No enabled sources are attached.",
+      coverFromSourceConfirm:
+        "Sizes {{sizes}} were uploaded manually. Replace them with the source cover?",
+      coverFromSourceReplace: "Replace manual too",
+      coverFromSourceKeepManual: "Keep manual",
+      coverFromSourceUpdated: "Covers updated from {{sources}}: {{sizes}}.",
+      coverFromSourceKeptManual: "Manual sizes kept: {{sizes}}.",
+      coverFromSourceFailed: "Could not fetch the cover from {{source}}: {{message}}",
+      coverFromSourceEmpty: "Sources did not return a cover.",
     },
     library: {
       title: "Library",

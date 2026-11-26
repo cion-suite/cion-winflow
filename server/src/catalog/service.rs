@@ -64,8 +64,11 @@ pub struct TitleDto {
     pub lang: Option<String>,
     pub rating: Option<f64>,
     pub has_cover: bool,
-    /// Какие размеры обложки реально лежат на диске.
+    /// Какие размеры обложки сохранены.
     pub cover_sizes: Vec<String>,
+    /// Размеры, загруженные вручную: `title_covers.source_id IS NULL`.
+    /// Строки миграции 0005 тоже считаются ручными.
+    pub manual_cover_sizes: Vec<String>,
     pub origin_source_id: Option<i64>,
     pub preferred_source_id: Option<i64>,
     pub created_at: i64,
@@ -129,6 +132,7 @@ struct TitleRow {
     lang: Option<String>,
     rating: Option<f64>,
     cover_sizes: String,
+    manual_cover_sizes: String,
     origin_source_id: Option<i64>,
     preferred_source_id: Option<i64>,
     created_at: i64,
@@ -138,6 +142,7 @@ struct TitleRow {
 impl From<TitleRow> for TitleDto {
     fn from(row: TitleRow) -> Self {
         let cover_sizes = decode_cover_sizes(&row.cover_sizes);
+        let manual_cover_sizes = decode_cover_sizes(&row.manual_cover_sizes);
         Self {
             id: row.id,
             kind: row.kind,
@@ -152,6 +157,7 @@ impl From<TitleRow> for TitleDto {
             rating: row.rating,
             has_cover: !cover_sizes.is_empty(),
             cover_sizes,
+            manual_cover_sizes,
             origin_source_id: row.origin_source_id,
             preferred_source_id: row.preferred_source_id,
             created_at: row.created_at,
@@ -374,6 +380,9 @@ async fn find_title(pool: &SqlitePool, title_id: i64) -> Result<TitleRow, AppErr
                 year, lang, rating, \
                 COALESCE((SELECT group_concat(c.size, ',') FROM title_covers c \
                           WHERE c.title_id = titles.id), '') AS cover_sizes, \
+                COALESCE((SELECT group_concat(c.size, ',') FROM title_covers c \
+                          WHERE c.title_id = titles.id AND c.source_id IS NULL), '') \
+                          AS manual_cover_sizes, \
                 origin_source_id, preferred_source_id, created_at, updated_at \
          FROM titles WHERE id = ?",
     )

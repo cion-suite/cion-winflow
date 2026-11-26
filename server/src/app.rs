@@ -87,6 +87,10 @@ pub fn router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(catalog::cover::BODY_LIMIT)),
         )
         .route(
+            "/titles/{id}/cover/from-source",
+            post(catalog::cover::fetch_source_covers),
+        )
+        .route(
             "/titles/{id}/sources",
             post(catalog::handlers::attach_source),
         )

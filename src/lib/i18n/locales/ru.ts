@@ -132,6 +132,17 @@ export const ru = {
       coverMissing: "Нет",
       replaceCover: "Заменить",
       removeCover: "Удалить",
+      coverFromSource: "Получить из источника",
+      coverFromSourceHint: "Обновит обложки из привязанных источников.",
+      coverFromSourceNoEnabled: "Нет включённых привязанных источников.",
+      coverFromSourceConfirm:
+        "Размеры {{sizes}} загружены вручную. Заменить их обложкой источника?",
+      coverFromSourceReplace: "Заменить и ручные",
+      coverFromSourceKeepManual: "Оставить ручные",
+      coverFromSourceUpdated: "Обложки обновлены из {{sources}}: {{sizes}}.",
+      coverFromSourceKeptManual: "Ручные размеры сохранены: {{sizes}}.",
+      coverFromSourceFailed: "Не удалось получить обложку из {{source}}: {{message}}",
+      coverFromSourceEmpty: "Источники не отдали обложку.",
     },
     library: {
       title: "Библиотека",

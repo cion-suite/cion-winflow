@@ -648,6 +648,7 @@ export function TitlePage() {
       {isAdmin && (
         <CoverEditorDialog
           title={title}
+          sources={sources}
           open={coversOpen}
           onOpenChange={setCoversOpen}
         />

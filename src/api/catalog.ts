@@ -37,6 +37,8 @@ export type Title = TitleSummary & {
   lang: string | null;
   /** Какие размеры обложки реально сохранены на сервере. */
   cover_sizes: CoverSize[];
+  /** Размеры, загруженные вручную: их заменяет только подтверждённый refresh. */
+  manual_cover_sizes: CoverSize[];
   origin_source_id: number | null;
   preferred_source_id: number | null;
   created_at: number;
@@ -120,6 +122,20 @@ export type CoverResponse = {
   updated_at: number;
 };
 
+export type SourceCoverError = {
+  source_code: string;
+  code: string;
+  message: string;
+};
+
+/** Результат явного «получить из источника». */
+export type SourceCoversResponse = {
+  sources: string[];
+  imported: CoverSize[];
+  skipped_manual: CoverSize[];
+  errors: SourceCoverError[];
+};
+
 /** Полная замена: PUT присылает все поля, отсутствующие — пустые. */
 export type TitleInput = {
   name: string;
@@ -161,6 +177,11 @@ export const catalogApi = {
   },
   deleteCover: (id: number, size: CoverSize) =>
     request<CoverResponse>(`/titles/${id}/cover?size=${size}`, { method: "DELETE" }),
+  fetchSourceCovers: (id: number, replaceManual: boolean) =>
+    request<SourceCoversResponse>(
+      `/titles/${id}/cover/from-source`,
+      jsonMutation({ replace_manual: replaceManual }),
+    ),
 };
 
 export function useTitleQuery(id: number | null) {
@@ -220,6 +241,20 @@ export function useDeleteCoverMutation(id: number) {
 
   return useMutation({
     mutationFn: (size: CoverSize) => catalogApi.deleteCover(id, size),
+    onSuccess: () => invalidateCoverQueries(queryClient, id),
+  });
+}
+
+export type FetchSourceCoversInput = {
+  replaceManual: boolean;
+};
+
+export function useFetchSourceCoversMutation(id: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ replaceManual }: FetchSourceCoversInput) =>
+      catalogApi.fetchSourceCovers(id, replaceManual),
     onSuccess: () => invalidateCoverQueries(queryClient, id),
   });
 }

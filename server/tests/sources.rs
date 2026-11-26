@@ -691,3 +691,185 @@ async fn manual_cover_is_not_overwritten_by_source_or_refresh() {
         "auto cover import must not overwrite a manual cover"
     );
 }
+
+#[tokio::test]
+async fn cover_from_source_refreshes_source_cover() {
+    let _guard = lock().await;
+    let (base_url, hits) = start_image_server().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    configure_fixture(&app, &admin, &base_url).await;
+    let imported = import_fixture(&app, &admin).await;
+    let title_id = imported["title_id"].as_i64().expect("title id");
+
+    let before = hit_count(&hits, "/cover.jpg");
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/cover/from-source"),
+                &json!({ "replace_manual": false }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK, "fetch from source");
+    let body = body_json(response).await;
+    assert_eq!(body["sources"], json!(["fixture"]));
+    assert_eq!(body["imported"], json!(["mid"]));
+    assert_eq!(body["skipped_manual"], json!([]));
+    assert_eq!(body["errors"], json!([]));
+    assert_eq!(
+        hit_count(&hits, "/cover.jpg"),
+        before + 1,
+        "explicit refresh must download the source cover again"
+    );
+
+    let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
+    assert_eq!(title["title"]["manual_cover_sizes"], json!([]));
+}
+
+#[tokio::test]
+async fn cover_from_source_keeps_manual_until_confirmed() {
+    let _guard = lock().await;
+    let (base_url, hits) = start_image_server().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    configure_fixture(&app, &admin, &base_url).await;
+    let imported = import_fixture(&app, &admin).await;
+    let title_id = imported["title_id"].as_i64().expect("title id");
+
+    let response = app
+        .request(with_cookie(
+            multipart_file_request(
+                &format!("/api/titles/{title_id}/cover?size=mid"),
+                "file",
+                "manual.png",
+                "image/png",
+                &png_sized(40, 60),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let manual = fetch_cover(&app, title_id, "mid", &admin).await;
+
+    let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
+    assert_eq!(title["title"]["manual_cover_sizes"], json!(["mid"]));
+
+    // Без подтверждения ручной размер сохраняется и даже не скачивается.
+    let downloads_before = hit_count(&hits, "/cover.jpg");
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/cover/from-source"),
+                &json!({}),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["imported"], json!([]));
+    assert_eq!(body["skipped_manual"], json!(["mid"]));
+    let kept = fetch_cover(&app, title_id, "mid", &admin).await;
+    assert_eq!(
+        kept, manual,
+        "manual cover must survive without confirmation"
+    );
+    assert_eq!(
+        hit_count(&hits, "/cover.jpg"),
+        downloads_before,
+        "manual size must not be downloaded without confirmation"
+    );
+
+    // Подтверждённая замена ставит обложку источника.
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/cover/from-source"),
+                &json!({ "replace_manual": true }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["imported"], json!(["mid"]));
+    assert_eq!(body["skipped_manual"], json!([]));
+    let replaced = fetch_cover(&app, title_id, "mid", &admin).await;
+    assert_ne!(
+        replaced, manual,
+        "confirmed refresh replaces the manual cover"
+    );
+
+    let title = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
+    assert_eq!(title["title"]["manual_cover_sizes"], json!([]));
+}
+
+#[tokio::test]
+async fn cover_from_source_without_entries_returns_empty() {
+    let _guard = lock().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    let title_id = app.create_title(&admin, "No sources", "manga").await;
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                &format!("/api/titles/{title_id}/cover/from-source"),
+                &json!({}),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["sources"], json!([]));
+    assert_eq!(body["imported"], json!([]));
+    assert_eq!(body["skipped_manual"], json!([]));
+    assert_eq!(body["errors"], json!([]));
+}
+
+#[tokio::test]
+async fn cover_from_source_requires_admin_and_known_title() {
+    let _guard = lock().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    let user = app.register_extra_user("reader").await;
+    let title_id = app.create_title(&admin, "Manual", "manga").await;
+    let uri = format!("/api/titles/{title_id}/cover/from-source");
+
+    let response = app
+        .request(json_request(Method::POST, &uri, &json!({})))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .request(with_cookie(
+            json_request(Method::POST, &uri, &json!({})),
+            &user,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::POST,
+                "/api/titles/999999/cover/from-source",
+                &json!({}),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
