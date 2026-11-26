@@ -13,7 +13,7 @@ import { WatchPage } from "@/pages/watch";
 import { Layout } from "@/shell/layout/Layout";
 import { RequireAuth } from "./RequireAuth";
 
-/** Статические экраны: меню шапки берёт подписи из shell/nav.ts. */
+/** Статические экраны: меню шапки берёт подписи из lib/nav.ts. */
 const PAGES = [
   { path: "/admin", element: <AdminPage /> },
   { path: "/changelog", element: <ChangelogPage /> },

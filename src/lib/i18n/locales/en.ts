@@ -1,6 +1,7 @@
 export const en = {
   common: {
     retry: "Try again",
+    close: "Close",
     nav: {
       admin: "Admin",
       changelog: "What's new",
@@ -211,7 +212,24 @@ export const en = {
       backToTitle: "Back to title",
       prevChapter: "Previous chapter",
       nextChapter: "Next chapter",
-      pageOf: "{{page}} / {{total}}",
+      pageOf: "{{page}}/{{total}}",
+      pageCounter: "Page {{page}} of {{total}}",
+      settings: "Reader settings",
+      width: "Page width",
+      widths: {
+        sm: "SM",
+        md: "MD",
+        lg: "LG",
+        xl: "XL",
+        "2xl": "2XL",
+        "3xl": "3XL",
+        "4xl": "4XL",
+        "5xl": "5XL",
+        "6xl": "6XL",
+        full: "Full width",
+      },
+      bookmarks: "Bookmarks",
+      librarySection: "Library",
       locked: "This chapter is not available.",
       unsupported: "This chapter has no pages to read.",
       keyboardHint: "Use ← and → to turn pages.",

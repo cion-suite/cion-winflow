@@ -19,3 +19,12 @@ export const MENU_NAV: readonly NavItem[] = [
   { path: "/settings", i18nKey: "nav.settings", icon: SettingsIcon },
   { path: "/admin", i18nKey: "nav.admin", icon: ShieldIcon, adminOnly: true },
 ];
+
+/** Пункты меню доступные роли: админка только администратору. */
+export function menuItemsForRole(role: string): readonly NavItem[] {
+  return MENU_NAV.filter((item) => !item.adminOnly || role === "admin");
+}
+
+export function roleLabelKey(role: string): string {
+  return role === "admin" ? "auth.roles.admin" : "auth.roles.user";
+}

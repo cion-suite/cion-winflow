@@ -1,6 +1,7 @@
 export const ru = {
   common: {
     retry: "Повторить",
+    close: "Закрыть",
     nav: {
       admin: "Админка",
       changelog: "Что нового",
@@ -211,7 +212,24 @@ export const ru = {
       backToTitle: "К тайтлу",
       prevChapter: "Предыдущая глава",
       nextChapter: "Следующая глава",
-      pageOf: "{{page}} / {{total}}",
+      pageOf: "{{page}}/{{total}}",
+      pageCounter: "Страница {{page}} из {{total}}",
+      settings: "Настройки чтения",
+      width: "Ширина страницы",
+      widths: {
+        sm: "SM",
+        md: "MD",
+        lg: "LG",
+        xl: "XL",
+        "2xl": "2XL",
+        "3xl": "3XL",
+        "4xl": "4XL",
+        "5xl": "5XL",
+        "6xl": "6XL",
+        full: "Во всю ширину",
+      },
+      bookmarks: "Закладки",
+      librarySection: "Библиотека",
       locked: "Эта глава недоступна.",
       unsupported: "В этой главе нет страниц для чтения.",
       keyboardHint: "Листайте клавишами ← и →.",

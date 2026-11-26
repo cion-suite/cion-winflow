@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
-import { ArrowLeftIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 import {
   pageImageUrl,
@@ -10,13 +10,20 @@ import {
   useProgressQuery,
   useSaveProgressMutation,
   useTitleQuery,
+  useUpsertLibraryMutation,
   type ContentPage,
 } from "@/api";
+import type { LibraryStatus } from "@/lib/catalog";
 import { isAvailableChapter, sortChapters } from "@/lib/chapters";
 import { useT } from "@/lib/i18n";
+import { READER_WIDTH_CLASS } from "@/lib/reader";
 import { readerPath, titlePath } from "@/lib/routes";
+import { useSetting } from "@/lib/settings";
+import { cn } from "@/lib/utils";
 import { Button, buttonVariants } from "@/ui/shadcn/button";
 import { Skeleton } from "@/ui/shadcn/skeleton";
+import { ReaderMobileControls, ReaderSideControls } from "./ReaderControls";
+import { ReaderHeader } from "./ReaderHeader";
 
 const EMPTY_PAGES: ContentPage[] = [];
 const SAVE_DEBOUNCE_MS = 800;
@@ -62,12 +69,15 @@ function ReaderView({
   chapterKey: string | null;
 }) {
   const t = useT();
+  const widthSetting = useSetting("readerWidth");
 
   const titleQuery = useTitleQuery(titleId);
   const contentQuery = useChapterContentQuery(titleId, chapterKey);
   const progressQuery = useProgressQuery(titleId);
   const save = useSaveProgressMutation(titleId ?? 0);
+  const upsert = useUpsertLibraryMutation(titleId ?? 0);
   const errorText = useErrorText(contentQuery.error);
+  const libraryError = useErrorText(upsert.error);
 
   const content = contentQuery.data?.content;
   const pages = content?.kind === "images" ? content.pages : EMPTY_PAGES;
@@ -81,9 +91,11 @@ function ReaderView({
     [titleQuery.data?.chapters],
   );
 
-  const [width, setWidth] = useState(0);
+  const [columnWidth, setColumnWidth] = useState(0);
   const [current, setCurrent] = useState(0);
+  const [chromeHidden, setChromeHidden] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const columnRef = useRef<HTMLDivElement>(null);
   const offsetsRef = useRef<number[]>([]);
   const currentRef = useRef(0);
   const restoredRef = useRef(false);
@@ -96,9 +108,9 @@ function ReaderView({
           page.width !== null && page.height !== null && page.width > 0
             ? page.height / page.width
             : 1.4;
-        return Math.max(160, width * ratio);
+        return Math.max(160, columnWidth * ratio);
       }),
-    [pages, width],
+    [pages, columnWidth],
   );
 
   const offsets = useMemo(() => {
@@ -125,29 +137,31 @@ function ReaderView({
     chapterIndex >= 0 && chapterIndex < chapters.length - 1
       ? chapters[chapterIndex + 1]
       : null;
+  const currentChapter = chapterIndex >= 0 ? chapters[chapterIndex] : null;
 
-  const chapterTitle = useMemo(() => {
-    if (!contentQuery.data) return t("reader.loading");
-    const number = contentQuery.data.number_text
-      ? `${t("title.chapter")} ${contentQuery.data.number_text}`
-      : t("title.special");
-    return contentQuery.data.name
-      ? `${number} · ${contentQuery.data.name}`
-      : number;
-  }, [contentQuery.data, t]);
+  const numberText =
+    currentChapter?.number_text ?? contentQuery.data?.number_text ?? null;
+  const chapterLabel =
+    numberText === null
+      ? contentQuery.data
+        ? t("title.special")
+        : "…"
+      : currentChapter?.volume != null
+        ? `${currentChapter.volume}-${numberText}`
+        : numberText;
 
-  // Ширина колонки: от неё зависят высоты страниц до загрузки картинок
+  // Ширина колонки, а не скролла: от неё зависят высоты страниц
   useEffect(() => {
-    const element = scrollRef.current;
+    const element = columnRef.current;
     if (!element) return;
 
-    const update = () => setWidth(element.clientWidth);
+    const update = () => setColumnWidth(element.clientWidth);
     update();
 
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [pages.length]);
 
   const handleScroll = useCallback(() => {
     if (rafRef.current !== null) return;
@@ -167,9 +181,26 @@ function ReaderView({
     currentRef.current = current;
   }, [current]);
 
+  // После смены ширины сохраняем текущую страницу, а не позицию в пикселях
+  const previousColumnWidthRef = useRef(0);
+  useEffect(() => {
+    if (!restoredRef.current) {
+      previousColumnWidthRef.current = columnWidth;
+      return;
+    }
+    if (columnWidth <= 0 || previousColumnWidthRef.current === columnWidth) {
+      return;
+    }
+    previousColumnWidthRef.current = columnWidth;
+    const element = scrollRef.current;
+    if (element) {
+      element.scrollTop = offsetsRef.current[currentRef.current] + 1;
+    }
+  }, [columnWidth]);
+
   // Восстановление позиции: ждём прогресс, чтобы не прыгнуть на первую страницу
   useEffect(() => {
-    if (restoredRef.current || pages.length === 0 || width <= 0) return;
+    if (restoredRef.current || pages.length === 0 || columnWidth <= 0) return;
     if (progressQuery.isPending) return;
 
     // Прогресс хранится по каноническому ключу: при alias-URL сравниваем с ним
@@ -189,7 +220,7 @@ function ReaderView({
     return () => cancelAnimationFrame(frame);
   }, [
     pages.length,
-    width,
+    columnWidth,
     offsets,
     progressQuery.isPending,
     progressQuery.data,
@@ -298,76 +329,65 @@ function ReaderView({
     }
   }, [current, pages]);
 
+  const library = titleQuery.data?.library ?? null;
+  const favorite = library?.favorite ?? false;
+  const libraryInput = {
+    status: library?.status ?? "planned",
+    score: library?.score ?? null,
+    favorite,
+  } as const;
+
+  function toggleFavorite(): void {
+    upsert.mutate({ ...libraryInput, favorite: !favorite });
+  }
+
+  function handleStatus(status: LibraryStatus): void {
+    upsert.mutate({ ...libraryInput, status });
+  }
+
+  function addToLibrary(): void {
+    upsert.mutate({ ...libraryInput, status: "planned", favorite: false });
+  }
+
   if (titleId === null) {
     return (
       <div className="grid min-h-dvh place-items-center p-6">
         <Link to="/" className={buttonVariants({ variant: "outline" })}>
-          {t("reader.backToTitle")}
+          {t("library.title")}
         </Link>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-background text-foreground">
-      <header className="flex shrink-0 items-center gap-2 border-b bg-background/95 px-2 py-2 backdrop-blur sm:px-4">
-        <Link
-          to={titlePath(titleId)}
-          aria-label={t("reader.backToTitle")}
-          className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
-        >
-          <ArrowLeftIcon aria-hidden />
-        </Link>
-
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{chapterTitle}</p>
-          <p className="truncate text-xs text-muted-foreground">
-            {titleQuery.data?.title.name ?? ""}
-            {contentQuery.data ? ` · ${contentQuery.data.source.name}` : ""}
-          </p>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1">
-          {previousChapter && (
-            <Link
-              to={readerPath(titleId, previousChapter.chapter_key)}
-              aria-label={t("reader.prevChapter")}
-              className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
-            >
-              <ChevronLeftIcon aria-hidden />
-            </Link>
-          )}
-          <span className="min-w-16 text-center text-xs text-muted-foreground tabular-nums">
-            {pages.length > 0
-              ? t("reader.pageOf", { page: current + 1, total: pages.length })
-              : ""}
-          </span>
-          {nextChapter && (
-            <Link
-              to={readerPath(titleId, nextChapter.chapter_key)}
-              aria-label={t("reader.nextChapter")}
-              className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
-            >
-              <ChevronRightIcon aria-hidden />
-            </Link>
-          )}
-        </div>
-      </header>
+    <div className="fixed inset-0 z-40 overflow-hidden bg-background text-foreground">
+      <ReaderHeader
+        titleId={titleId}
+        titleName={titleQuery.data?.title.name ?? ""}
+        chapterLabel={chapterLabel}
+        previousChapterKey={previousChapter?.chapter_key ?? null}
+        nextChapterKey={nextChapter?.chapter_key ?? null}
+        favorite={favorite}
+        favoritePending={upsert.isPending}
+        favoriteError={libraryError}
+        hidden={chromeHidden}
+        onToggleFavorite={toggleFavorite}
+      />
 
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="relative flex-1 overflow-y-auto overscroll-contain bg-muted/30"
+        className="h-dvh overflow-y-auto overscroll-contain bg-muted/30"
       >
         {contentQuery.isPending && (
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 p-4">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 pt-20 pb-10">
             <Skeleton className="aspect-2/3 w-full rounded-lg" />
             <Skeleton className="aspect-2/3 w-full rounded-lg" />
           </div>
         )}
 
         {contentQuery.isError && (
-          <div className="mx-auto flex max-w-md flex-col items-start gap-3 p-6">
+          <div className="mx-auto flex max-w-md flex-col items-start gap-3 p-6 pt-20">
             <p role="alert" className="text-sm text-destructive">
               {errorText}
             </p>
@@ -390,7 +410,7 @@ function ReaderView({
         )}
 
         {!contentQuery.isPending && !contentQuery.isError && content?.kind !== "images" && (
-          <div className="mx-auto flex max-w-md flex-col items-start gap-3 p-6">
+          <div className="mx-auto flex max-w-md flex-col items-start gap-3 p-6 pt-20">
             <p className="text-sm text-muted-foreground">{t("reader.unsupported")}</p>
             <Link
               to={titlePath(titleId)}
@@ -402,7 +422,10 @@ function ReaderView({
         )}
 
         {content?.kind === "images" && pages.length > 0 && (
-          <div className="mx-auto w-full max-w-3xl">
+          <div
+            ref={columnRef}
+            className={cn("mx-auto w-full", READER_WIDTH_CLASS[widthSetting])}
+          >
             <div style={{ height: offsets[start] }} />
 
             {pages.slice(start, end).map((page, offset) => {
@@ -412,6 +435,7 @@ function ReaderView({
                   key={page.id}
                   style={{ height: heights[index] }}
                   className="relative w-full"
+                  onClick={() => setChromeHidden((value) => !value)}
                 >
                   <img
                     src={pageImageUrl(page.id)}
@@ -427,7 +451,7 @@ function ReaderView({
 
             <div style={{ height: Math.max(0, totalHeight - offsets[end]) }} />
 
-            <div className="flex items-center justify-between gap-2 p-4">
+            <div className="flex items-center justify-between gap-2 px-4 pt-4">
               {previousChapter ? (
                 <Link
                   to={readerPath(titleId, previousChapter.chapter_key)}
@@ -452,12 +476,25 @@ function ReaderView({
               )}
             </div>
 
-            <p className="pb-6 text-center text-xs text-muted-foreground">
+            <p className="px-4 pt-6 pb-32 text-center text-xs text-muted-foreground md:pb-10">
               {t("reader.keyboardHint")}
             </p>
           </div>
         )}
       </div>
+
+      <ReaderSideControls page={current + 1} total={pages.length} />
+      <ReaderMobileControls
+        page={current + 1}
+        total={pages.length}
+        hidden={chromeHidden}
+        library={library}
+        pending={upsert.isPending}
+        errorText={libraryError}
+        onAdd={addToLibrary}
+        onStatus={handleStatus}
+        onToggleFavorite={toggleFavorite}
+      />
     </div>
   );
 }

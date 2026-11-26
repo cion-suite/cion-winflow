@@ -1,6 +1,11 @@
 import { useSyncExternalStore } from "react";
 
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from "./i18n/resources";
+import {
+  DEFAULT_READER_WIDTH,
+  isReaderWidth,
+  type ReaderWidth,
+} from "./reader";
 
 /**
  * Настройки приложения. Хранятся в localStorage; серверные настройки появятся
@@ -8,10 +13,12 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from "./i18n/
  * известен i18n сразу.
  */
 
-export type SettingKey = "locale";
+export type SettingKey = "locale" | "readerWidth";
 
 type SettingsMap = {
   locale: SupportedLocale;
+  /** Ширина колонки изображений в читалке. */
+  readerWidth: ReaderWidth;
 };
 
 const BROWSER_KEY = "cion-reader:settings";
@@ -24,6 +31,7 @@ function initialLocale(): SupportedLocale {
 
 const DEFAULTS: SettingsMap = {
   locale: initialLocale(),
+  readerWidth: DEFAULT_READER_WIDTH,
 };
 
 const values: SettingsMap = { ...DEFAULTS };
@@ -32,6 +40,7 @@ const listeners = new Map<SettingKey, Set<() => void>>();
 const isValid = {
   locale: (value: unknown): value is SupportedLocale =>
     typeof value === "string" && SUPPORTED_LOCALES.some((code) => code === value),
+  readerWidth: isReaderWidth,
 };
 
 function readBrowserSettings(): unknown {
@@ -73,6 +82,7 @@ export function initSettings(): void {
 
   const record = saved as Record<string, unknown>;
   if (isValid.locale(record.locale)) values.locale = record.locale;
+  if (isValid.readerWidth(record.readerWidth)) values.readerWidth = record.readerWidth;
 }
 
 export const settings = {

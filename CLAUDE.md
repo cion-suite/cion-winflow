@@ -41,11 +41,11 @@
 ```
 src/
   app/                     запуск: index.tsx (initSettings -> initI18n -> render), AppProvider (BrowserRouter, QueryClient, AuthProvider), AppRouter, RequireAuth, styles/index.css
-  shell/                   navbar/ (шапка, поиск по библиотеке, пользователь, язык, тема), layout/, nav.ts (ссылки шапки и меню)
+  shell/                   navbar/ (шапка, поиск по библиотеке, пользователь, язык, тема), layout/
   pages/                   экраны: library (карточки, вкладки, добавление), title (вкладки, главы), admin, reader, watch, changelog, settings, login, register
   api/                     client.ts (request/apiUrl/ApiError/jsonMutation/requestKeepalive), auth.tsx, catalog.ts, chapters.ts, library.ts, discover.ts, progress.ts, admin.ts, errors.ts (useErrorText), index.ts (области API)
   ui/                      shadcn/ и общие компоненты: PageHeader.tsx, PlaceholderPage.tsx, AuthShell.tsx, TitleForm.tsx, CoverImage.tsx, Pagination.tsx, Textarea.tsx
-  lib/                     utils.ts (cn), settings.ts, routes.ts, catalog.ts (типы и статусы), apiErrors.ts, i18n/
+  lib/                     utils.ts (cn), settings.ts, routes.ts, nav.ts (MENU_NAV), reader.ts (ширина читалки), catalog.ts (типы и статусы), apiErrors.ts, i18n/
 public/theme.js            тема до первой отрисовки; внешний файл для CSP
 server/
   Cargo.toml
@@ -128,6 +128,7 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - Добавление тайтла — диалог на библиотеке: `useDiscoverSearchQuery` ищет по всем включённым источникам, `useAddDiscoveredTitleMutation` импортирует тайтл при необходимости и добавляет его в библиотеку, после успеха открывается `/title/:id`. Обложки выдачи — `sourceCoverUrl`, через серверный прокси, а не напрямую с источника.
 - Поиск в шапке (`LibrarySearch`) — `useLibraryQuery` с `q` и малым `page_size`; ищет только по своей библиотеке.
 - Читалка ходит только в canonical `/content` (никогда в `/api/chapters/{id}/content`), картинки берёт через `pageImageUrl` (`/api/pages/{id}/image`), прогресс — через `useProgressQuery`/`useSaveProgressMutation`; flush при закрытии вкладки — `requestKeepalive` (PUT, не `sendBeacon`). Смена главы пересоздаёт состояние через `key`. Прогресс восстанавливай по каноническому `content.chapter_key`, а не по ключу из URL.
+- Верхняя панель читалки: логотип → `/`, стрелка → тайтл, по центру номер главы `том-номер` со стрелками переходов, справа «Любимое» и меню пользователя. На телефоне имени тайтла и «Любимого» нет: справа аватар, а страница, настройки и закладки — в нижней панели. Клик по странице скрывает панель (на телефоне — все панели). Ширина колонки — настройка `readerWidth` (`sm`…`6xl`, `full`), настройки открываются Sheet справа / шторкой снизу, закладки — быстрые статусы библиотеки. Высоты страниц считаются по ширине колонки, а не скролла; после смены ширины страница сохраняется.
 - Страница тайтла: первая вкладка — «Главы», вторая — «Главная». В списке скрывай главы, у которых нет рабочего варианта (`locked`/`missing`), сортируй по тому/номеру, фильтруй по названию; отметка прочитанного — по `read_keys`. Кнопка «Читать» продолжает с прогресса, иначе открывает первую доступную главу. «Любимое» — `favorite` в библиотеке, независимый от статуса; оценка пользователя — `score`, рейтинг источника — `title.rating`.
 - Админка: `/admin` — приоритеты `(kind, lang)`, состояние источников, `base_url`, enable/disable, probe, импорт из конкретного источника и ручное создание тайтла (форма уводит на созданную карточку). Пункт меню скрыт для не-админа, но сервер всё равно требует роль. На странице тайтла `AdminSourcePanel` делает поиск/привязку/отвязку источника, primary и refresh, `AliasesPanel` — alias-ключи. Обычному пользователю эти панели не монтируются, иначе админские хуки дадут 403.
 - `GET /api/titles/{id}` отдаёт `aliases`, `read_keys`, `published_at` и `source_enabled` у вариантов, `title.cover_sizes` и `title.manual_cover_sizes`, `library.{status,score,favorite,tab_ids}`; у варианта главы есть собственный `chapter_key` (может отличаться от canonical). Выбранный вариант — первый доступный, а не свежий locked preferred. После attach/detach/primary/alias/refresh инвалидируй `title`, `library`, `library-tabs`, `chapter-content` и `progress` тайтла.
@@ -139,7 +140,7 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - Вызов бэкенда может завершиться ошибкой, всегда показывай её. Транспорт отдаёт `ApiError`, текст берётся из `error.message`; для известных кодов используй `useErrorText` (`api/errors.ts`), он переводит их через `lib/apiErrors.ts`.
 - Библиотека и закладки ходят через `api.library`, поиск/добавление — через `api.discover`, тайтл — через `api.catalog`; строковые статусы и типы (`manga|anime|book`, статусы тайтла и библиотеки) — константы в `lib/catalog.ts`, не дублируй их литералами.
 - Строки интерфейса не пиши в компонентах: добавляй ключи в `lib/i18n/locales/en.ts` и `ru.ts` и бери их через `useT()`. Настройки читай через `useSetting()`, пиши через `settings.set()`; прямой `localStorage` — только в `lib/settings.ts`, `shell/navbar/ThemeToggle.tsx` и `public/theme.js`.
-- Сайдбара нет. Шапка — логотип со ссылкой на `/`, поиск и меню пользователя; его пункты задаёт таблица `shell/nav.ts` (`MENU_NAV`). Статические экраны и параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены списками `PAGES`/`PARAM_ROUTES` в `AppRouter`.
+- Сайдбара нет. Шапка — логотип со ссылкой на `/`, поиск и меню пользователя; его пункты задаёт таблица `lib/nav.ts` (`MENU_NAV`). Статические экраны и параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены списками `PAGES`/`PARAM_ROUTES` в `AppRouter`.
 - `Button` из Base UI без `type` рендерится как `type="button"` и форму не отправляет: кнопке отправки нужен явный `type="submit"`.
 - У `Button` вместо `asChild` проп `render`. Если он рендерит не `<button>`, добавь `nativeButton={false}`. Ссылку так не делай: она получит `role="button"`. Стилизуй её напрямую: `<a className={buttonVariants()} href="...">`.
 
@@ -175,7 +176,7 @@ pnpm check:rust                              # fmt --check + clippy -D warnings
 - Сайдбара и экрана каталога больше нет: `/` — библиотека, `/library` редиректит на `/`. Серверный `GET /api/catalog` остался, но UI его не использует.
 - Добавление тайтла идёт через `/api/discover/*`: поиск по всем включённым источникам, импорт — при первом добавлении. Импорт полного тайтла — серия запросов и может занять секунды; `add` ограничен по IP.
 - «Любимое» — флаг `favorite`, а не статус: он не мешает «Читаю»/«Прочитано». «Не интересно» — полноценный статус. Своих закладок не больше трёх, имя уникально; в закладку можно положить только тайтл из библиотеки.
-- Настройки браузера теперь хранят только `locale`; старый `sidebarOpen` игнорируется.
+- Настройки браузера хранят `locale` и `readerWidth` (ширина колонки читалки); старый `sidebarOpen` игнорируется.
 - Для dev нужны оба процесса: без `pnpm dev:server` прокси API отвечает ошибкой.
 - Первый администратор создаётся только на пустой таблице `users` из `ADMIN_USERNAME`/`ADMIN_PASSWORD`. После bootstrap переменные убери: пароль остаётся в env и больше не нужен.
 - `DATABASE_URL` по умолчанию `sqlite://data/cion.db`, `DATA_DIR` — `data`; каталоги создаются сами и в git не попадают. Миграции применяются при каждом старте; `data/covers/` хранит обложки.

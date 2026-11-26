@@ -9,11 +9,11 @@
 | Слой | Что лежит | Сейчас в приложении |
 |---|---|---|
 | `app/` | запуск: `index.tsx`, провайдеры, маршрутизатор, глобальные стили | `AppProvider.tsx`, `AppRouter.tsx`, `styles/index.css` |
-| `shell/` | оболочка окна: то, что не принадлежит ни одному экрану | `layout/`, `navbar/` (шапка, поиск по библиотеке, меню пользователя, язык, тема), `nav.ts` |
+| `shell/` | оболочка окна: то, что не принадлежит ни одному экрану | `layout/`, `navbar/` (шапка, поиск по библиотеке, меню пользователя, язык, тема) |
 | `pages/<имя>/` | экраны, по папке на экран | `title/`, `library/`, `admin/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
 | `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `discover.ts`, `progress.ts`, `admin.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
-| `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `Pagination.tsx`, `Textarea.tsx` |
-| `lib/` | утилиты, хуки и типы без UI | `utils.ts`, `settings.ts`, `routes.ts`, `catalog.ts`, `apiErrors.ts`, `i18n/` |
+| `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `Pagination.tsx`, `Textarea.tsx`, `AccountMenu.tsx` |
+| `lib/` | утилиты, хуки и типы без UI | `utils.ts`, `settings.ts`, `routes.ts`, `nav.ts`, `reader.ts`, `catalog.ts`, `apiErrors.ts`, `i18n/` |
 
 Файл `.ts` или `.tsx` вне этих папок — ошибка линтера (`boundaries/no-unknown-files`).
 
@@ -41,7 +41,7 @@
 
 Экран — `pages/<имя>/index.tsx`, рядом лежат его компоненты. Файл называется `index`, а компонент — по экрану (`export function LibraryPage`), импорт выглядит так: `@/pages/library`. Импортировать экран может только `app`, экраны друг друга не импортируют.
 
-Сайдбара нет: корневой экран `/` — библиотека. Шапка содержит только логотип со ссылкой на `/`, поиск по библиотеке и меню пользователя; его пункты задаёт таблица `shell/nav.ts` (`MENU_NAV`), администратор видит пункт «Админка». Статические маршруты `PAGES` перечислены в `AppRouter` явно, `/library` перенаправляет на `/`.
+Сайдбара нет: корневой экран `/` — библиотека. Шапка содержит только логотип со ссылкой на `/`, поиск по библиотеке и меню пользователя; его пункты и фильтр по роли задаёт `lib/nav.ts` (`MENU_NAV`, `menuItemsForRole`), администратор видит пункт «Админка». Меню пользователя — тонкая обёртка над `ui/AccountMenu.tsx`: страницы не могут импортировать `shell`, поэтому у читалки своя обёртка `pages/reader/ReaderUserMenu.tsx` с тем же меню. Статические маршруты `PAGES` перечислены в `AppRouter` явно, `/library` перенаправляет на `/`.
 
 Параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены отдельным списком `PARAM_ROUTES` в `AppRouter`. Ссылки на них собирай через `src/lib/routes.ts`: `chapterKey` содержит `:` и `.`, поэтому кодируется `encodeURIComponent`.
 
@@ -72,14 +72,14 @@
 ## Главы, ридер и прогресс
 
 - **Главы** — `GET /api/titles/{title_id}/chapters/{chapter_key}/content`: сервер сам выбирает вариант по preferred source → доступность → приоритет → `is_primary` → `ordinal_site`, делает fallback и возвращает `{ chapter_id, chapter_key, number_text, name, content_kind, source, content, fallback? }`. Для картинок `content.pages[]` содержит внутренние `image_url` вида `/pages/{id}/image`. Повторное открытие уже известной главы отдаёт страницы из БД без сетевого запроса. `GET /api/chapters/{id}/content` — прямой вариант без fallback для отладки.
-- **Ридер** (`pages/reader/`) — маршрут `/reader/:titleId/:chapterKey` живёт вне `Layout`: окно страниц считается по накопленным высотам (`width`/`height` из источника), соседние страницы префетчатся, клавиатура листает главу. Смена главы пересоздаёт состояние через `key`. Прогресс сохраняется с дебаунсом, а при `visibilitychange`/`pagehide` и размонтировании — через `fetch(..., { keepalive: true })`.
+- **Ридер** (`pages/reader/`) — маршрут `/reader/:titleId/:chapterKey` живёт вне `Layout`. Верхняя панель: логотип → `/`, стрелка → тайтл, по центру номер главы `том-номер` со стрелками переходов, на широком экране ещё имя тайтла, «Любимое» и меню пользователя. На телефоне внизу страница, настройки (шторка) и закладки (статус и избранное); на широком — счётчик и настройки справа (Sheet), «Любимое» в шапке. Клик по странице скрывает панели (на телефоне все). Ширина колонки (`readerWidth`) — `sm`…`6xl` или `full`. Высоты страниц считаются по ширине колонки, виртуальное окно — по накопленным высотам; соседние страницы префетчатся, после смены ширины текущая страница сохраняется. Смена главы пересоздаёт состояние через `key`. Прогресс сохраняется с дебаунсом, а при `visibilitychange`/`pagehide` и размонтировании — через `fetch(..., { keepalive: true })`.
 - **Прогресс** — `GET/PUT /api/progress/{title_id}`; `PUT` принимает `chapter_key` и одно поле позиции (`page` для картинок, `seconds` для видео, `scroll` для текста). Сервер резолвит alias → canonical и проверяет поле по `content_kind` выбранного варианта. `page` — 0-based индекс `pages.idx`.
 - **Изображения** — браузер не ходит на чужие сайты: `GET /api/pages/{id}/image` и `GET /api/sources/{code}/cover?ref=` резолвят стабильную ссылку через адаптер, проверяют allowlist хостов, кэшируют байты на диске и отдают с `ETag`, `nosniff` и `Cache-Control: private`.
 - **Источники** — админские `GET /api/sources`, `PUT /api/sources/{code}`, `PUT /api/sources/{code}/config`, `POST .../search`, `POST .../import`, `POST .../probe`. Remanga v2 — JSON API (`external_id` тайтла — `dir`, главы — числовой `id`). RuMix — HTML на движке Grouple (`external_id` — slug, главы — `data-id`, поиск POST-формой, картинки по подписанным URL, платная глава — 302 на покупку). Импорт идёт `search → import → chapters`, страницы — лениво при первом `/content`. Привязка к существующему тайтлу — `POST /api/titles/{id}/sources`.
 
 ## Настройки
 
-`lib/settings.ts` хранит пары ключ-значение в `localStorage` под ключом `cion-reader:settings`. Ключ сейчас один — `locale`. Серверные настройки появятся вместе с профилем пользователя. Битый JSON логируется, а не молча заменяется значениями по умолчанию.
+`lib/settings.ts` хранит пары ключ-значение в `localStorage` под ключом `cion-reader:settings`. Ключи — `locale` и `readerWidth` (ширина колонки читалки, по умолчанию `3xl`). Серверные настройки появятся вместе с профилем пользователя. Битый JSON логируется, а не молча заменяется значениями по умолчанию.
 
 Порядок запуска в `app/index.tsx` важен: `initSettings()` читает сохранённые значения, `initI18n()` берёт из них язык, и только потом приложение рендерится — иначе интерфейс мигал бы языком по умолчанию. Компоненты читают настройку через `useSetting(key)` и пишут через `settings.set(key, value)`.
 
