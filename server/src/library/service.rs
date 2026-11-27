@@ -20,6 +20,24 @@ pub const MAX_TABS: i64 = 3;
 const MAX_TAB_NAME_CHARS: usize = 40;
 const MAX_QUERY_CHARS: usize = 200;
 
+/// Чья библиотека запрошена. Владелец видит все записи и свои закладки,
+/// публичный профиль скрывает `not_interested`: это отказ, а не коллекция.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryVisibility {
+    Owner,
+    Public,
+}
+
+impl LibraryVisibility {
+    /// Флаг для SQL: 1 — скрыть `not_interested`.
+    fn exclude_not_interested(self) -> i64 {
+        match self {
+            Self::Owner => 0,
+            Self::Public => 1,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LibraryInput {
     pub status: String,
@@ -132,12 +150,17 @@ struct LibraryRow {
 }
 
 impl LibraryRow {
-    fn into_item(self) -> LibraryItemDto {
+    fn into_item(self, visibility: LibraryVisibility) -> LibraryItemDto {
         LibraryItemDto {
             title_id: self.title_id,
             status: self.status,
             score: self.score,
-            custom_tab_id: self.custom_tab_id,
+            // Чужая закладка — личная организация: в публичном профиле её id
+            // не нужен, статус остаётся встроенным.
+            custom_tab_id: match visibility {
+                LibraryVisibility::Owner => self.custom_tab_id,
+                LibraryVisibility::Public => None,
+            },
             added_at: self.added_at,
             updated_at: self.updated_at,
             read_count: self.read_count,
@@ -160,6 +183,7 @@ pub async fn list_library(
     pool: &SqlitePool,
     user_id: i64,
     params: LibraryParams,
+    visibility: LibraryVisibility,
 ) -> Result<LibraryListResponse, AppError> {
     let (page, page_size) = pagination::resolve(params.page, params.page_size)?;
 
@@ -167,10 +191,11 @@ pub async fn list_library(
         None | Some("") => None,
         Some(value) => Some(normalize_status(value)?),
     };
-    let tab_id = match params.tab_id {
-        None => None,
-        Some(tab_id) if tab_id > 0 => Some(tab_id),
-        Some(_) => {
+    // Чужие закладки не фильтруют публичный профиль: их id не выходят наружу.
+    let tab_id = match (visibility, params.tab_id) {
+        (LibraryVisibility::Public, _) | (_, None) => None,
+        (LibraryVisibility::Owner, Some(tab_id)) if tab_id > 0 => Some(tab_id),
+        (LibraryVisibility::Owner, Some(_)) => {
             return Err(AppError::bad_request(
                 "validation",
                 "tab_id must be a positive integer",
@@ -191,14 +216,24 @@ pub async fn list_library(
     };
     let order = order_by(params.sort.as_deref(), params.order.as_deref())?;
 
-    let total = sqlx::query_scalar::<_, i64>(
+    let exclude_not_interested = visibility.exclude_not_interested();
+    // Публичный профиль показывает книгу статусов без личных закладок:
+    // фильтр по статусу там видит и записи из закладок, поэтому счётчики
+    // и список сходятся.
+    let status_filter = match visibility {
+        LibraryVisibility::Owner => "(? IS NULL OR (l.custom_tab_id IS NULL AND l.status = ?))",
+        LibraryVisibility::Public => "(? IS NULL OR l.status = ?)",
+    };
+    let total = sqlx::query_scalar::<_, i64>(&format!(
         "SELECT COUNT(*) FROM library l JOIN titles t ON t.id = l.title_id \
          WHERE l.user_id = ? \
-           AND (? IS NULL OR (l.custom_tab_id IS NULL AND l.status = ?)) \
+           AND (? = 0 OR l.status <> 'not_interested') \
+           AND {status_filter} \
            AND (? IS NULL OR l.custom_tab_id = ?) \
-           AND (? IS NULL OR t.name_lower LIKE ? ESCAPE '\\')",
-    )
+           AND (? IS NULL OR t.name_lower LIKE ? ESCAPE '\\')"
+    ))
     .bind(user_id)
+    .bind(exclude_not_interested)
     .bind(status.as_deref())
     .bind(status.as_deref())
     .bind(tab_id)
@@ -223,7 +258,8 @@ pub async fn list_library(
                  AS latest_chapter_at \
          FROM library l JOIN titles t ON t.id = l.title_id \
          WHERE l.user_id = ? \
-           AND (? IS NULL OR (l.custom_tab_id IS NULL AND l.status = ?)) \
+           AND (? = 0 OR l.status <> 'not_interested') \
+           AND {status_filter} \
            AND (? IS NULL OR l.custom_tab_id = ?) \
            AND (? IS NULL OR t.name_lower LIKE ? ESCAPE '\\') \
          ORDER BY {order} \
@@ -232,6 +268,7 @@ pub async fn list_library(
 
     let rows = sqlx::query_as::<_, LibraryRow>(&sql)
         .bind(user_id)
+        .bind(exclude_not_interested)
         .bind(status.as_deref())
         .bind(status.as_deref())
         .bind(tab_id)
@@ -243,9 +280,12 @@ pub async fn list_library(
         .fetch_all(pool)
         .await?;
 
-    let items = rows.into_iter().map(LibraryRow::into_item).collect();
+    let items = rows
+        .into_iter()
+        .map(|row| row.into_item(visibility))
+        .collect();
 
-    let counts = load_counts(pool, user_id).await?;
+    let counts = load_counts(pool, user_id, visibility).await?;
 
     Ok(LibraryListResponse {
         items,
@@ -514,17 +554,37 @@ async fn ensure_tab_name_free(
     Ok(())
 }
 
-async fn load_counts(pool: &SqlitePool, user_id: i64) -> Result<LibraryCounts, AppError> {
+async fn load_counts(
+    pool: &SqlitePool,
+    user_id: i64,
+    visibility: LibraryVisibility,
+) -> Result<LibraryCounts, AppError> {
     let mut statuses = StatusCounts::default();
-    // Свой статус перекрывает встроенный: в счётчиках встроенных статусов
-    // учитываются только записи без custom_tab_id.
-    let rows = sqlx::query_as::<_, (String, i64)>(
-        "SELECT status, COUNT(*) FROM library \
-         WHERE user_id = ? AND custom_tab_id IS NULL GROUP BY status",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = match visibility {
+        // Свой статус перекрывает встроенный: в счётчиках встроенных статусов
+        // учитываются только записи без custom_tab_id.
+        LibraryVisibility::Owner => {
+            sqlx::query_as::<_, (String, i64)>(
+                "SELECT status, COUNT(*) FROM library \
+                 WHERE user_id = ? AND custom_tab_id IS NULL GROUP BY status",
+            )
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?
+        }
+        // Публичный профиль не знает о чужих закладках: считаем по статусу
+        // и скрываем «не интересно».
+        LibraryVisibility::Public => {
+            sqlx::query_as::<_, (String, i64)>(
+                "SELECT status, COUNT(*) FROM library \
+                 WHERE user_id = ? AND status <> 'not_interested' GROUP BY status",
+            )
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
     for (status, count) in rows {
         match status.as_str() {
             "favorite" => statuses.favorite = count,
@@ -538,10 +598,23 @@ async fn load_counts(pool: &SqlitePool, user_id: i64) -> Result<LibraryCounts, A
         }
     }
 
-    let all = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM library WHERE user_id = ?")
-        .bind(user_id)
-        .fetch_one(pool)
-        .await?;
+    let all = match visibility {
+        LibraryVisibility::Owner => {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM library WHERE user_id = ?")
+                .bind(user_id)
+                .fetch_one(pool)
+                .await?
+        }
+        LibraryVisibility::Public => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM library \
+                 WHERE user_id = ? AND status <> 'not_interested'",
+            )
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?
+        }
+    };
 
     Ok(LibraryCounts { all, statuses })
 }

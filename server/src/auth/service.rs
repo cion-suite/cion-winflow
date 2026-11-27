@@ -138,6 +138,8 @@ pub async fn register(
             id: user_id,
             username,
             role: Role::User,
+            avatar_updated_at: None,
+            avatar_version: 0,
         },
         token,
     ))
@@ -160,14 +162,24 @@ pub async fn login(
         });
     }
 
-    let row = sqlx::query_as::<_, (i64, String, String, String, Option<i64>)>(
-        "SELECT id, username, password_hash, role, disabled_at FROM users WHERE username = ?",
+    let row = sqlx::query_as::<_, (i64, String, String, String, Option<i64>, Option<i64>, i64)>(
+        "SELECT id, username, password_hash, role, disabled_at, avatar_updated_at, avatar_version \
+         FROM users WHERE username = ?",
     )
     .bind(&username)
     .fetch_optional(&state.pool)
     .await?;
 
-    let Some((id, stored_username, stored_hash, role, disabled_at)) = row else {
+    let Some((
+        id,
+        stored_username,
+        stored_hash,
+        role,
+        disabled_at,
+        avatar_updated_at,
+        avatar_version,
+    )) = row
+    else {
         // Тратим столько же времени, сколько на существующего пользователя
         let _ = password::verify(
             password,
@@ -194,6 +206,8 @@ pub async fn login(
             id,
             username: stored_username,
             role: Role::from_db(&role),
+            avatar_updated_at,
+            avatar_version,
         },
         token,
     ))

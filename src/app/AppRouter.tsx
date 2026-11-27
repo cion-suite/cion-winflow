@@ -5,6 +5,7 @@ import { AdminPage } from "@/pages/admin";
 import { ChangelogPage } from "@/pages/changelog";
 import { LibraryPage } from "@/pages/library";
 import { LoginPage } from "@/pages/login";
+import { ProfilePage } from "@/pages/profile";
 import { ReaderPage } from "@/pages/reader";
 import { RegisterPage } from "@/pages/register";
 import { SettingsPage } from "@/pages/settings";
@@ -18,6 +19,7 @@ const PAGES = [
   { path: "/admin", element: <AdminPage /> },
   { path: "/changelog", element: <ChangelogPage /> },
   { path: "/settings", element: <SettingsPage /> },
+  { path: "/profile", element: <ProfilePage /> },
 ] as const satisfies readonly { path: string; element: ReactElement }[];
 
 /**
@@ -26,6 +28,7 @@ const PAGES = [
  */
 const PARAM_ROUTES = [
   { path: "/title/:id", element: <TitlePage /> },
+  { path: "/profile/:id", element: <ProfilePage /> },
   { path: "/watch/:titleId/:chapterKey", element: <WatchPage /> },
 ] as const satisfies readonly { path: string; element: ReactElement }[];
 

@@ -15,7 +15,7 @@ use crate::{
     auth::{self, limiter::ClientIpKeyExtractor},
     catalog, discover, error,
     error::AppError,
-    images, library, progress, source_admin,
+    images, library, profile, progress, source_admin,
     state::AppState,
     static_files::serve_static,
 };
@@ -76,6 +76,15 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/login", login)
         .route("/auth/logout", post(auth::handlers::logout))
         .route("/me", get(auth::handlers::me))
+        .route(
+            "/me/avatar",
+            // Дефолтные 2 МиБ не пропустят 5-мегабайтный файл
+            post(profile::avatar::upload_avatar)
+                .delete(profile::avatar::delete_avatar)
+                .layer(DefaultBodyLimit::max(profile::BODY_LIMIT)),
+        )
+        .route("/users/{id}/profile", get(profile::handlers::get_profile))
+        .route("/users/{id}/avatar", get(profile::avatar::get_avatar))
         .route(
             "/admin/invites",
             get(auth::handlers::list_invites).post(auth::handlers::create_invite),

@@ -10,9 +10,9 @@
 |---|---|---|
 | `app/` | запуск: `index.tsx`, провайдеры, маршрутизатор, глобальные стили | `AppProvider.tsx`, `AppRouter.tsx`, `styles/index.css` |
 | `shell/` | оболочка окна: то, что не принадлежит ни одному экрану | `layout/`, `navbar/` (шапка, поиск по библиотеке, меню пользователя, язык, тема) |
-| `pages/<имя>/` | экраны, по папке на экран | `title/`, `library/`, `admin/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
-| `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `discover.ts`, `progress.ts`, `admin.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
-| `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `Pagination.tsx`, `Textarea.tsx`, `AccountMenu.tsx` |
+| `pages/<имя>/` | экраны, по папке на экран | `title/`, `library/`, `profile/`, `admin/`, `reader/`, `watch/`, `changelog/`, `settings/`, `login/`, `register/` |
+| `api/` | HTTP-транспорт и хуки областей | `client.ts`, `auth.tsx`, `catalog.ts`, `chapters.ts`, `library.ts`, `profile.ts`, `discover.ts`, `progress.ts`, `admin.ts`, `errors.ts`, `index.ts` (области собираются здесь) |
+| `ui/` | `shadcn/` и мелкие общие компоненты | `shadcn/`, `PageHeader.tsx`, `PlaceholderPage.tsx`, `AuthShell.tsx`, `TitleForm.tsx`, `CoverImage.tsx`, `LibraryCard.tsx`, `Pagination.tsx`, `Textarea.tsx`, `AccountMenu.tsx` |
 | `lib/` | утилиты, хуки и типы без UI | `utils.ts`, `settings.ts`, `routes.ts`, `nav.ts`, `reader.ts`, `catalog.ts`, `apiErrors.ts`, `i18n/` |
 
 Файл `.ts` или `.tsx` вне этих папок — ошибка линтера (`boundaries/no-unknown-files`).
@@ -41,9 +41,9 @@
 
 Экран — `pages/<имя>/index.tsx`, рядом лежат его компоненты. Файл называется `index`, а компонент — по экрану (`export function LibraryPage`), импорт выглядит так: `@/pages/library`. Импортировать экран может только `app`, экраны друг друга не импортируют.
 
-Сайдбара нет: корневой экран `/` — библиотека. Шапка содержит только логотип со ссылкой на `/`, поиск по библиотеке и меню пользователя; его пункты и фильтр по роли задаёт `lib/nav.ts` (`MENU_NAV`, `menuItemsForRole`), администратор видит пункт «Админка». Меню пользователя — тонкая обёртка над `ui/AccountMenu.tsx`: страницы не могут импортировать `shell`, поэтому у читалки своя обёртка `pages/reader/ReaderUserMenu.tsx` с тем же меню. Статические маршруты `PAGES` перечислены в `AppRouter` явно, `/library` перенаправляет на `/`.
+Сайдбара нет: корневой экран `/` — библиотека. Шапка содержит только логотип со ссылкой на `/`, поиск по библиотеке и меню пользователя; его пункты и фильтр по роли задаёт `lib/nav.ts` (`MENU_NAV`, `menuItemsForRole`), администратор видит пункт «Админка», у каждого есть «Профиль» (`/profile`, чужой — `/profile/:id`). Меню пользователя — тонкая обёртка над `ui/AccountMenu.tsx`: страницы не могут импортировать `shell`, поэтому у читалки своя обёртка `pages/reader/ReaderUserMenu.tsx` с тем же меню. Статические маршруты `PAGES` перечислены в `AppRouter` явно, `/library` перенаправляет на `/`.
 
-Параметрические маршруты (`/title/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены отдельным списком `PARAM_ROUTES` в `AppRouter`. Ссылки на них собирай через `src/lib/routes.ts`: `chapterKey` содержит `:` и `.`, поэтому кодируется `encodeURIComponent`.
+Параметрические маршруты (`/title/:id`, `/profile/:id`, `/reader/:titleId/:chapterKey`, `/watch/:titleId/:chapterKey`) перечислены отдельным списком `PARAM_ROUTES` в `AppRouter`. Ссылки на них собирай через `src/lib/routes.ts`: `chapterKey` содержит `:` и `.`, поэтому кодируется `encodeURIComponent`.
 
 ## Авторизация
 
@@ -69,6 +69,12 @@
 - **Обложки.** Хранятся по размерам в `title_covers`: `low` — выдача поиска и диалог добавления, `mid` — карточки библиотеки, `high` — страница тайтла. `POST /api/titles/{id}/cover?size=low|mid|high` (multipart, поле `file`, до 5 МиБ, тело до 6 МиБ) принимает JPEG/PNG/WebP/GIF, декодирует с лимитами в `spawn_blocking`, ресайзит под размер (320×480 / 640×960 / 1200×1800) и пишет WebP в `DATA_DIR/covers/{id}/{size}.webp`; `DELETE` с тем же `size` убирает размер и файл, если на него больше никто не ссылается (после миграции low и mid могли делить один файл). `GET /api/titles/{id}/cover?size=low|mid|high` отдаёт файл с `ETag` и `Cache-Control: private, max-age=86400`, а отсутствующий размер — из ближайшего сохранённого (сначала более крупный, затем мелкий); UI добавляет `v={updated_at}` как cache-buster. При импорте, привязке источника и ручном `POST /api/admin/refresh/{title_id}` сервер автоматически скачивает обложки адаптера (`SourceCovers`), но заполняет только незанятые размеры, поэтому ручную обложку не перетирает. Явная админская операция `POST /api/titles/{id}/cover/from-source` (`{ replace_manual?: boolean }`) перебирает привязанные источники в порядке preferred → primary → привязка и обновляет уже сохранённые source-размеры (обложка могла смениться у источника); ручные размеры (`title_covers.source_id IS NULL`, включая строки миграции 0005) заменяются только с `replace_manual=true`, а запись без файла на диске считается пустой и лечится. Ответ — `{ sources, imported, skipped_manual, errors }`: ошибка одного источника не отменяет остальные. `GET /api/titles/{id}` отдаёт `title.cover_sizes` и `title.manual_cover_sizes`. Оригинал не сохраняется и не отдаётся.
 - **Типы и статусы** общие для формы и API — строковые константы в `lib/catalog.ts`. Тип произведения — свойство тайтла (`manga|manhwa|manhua|western_comic|ru_comic|indonesian_comic|other|original`), а не источника. Форма тайтла (`ui/TitleForm.tsx`) не знает об API: получает значения и колбэк.
 
+## Профиль и аватары
+
+- **Экран** (`pages/profile/`) — `/profile` показывает текущего пользователя, `/profile/:id` — любого по uid; оба маршрута в `Layout`. `useProfileQuery` берёт `GET /api/users/{id}/profile` с `status`, `page`, `page_size`. В шапке-карточке: аватар, ник, бейдж роли, дата регистрации, uid (по нему открывают профиль) и три счётчика — `stats.read_chapters`, `stats.counts.all`, `stats.counts.statuses.completed`. Ниже — те же вкладки встроенных статусов, что в библиотеке, и общая карточка `ui/LibraryCard`; `not_interested` в профиле не показывается. Вкладка и страница привязаны к uid: при переходе на другой профиль сбрасываются без эффекта.
+- **Аватар** доступен только владельцу: кнопка-камера шлёт `POST /api/me/avatar` (multipart `file`), крестик — `DELETE /api/me/avatar`. Сервер обрезает картинку по центру до 512×512, кодирует WebP и кладёт в `DATA_DIR/avatars/{user_id}.webp` под per-user локом; `users.avatar_updated_at` — признак наличия, `users.avatar_version` — монотонный `ETag` и `?v=` (удаление версию не сбрасывает). `userAvatarUrl(id, avatar_updated_at, avatar_version)` показывается в профиле, шапке и меню читалки. В шапке вместо имени — только аватар, нажатие открывает меню аккаунта (`AccountMenu variant="avatar"`), пункт «Профиль» ведёт на `/profile`; в читалке тот же вид. После мутации инвалидируются `["me"]` и `["profile"]`, поэтому шапка обновляется без перезагрузки. Если файла нет, `AvatarImage` падает на `AvatarFallback` с инициалом.
+- **Публичность** — внутри инсталляции: профиль читает любая сессия, но аноним получает 401. Пароль и сессии не отдаются, `custom_tab_id` в публичной выдаче — `null`; «Не интересно» скрыто из счётчиков и списка.
+
 ## Главы, ридер и прогресс
 
 - **Главы** — `GET /api/titles/{title_id}/chapters/{chapter_key}/content?lang=`: `lang` ограничивает выбор варианта источниками выбранного языка (неизвестный язык игнорируется); сервер сам выбирает вариант по известной недоступности (`locked`/`missing` — в конец) → приоритет источника → preferred → `is_primary` → `ordinal_site`, делает fallback и возвращает `{ chapter_id, chapter_key, number_text, name, content_kind, source, content, fallback? }`. Для картинок `content.pages[]` содержит внутренние `image_url` вида `/pages/{id}/image`. Повторное открытие уже известной главы отдаёт страницы из БД без сетевого запроса. `GET /api/chapters/{id}/content` — прямой вариант без fallback для отладки.
@@ -79,7 +85,7 @@
 
 ## Настройки
 
-`lib/settings.ts` хранит пары ключ-значение в `localStorage` под ключом `cion-reader:settings`. Ключи — `locale` и `readerWidth` (ширина колонки читалки, по умолчанию `3xl`). Серверные настройки появятся вместе с профилем пользователя. Битый JSON логируется, а не молча заменяется значениями по умолчанию.
+`lib/settings.ts` хранит пары ключ-значение в `localStorage` под ключом `cion-reader:settings`. Ключи — `locale` и `readerWidth` (ширина колонки читалки, по умолчанию `3xl`). Профиль пока хранит только аватар; серверные настройки (и перенос `locale`/`readerWidth` на сервер) — следующий шаг. Битый JSON логируется, а не молча заменяется значениями по умолчанию.
 
 Порядок запуска в `app/index.tsx` важен: `initSettings()` читает сохранённые значения, `initI18n()` берёт из них язык, и только потом приложение рендерится — иначе интерфейс мигал бы языком по умолчанию. Компоненты читают настройку через `useSetting(key)` и пишут через `settings.set(key, value)`.
 
@@ -110,6 +116,7 @@ pages/<экран>/index.tsx → api/<область>.ts → api/client.ts → /
 | `api/catalog.ts` | Тайтл с главами и источниками, создание/правка, загрузка обложки, `titleCoverUrl` |
 | `api/chapters.ts` | `useChapterContentQuery`, `pageImageUrl`, типы страниц и fallback |
 | `api/library.ts` | Библиотека: список с фильтрами и счётчиками, upsert, удаление, свои закладки |
+| `api/profile.ts` | Профиль по uid (статистика и библиотека), `userAvatarUrl`, загрузка и удаление своего аватара |
 | `api/discover.ts` | Поиск по источникам и ленивый импорт (`search`, `add`), `sourceCoverUrl` |
 | `api/progress.ts` | `useProgressQuery`, `useSaveProgressMutation`, `progressApi.flush` (keepalive) |
 | `api/errors.ts` | `useErrorText`: `ApiError.code` -> ключ i18n (`lib/apiErrors.ts`) |
@@ -151,6 +158,8 @@ server/
     0008_title_types.sql  типы тайтла; kind убран из source_entries/priorities
     0009_title_metadata_sync.sql  снимок метаданных тайтла
     0010_alias_ranges.sql  chapter_alias_ranges; source_entry_id/origin у alias
+    0011_user_profiles.sql  users.avatar_updated_at (файл — DATA_DIR/avatars)
+    0012_avatar_version.sql  монотонный users.avatar_version для ETag
   src/
     main.rs          конфиг, БД, DataDir, bootstrap админа, tracing, запуск
     app.rs           Router: health, auth, catalog, titles, library, discover,
@@ -161,7 +170,10 @@ server/
                      links (attach/detach, primary, chapter_aliases),
                      alias_ranges (связки-диапазоны, материализация, прогресс)
     images/          cache (диск, single-flight), handlers (прокси страниц и обложек)
-    library/         service (библиотека, встроенные и свои статусы), handlers
+    library/         service (библиотека, встроенные и свои статусы, видимость
+                     Owner/Public), handlers
+    profile/         service (профиль по uid, статистика), handlers, avatar (multipart,
+                     квадратный WebP, ETag)
     discover/        поиск по всем источникам и ленивый импорт для библиотеки
     progress.rs      чтение и запись прогресса по chapter_key + chapter_reads
     source_admin/    service (реестр, конфиг, поиск, импорт, probe, refresh),
@@ -181,6 +193,7 @@ server/
   tests/catalog.rs   тайтлы, поиск, пагинация, обложки, права admin
   tests/library.rs   библиотека, оценки, изоляция пользователей
   tests/library_tabs.rs  фильтры, счётчики, встроенные и свои статусы
+  tests/profile.rs  профиль по uid, статистика, «не интересно», аватары
   tests/discover.rs  поиск по источникам, ленивый импорт, отметка прочитанного
   tests/discover_auto_link.rs  автопривязка источников по названию (основному и альтернативному)
   tests/sources.rs   источники, импорт, главы, прогресс, кэш картинок, fallback
@@ -194,7 +207,9 @@ server/
 
 - `GET /api/health` отдаёт `{ "status": "ok", "version": "..." }` без сессии и проверяет БД (`SELECT 1`); ошибка БД — 500.
 - Публичные пути перечислены явно: `/api/health` и `/api/auth/*`. Остальной `/api` требует cookie `sid`: без сессии — JSON 401, неизвестный путь с сессией — JSON 404.
-- Auth: `POST /api/auth/register` (по инвайту, сразу создаёт сессию), `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/me`; админские `GET/POST /api/admin/invites`.
+- Auth: `POST /api/auth/register` (по инвайту, сразу создаёт сессию), `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/me`; админские `GET/POST /api/admin/invites`. `user` в ответах входа и `/api/me` содержит `avatar_updated_at` (`null` — аватара нет) и `avatar_version`.
+- Профиль: `GET /api/users/{id}/profile?status=&sort=&order=&page=&page_size=` — `{ user, stats, library }` любой сессии. `stats.read_chapters` — размер журнала `chapter_reads`, `stats.counts` — счётчики библиотеки; `library` — выдача `/api/library` в режиме `LibraryVisibility::Public`: `not_interested` скрыт и в счётчиках, и в списке, `tab_id` игнорируется, записи своих закладок считаются под встроенным статусом (иначе вкладки не сходились бы со списком), а `custom_tab_id` в выдаче — `null`. Неизвестный или отключённый uid — 404 `user_not_found`.
+- Аватары: `POST/DELETE /api/me/avatar` — только свой, multipart `file` до 5 МиБ (JPEG/PNG/WebP/GIF), `image::Limits` в `spawn_blocking` с семафором, `resize_to_fill` до 512×512, WebP в `DATA_DIR/avatars/{user_id}.webp`, атомарная запись tmp + rename под per-user `avatar_lock` (загрузка и удаление не должны оставить версию без файла); `users.avatar_updated_at` — признак наличия, `users.avatar_version` — монотонный счётчик. `GET /api/users/{id}/avatar` отдаёт `image/webp` с `ETag` по версии, `Cache-Control: private, max-age=86400`, `nosniff`; нет строки/файла — 404 `avatar_not_found`. Тело маршрута — `DefaultBodyLimit::max(6 МиБ)`.
 - Каталог: `GET /api/catalog` (поиск по `name_lower`, фильтр `kind`, пагинация) остаётся серверным API, но отдельного экрана в UI нет; `GET /api/titles/{id}` отдаёт `read_keys`, `title.cover_sizes` и `title.manual_cover_sizes`; админские `POST /api/titles`, `PUT /api/titles/{id}`, `POST/DELETE /api/titles/{id}/cover?size=low|mid|high`, `POST /api/titles/{id}/cover/from-source`; `GET /api/titles/{id}/cover?size=low|mid|high` доступен любой сессии.
 - Библиотека: `GET /api/library?q=&status=&tab_id=&sort=&page=&page_size=` (`{ items, total, page, page_size, counts }`), `PUT /api/library/{title_id}` (`{ status, score, custom_tab_id }`), `DELETE /api/library/{title_id}` — всегда для текущего пользователя. `favorite` — полноценный статус наравне с остальными, отдельного флага нет; `custom_tab_id` — своя закладка вместо встроенного статуса. `status` фильтрует только записи без своей закладки, `tab_id` — по своей. Свои закладки: `GET/POST /api/library/tabs`, `PUT/DELETE /api/library/tabs/{id}`; не больше трёх, имя уникально у пользователя, удаление возвращает встроенный статус.
 - Поиск и импорт для пользователя: `GET /api/discover/search?q=&kind=` собирает выдачу включённых источников с поиском и главами (ошибки — в `errors`), `POST /api/discover/add` импортирует найденный тайтл при необходимости и добавляет его в библиотеку (`planned`); если тайтл уже импортирован, но обложек у него нет, `add` добирает их из источника. Импорт идёт тем же кодом, что админский, но без роли admin; маршрут `add` под rate limit.

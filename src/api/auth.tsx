@@ -16,6 +16,10 @@ export type User = {
   id: number;
   username: string;
   role: Role;
+  /** NULL — аватара нет; иначе время загрузки. */
+  avatar_updated_at: number | null;
+  /** Монотонная версия аватара для ETag и cache-buster. */
+  avatar_version: number;
 };
 
 export type MeResponse = {

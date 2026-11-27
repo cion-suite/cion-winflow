@@ -2,6 +2,7 @@ import {
   SettingsIcon,
   ShieldIcon,
   SparklesIcon,
+  UserRoundIcon,
   type LucideIcon,
 } from "lucide-react";
 
@@ -15,6 +16,7 @@ export type NavItem = {
 
 /** Меню пользователя: разделы, которых нет в шапке. */
 export const MENU_NAV: readonly NavItem[] = [
+  { path: "/profile", i18nKey: "nav.profile", icon: UserRoundIcon },
   { path: "/changelog", i18nKey: "nav.changelog", icon: SparklesIcon },
   { path: "/settings", i18nKey: "nav.settings", icon: SettingsIcon },
   { path: "/admin", i18nKey: "nav.admin", icon: ShieldIcon, adminOnly: true },

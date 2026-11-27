@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router";
 
-import { useAuth, useLogoutMutation } from "@/api";
+import { useAuth, useLogoutMutation, userAvatarUrl } from "@/api";
 import { useT } from "@/lib/i18n";
 import { menuItemsForRole, roleLabelKey } from "@/lib/nav";
 import { AccountMenu } from "@/ui/AccountMenu";
@@ -23,6 +23,11 @@ export function ReaderUserMenu() {
       roleLabel={t(roleLabelKey(user.role))}
       items={menuItemsForRole(user.role)}
       variant="avatar"
+      avatarSrc={userAvatarUrl(
+        user.id,
+        user.avatar_updated_at,
+        user.avatar_version,
+      )}
       logoutPending={logout.isPending}
       onNavigate={(path) => void navigate(path)}
       onLogout={() =>

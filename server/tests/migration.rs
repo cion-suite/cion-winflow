@@ -18,27 +18,87 @@ use cion_reader::db;
 
 const MANIFEST: &str = env!("CARGO_MANIFEST_DIR");
 
-async fn partial_migrations() -> (TempDir, Migrator) {
+const UP_TO_0007: &[&str] = &[
+    "0001_auth.sql",
+    "0002_catalog.sql",
+    "0003_source_entry_per_source.sql",
+    "0004_library_tabs.sql",
+    "0005_title_covers.sql",
+    "0006_favorite_status.sql",
+    "0007_library_custom_status.sql",
+];
+
+const UP_TO_0011: &[&str] = &[
+    "0001_auth.sql",
+    "0002_catalog.sql",
+    "0003_source_entry_per_source.sql",
+    "0004_library_tabs.sql",
+    "0005_title_covers.sql",
+    "0006_favorite_status.sql",
+    "0007_library_custom_status.sql",
+    "0008_title_types.sql",
+    "0009_title_metadata_sync.sql",
+    "0010_alias_ranges.sql",
+    "0011_user_profiles.sql",
+];
+
+async fn partial_migrations(names: &[&str]) -> (TempDir, Migrator) {
     let dir = tempfile::tempdir().expect("migrations dir");
     let source = Path::new(MANIFEST).join("migrations");
-    for name in [
-        "0001_auth.sql",
-        "0002_catalog.sql",
-        "0003_source_entry_per_source.sql",
-        "0004_library_tabs.sql",
-        "0005_title_covers.sql",
-        "0006_favorite_status.sql",
-        "0007_library_custom_status.sql",
-    ] {
+    for name in names {
         std::fs::copy(source.join(name), dir.path().join(name)).expect("copy migration");
     }
     let migrator = Migrator::new(dir.path()).await.expect("partial migrator");
     (dir, migrator)
 }
 
+/// 0012 добавляет монотонную версию аватара и переносит в неё уже
+/// сохранённое время загрузки, не трогая пользователей без аватара.
+#[tokio::test]
+async fn avatar_version_backfills_from_avatar_updated_at() {
+    let (_partial_dir, partial) = partial_migrations(UP_TO_0011).await;
+
+    let db_dir = tempfile::tempdir().expect("db dir");
+    let db_path = db_dir.path().join("avatar-version.db");
+    let options = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let pool: SqlitePool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .expect("pool");
+
+    partial.run(&pool).await.expect("migrations 0001-0011");
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, role, created_at, avatar_updated_at) \
+         VALUES (1, 'with-avatar', 'hash', 'user', 0, 123), \
+                (2, 'without-avatar', 'hash', 'user', 0, NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("users");
+    pool.close().await;
+
+    let url = format!("sqlite://{}", db_path.to_string_lossy().replace('\\', "/"));
+    let migrated = db::connect(&url).await.expect("full migrations");
+    let with_avatar: i64 = sqlx::query_scalar("SELECT avatar_version FROM users WHERE id = 1")
+        .fetch_one(&migrated)
+        .await
+        .expect("version of user with avatar");
+    let without_avatar: i64 = sqlx::query_scalar("SELECT avatar_version FROM users WHERE id = 2")
+        .fetch_one(&migrated)
+        .await
+        .expect("version of user without avatar");
+
+    assert_eq!(with_avatar, 123);
+    assert_eq!(without_avatar, 0);
+}
+
 #[tokio::test]
 async fn title_types_migration_preserves_child_rows() {
-    let (_partial_dir, partial) = partial_migrations().await;
+    let (_partial_dir, partial) = partial_migrations(UP_TO_0007).await;
 
     let db_dir = tempfile::tempdir().expect("db dir");
     let db_path = db_dir.path().join("upgrade.db");

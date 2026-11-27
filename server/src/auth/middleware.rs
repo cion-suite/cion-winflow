@@ -63,6 +63,8 @@ pub async fn require_session(
         id: row.user_id,
         username: row.username,
         role: Role::from_db(&row.role),
+        avatar_updated_at: row.avatar_updated_at,
+        avatar_version: row.avatar_version,
     });
 
     Ok(next.run(request).await)

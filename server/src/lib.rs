@@ -9,6 +9,7 @@ pub mod extract;
 pub mod images;
 pub mod library;
 pub mod pagination;
+pub mod profile;
 pub mod progress;
 pub mod source_admin;
 pub mod sources;

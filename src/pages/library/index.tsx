@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 
 import {
+  titleCoverUrl,
   useErrorText,
   useLibraryQuery,
   useLibraryTabsQuery,
@@ -19,6 +20,7 @@ import {
 import { LIBRARY_STATUSES, type LibraryStatus } from "@/lib/catalog";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { LibraryCard } from "@/ui/LibraryCard";
 import { Pagination } from "@/ui/Pagination";
 import { Button } from "@/ui/shadcn/button";
 import { Card, CardContent } from "@/ui/shadcn/card";
@@ -40,7 +42,6 @@ import {
 import { Skeleton } from "@/ui/shadcn/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/ui/shadcn/tabs";
 import { AddTitleDialog } from "./AddTitleDialog";
-import { LibraryCard } from "./LibraryCard";
 import { CreateTabDialog, ManageTabsDialog } from "./TabDialogs";
 
 const PAGE_SIZE = 24;
@@ -291,7 +292,13 @@ export function LibraryPage() {
       {!library.isError && items.length > 0 && (
         <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
           {items.map((item) => (
-            <LibraryCard key={item.title_id} item={item} />
+            <LibraryCard
+              key={item.title_id}
+              item={item}
+              coverUrl={
+                item.title.has_cover ? titleCoverUrl(item.title, "mid") : null
+              }
+            />
           ))}
         </div>
       )}

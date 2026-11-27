@@ -10,7 +10,7 @@ use crate::{
     extract::{ApiJson, ApiPath, ApiQuery},
     library::service::{
         self, LibraryEntryDto, LibraryInput, LibraryListResponse, LibraryParams, LibraryTabDto,
-        LibraryTabsResponse, TabNameInput,
+        LibraryTabsResponse, LibraryVisibility, TabNameInput,
     },
     state::AppState,
 };
@@ -20,7 +20,8 @@ pub async fn list_library(
     Extension(user): Extension<CurrentUser>,
     ApiQuery(params): ApiQuery<LibraryParams>,
 ) -> Result<Json<LibraryListResponse>, AppError> {
-    let response = service::list_library(&state.pool, user.id, params).await?;
+    let response =
+        service::list_library(&state.pool, user.id, params, LibraryVisibility::Owner).await?;
     Ok(Json(response))
 }
 

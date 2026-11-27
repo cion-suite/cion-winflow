@@ -14,6 +14,11 @@ export function titlePath(
   return `/title/${segment(id)}${langQuery(lang)}`;
 }
 
+/** Публичный профиль по uid: ссылки на чужие профили собирай здесь. */
+export function profilePath(id: string | number): string {
+  return `/profile/${segment(id)}`;
+}
+
 export function readerPath(
   titleId: string | number,
   chapterKey: string,

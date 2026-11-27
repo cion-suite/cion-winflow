@@ -23,6 +23,31 @@ const USER_AGENT: &str = concat!(
 type CoverLockKey = (i64, CoverSize);
 /// Блокировка, которую держат ручная загрузка, автоимпорт и удаление.
 type CoverLock = Arc<tokio::sync::Mutex<()>>;
+/// Блокировка файла и версии аватара одного пользователя.
+type AvatarLock = Arc<tokio::sync::Mutex<()>>;
+
+/// Общая механика per-entity блокировок: карта не должна расти после
+/// освобождения, поэтому запись удаляется, когда на неё больше никто не ждёт.
+fn entity_lock<K: Eq + std::hash::Hash + Copy>(
+    locks: &SyncMutex<HashMap<K, Arc<tokio::sync::Mutex<()>>>>,
+    key: K,
+) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = locks.lock().unwrap_or_else(|poison| poison.into_inner());
+    locks.entry(key).or_default().clone()
+}
+
+fn release_entity_lock<K: Eq + std::hash::Hash + Copy>(
+    locks: &SyncMutex<HashMap<K, Arc<tokio::sync::Mutex<()>>>>,
+    key: K,
+) {
+    let mut locks = locks.lock().unwrap_or_else(|poison| poison.into_inner());
+    if locks
+        .get(&key)
+        .is_some_and(|lock| Arc::strong_count(lock) == 2)
+    {
+        locks.remove(&key);
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -47,6 +72,9 @@ pub struct AppState {
     /// Сериализует запись обложки одного размера у тайтла: ручная загрузка,
     /// автоимпорт и удаление не должны перетирать файл и строку друг друга.
     cover_locks: Arc<SyncMutex<HashMap<CoverLockKey, CoverLock>>>,
+    /// Сериализует запись файла и версии аватара: загрузка и удаление
+    /// в разных вкладках не должны оставить версию без файла и наоборот.
+    avatar_locks: Arc<SyncMutex<HashMap<i64, AvatarLock>>>,
 }
 
 impl AppState {
@@ -74,32 +102,32 @@ impl AppState {
             image_cache,
             image_download_semaphore: Arc::new(Semaphore::new(16)),
             cover_locks: Arc::new(SyncMutex::new(HashMap::new())),
+            avatar_locks: Arc::new(SyncMutex::new(HashMap::new())),
         })
     }
 
     /// Блокировка на пару (тайтл, размер обложки). Держится только вокруг
     /// записи файла и строки `title_covers`, а не вокруг сетевого запроса.
     pub fn cover_lock(&self, title_id: i64, size: CoverSize) -> CoverLock {
-        let mut locks = self
-            .cover_locks
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        locks.entry((title_id, size)).or_default().clone()
+        entity_lock(&self.cover_locks, (title_id, size))
     }
 
     /// Убирает освободившуюся блокировку: иначе карта растёт вместе с числом
     /// тайтлов. Вызывать после `drop(guard)`, пока локальный Arc ещё жив.
     pub fn release_cover_lock(&self, title_id: i64, size: CoverSize) {
-        let mut locks = self
-            .cover_locks
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if locks
-            .get(&(title_id, size))
-            .is_some_and(|lock| Arc::strong_count(lock) == 2)
-        {
-            locks.remove(&(title_id, size));
-        }
+        release_entity_lock(&self.cover_locks, (title_id, size));
+    }
+
+    /// Блокировка аватара одного пользователя. Держится вокруг записи файла
+    /// и строки `users`, а не вокруг декодирования картинки.
+    pub fn avatar_lock(&self, user_id: i64) -> AvatarLock {
+        entity_lock(&self.avatar_locks, user_id)
+    }
+
+    /// Убирает освободившуюся блокировку: карта не должна расти с числом
+    /// пользователей. Вызывать после `drop(guard)`.
+    pub fn release_avatar_lock(&self, user_id: i64) {
+        release_entity_lock(&self.avatar_locks, user_id);
     }
 
     /// Пересобирает реестр из БД. Сетевых запросов нет; ошибка БД — 500.

@@ -1,12 +1,35 @@
 import { HeartIcon, StarIcon } from "lucide-react";
 import { Link } from "react-router";
 
-import { titleCoverUrl, type LibraryItem } from "@/api";
 import { useT } from "@/lib/i18n";
 import { titlePath } from "@/lib/routes";
 import { CoverImage } from "@/ui/CoverImage";
 
-export function LibraryCard({ item }: { item: LibraryItem }) {
+/**
+ * Достаточная часть записи библиотеки: экраны передают свой `LibraryItem`,
+ * а обложку считают сами — `ui` не знает про API.
+ */
+export type LibraryCardItem = {
+  title_id: number;
+  status: string;
+  score: number | null;
+  custom_tab_id: number | null;
+  read_count: number;
+  chapter_count: number;
+  title: {
+    name: string;
+    kind: string;
+    year: number | null;
+  };
+};
+
+type LibraryCardProps = {
+  item: LibraryCardItem;
+  coverUrl: string | null;
+};
+
+/** Карточка тайтла в библиотеке: обложка, тип, прогресс и оценка. */
+export function LibraryCard({ item, coverUrl }: LibraryCardProps) {
   const t = useT();
   const hasProgress = item.chapter_count > 0;
 
@@ -17,7 +40,7 @@ export function LibraryCard({ item }: { item: LibraryItem }) {
     >
       <div className="relative overflow-hidden rounded-xl ring-1 ring-foreground/10">
         <CoverImage
-          src={item.title.has_cover ? titleCoverUrl(item.title, "mid") : null}
+          src={coverUrl}
           alt={item.title.name}
           className="aspect-2/3 w-full transition-transform duration-200 group-hover:scale-[1.02]"
         />

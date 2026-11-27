@@ -5,6 +5,7 @@ import { catalogApi } from "./catalog";
 import { chaptersApi } from "./chapters";
 import { discoverApi } from "./discover";
 import { libraryApi } from "./library";
+import { profileApi } from "./profile";
 import { progressApi } from "./progress";
 
 // По мере появления областей API их функции собираются здесь.
@@ -16,6 +17,7 @@ export const api = {
   chapters: chaptersApi,
   discover: discoverApi,
   library: libraryApi,
+  profile: profileApi,
   progress: progressApi,
 };
 
@@ -143,6 +145,21 @@ export {
 } from "./progress";
 export type { Progress, ProgressInput, ProgressResponse } from "./progress";
 export { useErrorText } from "./errors";
+export {
+  profileApi,
+  useDeleteAvatarMutation,
+  useProfileQuery,
+  useUploadAvatarMutation,
+  userAvatarUrl,
+} from "./profile";
+export type {
+  AvatarResponse,
+  ProfileLibrary,
+  ProfileQuery,
+  ProfileResponse,
+  ProfileStats,
+  ProfileUser,
+} from "./profile";
 export {
   useCreateLibraryTabMutation,
   useDeleteLibraryTabMutation,

@@ -2,7 +2,11 @@ import { LogOutIcon, UserIcon } from "lucide-react";
 
 import { useT } from "@/lib/i18n";
 import type { NavItem } from "@/lib/nav";
-import { Avatar, AvatarFallback } from "@/ui/shadcn/avatar";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+} from "@/ui/shadcn/avatar";
 import { Button } from "@/ui/shadcn/button";
 import {
   DropdownMenu,
@@ -21,7 +25,9 @@ type AccountMenuProps = {
   logoutPending: boolean;
   onNavigate: (path: string) => void;
   onLogout: () => void;
-  /** `avatar` — круглая кнопка с инициалом вместо иконки и имени. */
+  /** URL аватара; null — показываем инициал. */
+  avatarSrc?: string | null;
+  /** `avatar` — круглая кнопка с аватаром вместо иконки и имени. */
   variant?: "default" | "avatar";
 };
 
@@ -33,6 +39,7 @@ export function AccountMenu({
   logoutPending,
   onNavigate,
   onLogout,
+  avatarSrc = null,
   variant = "default",
 }: AccountMenuProps) {
   const t = useT();
@@ -53,11 +60,19 @@ export function AccountMenu({
       >
         {avatar ? (
           <Avatar>
+            <AvatarImage src={avatarSrc ?? undefined} alt="" />
             <AvatarFallback>{initial}</AvatarFallback>
           </Avatar>
         ) : (
           <>
-            <UserIcon data-icon="inline-start" />
+            {avatarSrc ? (
+              <Avatar size="sm">
+                <AvatarImage src={avatarSrc} alt="" />
+                <AvatarFallback>{initial}</AvatarFallback>
+              </Avatar>
+            ) : (
+              <UserIcon data-icon="inline-start" />
+            )}
             <span className="hidden max-w-32 truncate sm:inline">
               {username}
             </span>

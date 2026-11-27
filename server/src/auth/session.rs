@@ -17,6 +17,10 @@ pub struct CurrentUser {
     pub id: i64,
     pub username: String,
     pub role: Role,
+    /// NULL — аватара нет; значение — время загрузки.
+    pub avatar_updated_at: Option<i64>,
+    /// Монотонная версия аватара: ETag и cache-buster.
+    pub avatar_version: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -62,6 +66,8 @@ pub struct SessionRow {
     pub username: String,
     pub role: String,
     pub disabled_at: Option<i64>,
+    pub avatar_updated_at: Option<i64>,
+    pub avatar_version: i64,
 }
 
 pub fn now_unix() -> i64 {
@@ -91,7 +97,8 @@ pub async fn find_session(
 ) -> Result<Option<SessionRow>, AppError> {
     let row = sqlx::query_as::<_, SessionRow>(
         "SELECT s.id AS session_id, s.last_seen_at, s.expires_at, \
-                u.id AS user_id, u.username, u.role, u.disabled_at \
+                u.id AS user_id, u.username, u.role, u.disabled_at, \
+                u.avatar_updated_at, u.avatar_version \
          FROM sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = ?",
     )
