@@ -9,6 +9,10 @@ use crate::auth::session::now_unix;
 
 pub const USERNAME_MAX_ATTEMPTS: u32 = 10;
 pub const USERNAME_WINDOW_SECS: i64 = 15 * 60;
+/// Вход в источник по паролю: короче окно и меньше попыток, потому что это
+/// перебор чужого пароля от имени пользователя инсталляции.
+pub const SOURCE_LOGIN_MAX_ATTEMPTS: u32 = 5;
+pub const SOURCE_LOGIN_WINDOW_SECS: i64 = 10 * 60;
 
 const X_FORWARDED_FOR: &str = "x-forwarded-for";
 const MAX_TRACKED_USERNAMES: usize = 4096;

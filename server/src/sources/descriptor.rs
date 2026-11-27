@@ -14,6 +14,9 @@ pub enum Capability {
     /// Источник принимает per-user учётку (Bearer/Cookie) для запросов,
     /// требующих входа. Не путать с глобальным `AuthCookie` в конфиге источника.
     Auth,
+    /// Источник умеет сам выдать токен по логину и паролю. UI показывает
+    /// форму входа только при наличии обоих флагов — `Auth` и `Login`.
+    Login,
     AuthCookie,
     SignedUrls,
 }
@@ -30,6 +33,7 @@ impl Capability {
             Self::AltNames => "alt_names",
             Self::SearchFilters => "search_filters",
             Self::Auth => "auth",
+            Self::Login => "login",
             Self::AuthCookie => "auth_cookie",
             Self::SignedUrls => "signed_urls",
         }

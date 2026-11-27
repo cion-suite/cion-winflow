@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
@@ -26,11 +27,23 @@ pub const AUTH_ERROR_CODE: &str = "auth_invalid";
 /// Заголовки не должны превращаться в способ залить мегабайты в БД.
 const MAX_BEARER_LEN: usize = 4 * 1024;
 const MAX_COOKIE_LEN: usize = 8 * 1024;
+/// Логин источника — почта или ник: короткая строка, а не тело запроса.
+const MAX_LOGIN_CHARS: usize = 200;
+/// Пароль не хранится, но счётчик попыток не должен пропускать мегабайты.
+const MAX_PASSWORD_LEN: usize = 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct CredentialInput {
     pub bearer: Option<String>,
     pub cookie: Option<String>,
+}
+
+/// Вход по логину/паролю. Пароль обёрнут в `SecretString`: у структуры нет
+/// `Debug`, а `secrecy` не даёт случайно сериализовать секрет.
+#[derive(Deserialize)]
+pub struct LoginInput {
+    pub login: String,
+    pub password: SecretString,
 }
 
 /// Ответ API: секретов здесь нет и появиться не должно.
@@ -39,6 +52,8 @@ pub struct CredentialDto {
     pub code: &'static str,
     pub name: &'static str,
     pub configured: bool,
+    /// Источник умеет серверный вход по логину/паролю; UI показывает форму.
+    pub login_supported: bool,
     pub updated_at: Option<i64>,
     pub last_verified_at: Option<i64>,
     pub last_error: Option<String>,
@@ -101,6 +116,7 @@ pub async fn list(state: &AppState, user_id: i64) -> Result<CredentialsListRespo
                 code: descriptor.code,
                 name: descriptor.name,
                 configured: stored.is_some(),
+                login_supported: descriptor.has(Capability::Login),
                 updated_at: stored.map(|row| row.updated_at),
                 last_verified_at: stored.and_then(|row| row.last_verified_at),
                 last_error: stored.and_then(|row| row.last_error.clone()),
@@ -119,7 +135,7 @@ pub async fn upsert(
     code: &str,
     input: CredentialInput,
 ) -> Result<CredentialDto, AppError> {
-    let (source_id, descriptor_code, descriptor_name) = {
+    let (source_id, descriptor_code, descriptor_name, login_supported) = {
         let registry = state.sources.read().await;
         let Some(runtime) = registry.runtime(code) else {
             return Err(AppError::not_found("source_not_found", "unknown source"));
@@ -130,41 +146,20 @@ pub async fn upsert(
                 "this source does not support per-user credentials",
             ));
         }
-        (runtime.id, runtime.descriptor.code, runtime.descriptor.name)
+        (
+            runtime.id,
+            runtime.descriptor.code,
+            runtime.descriptor.name,
+            runtime.descriptor.has(Capability::Login),
+        )
     };
 
     let auth = SourceAuth::new(input.bearer, input.cookie);
     validate(&auth)?;
 
     let cipher = state.credential_cipher()?;
-    let sealed = cipher.seal(user_id, source_id, &auth)?;
-    let now = now_unix();
-
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO user_source_credentials \
-             (user_id, source_id, ciphertext, nonce, key_version, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?) \
-         ON CONFLICT (user_id, source_id) DO UPDATE SET \
-             ciphertext = excluded.ciphertext, \
-             nonce = excluded.nonce, \
-             key_version = excluded.key_version, \
-             updated_at = excluded.updated_at, \
-             last_verified_at = NULL, \
-             last_error = NULL",
-    )
-    .bind(user_id)
-    .bind(source_id)
-    .bind(&sealed.ciphertext)
-    .bind(&sealed.nonce)
-    .bind(sealed.key_version)
-    .bind(now)
-    .execute(&mut *tx)
-    .await?;
-    reset_title_sync_timestamps(&mut tx, source_id).await?;
-    // Результат поиска без аккаунта больше не актуален: после подключения
-    // discovery должен проверить источник заново, не дожидаясь TTL.
-    clear_discovery_checks(&mut tx, user_id, source_id).await?;
+    let updated_at = persist_credential(&mut tx, cipher, user_id, source_id, &auth, None).await?;
     tx.commit().await?;
 
     tracing::info!(user_id, source_id, "source credential saved");
@@ -173,8 +168,78 @@ pub async fn upsert(
         code: descriptor_code,
         name: descriptor_name,
         configured: true,
-        updated_at: Some(now),
+        login_supported,
+        updated_at: Some(updated_at),
         last_verified_at: None,
+        last_error: None,
+    })
+}
+
+/// Вход по логину/паролю: получает токен у источника и сохраняет его как
+/// обычную Bearer-учётку. Пароль не пишется ни в БД, ни в ответ, ни в лог.
+pub async fn login_and_save(
+    state: &AppState,
+    user_id: i64,
+    code: &str,
+    input: LoginInput,
+) -> Result<CredentialDto, AppError> {
+    let cipher = state.credential_cipher()?;
+
+    // Адаптер клонируется: guard реестра нельзя держать через `.await`
+    // сетевого запроса, а `SourceKind` уже `Clone`.
+    let (source_id, descriptor_code, descriptor_name, adapter) = {
+        let registry = state.sources.read().await;
+        let Some(runtime) = registry.runtime(code) else {
+            return Err(AppError::not_found("source_not_found", "unknown source"));
+        };
+        if !runtime.descriptor.has(Capability::Auth) || !runtime.descriptor.has(Capability::Login) {
+            return Err(AppError::bad_request(
+                "source_credentials_invalid",
+                "this source does not support login by password",
+            ));
+        }
+        let adapter = runtime.adapter()?.clone();
+        (
+            runtime.id,
+            runtime.descriptor.code,
+            runtime.descriptor.name,
+            adapter,
+        )
+    };
+
+    let login = input.login.trim().to_owned();
+    validate_login(&login, &input.password)?;
+
+    let outcome = adapter.login(&login, &input.password).await?;
+    let token = outcome.access_token.ok_or_else(|| {
+        AppError::bad_gateway("source_parse_failed", "source did not return a token")
+    })?;
+
+    // Токен v1 непрозрачный: `SourceAuth` сам добавит схему `Bearer`.
+    let auth = SourceAuth::new(Some(token), None);
+    let verified_at = now_unix();
+
+    let mut tx = state.pool.begin().await?;
+    let updated_at = persist_credential(
+        &mut tx,
+        cipher,
+        user_id,
+        source_id,
+        &auth,
+        Some(verified_at),
+    )
+    .await?;
+    tx.commit().await?;
+
+    tracing::info!(user_id, source_id, "source login succeeded");
+
+    Ok(CredentialDto {
+        code: descriptor_code,
+        name: descriptor_name,
+        configured: true,
+        login_supported: true,
+        updated_at: Some(updated_at),
+        last_verified_at: Some(verified_at),
         last_error: None,
     })
 }
@@ -331,6 +396,25 @@ pub async fn verified_recently(
         .is_some_and(|at| now.saturating_sub(at) < VERIFIED_TTL_SECS))
 }
 
+/// Пароль не хранится, поэтому здесь только защита от пустых значений и
+/// гигантских тел: настоящую проверку делает источник.
+fn validate_login(login: &str, password: &SecretString) -> Result<(), AppError> {
+    if login.is_empty() || login.chars().count() > MAX_LOGIN_CHARS {
+        return Err(AppError::bad_request(
+            "source_credentials_invalid",
+            format!("login must be 1..={MAX_LOGIN_CHARS} characters"),
+        ));
+    }
+    let password = password.expose_secret();
+    if password.is_empty() || password.len() > MAX_PASSWORD_LEN {
+        return Err(AppError::bad_request(
+            "source_credentials_invalid",
+            format!("password must be 1..={MAX_PASSWORD_LEN} bytes"),
+        ));
+    }
+    Ok(())
+}
+
 fn validate(auth: &SourceAuth) -> Result<(), AppError> {
     if auth.is_empty() {
         return Err(AppError::bad_request(
@@ -357,6 +441,47 @@ fn validate(auth: &SourceAuth) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+/// Общая запись учётки для ручного сохранения и входа по паролю.
+/// Возвращает `updated_at`, чтобы DTO не считал время вторым вызовом.
+async fn persist_credential(
+    tx: &mut Transaction<'_, Sqlite>,
+    cipher: &CredentialCipher,
+    user_id: i64,
+    source_id: i64,
+    auth: &SourceAuth,
+    verified_at: Option<i64>,
+) -> Result<i64, AppError> {
+    let sealed = cipher.seal(user_id, source_id, auth)?;
+    let now = now_unix();
+
+    sqlx::query(
+        "INSERT INTO user_source_credentials \
+             (user_id, source_id, ciphertext, nonce, key_version, updated_at, last_verified_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT (user_id, source_id) DO UPDATE SET \
+             ciphertext = excluded.ciphertext, \
+             nonce = excluded.nonce, \
+             key_version = excluded.key_version, \
+             updated_at = excluded.updated_at, \
+             last_verified_at = excluded.last_verified_at, \
+             last_error = NULL",
+    )
+    .bind(user_id)
+    .bind(source_id)
+    .bind(&sealed.ciphertext)
+    .bind(&sealed.nonce)
+    .bind(sealed.key_version)
+    .bind(now)
+    .bind(verified_at)
+    .execute(&mut **tx)
+    .await?;
+    reset_title_sync_timestamps(tx, source_id).await?;
+    // Результат поиска без аккаунта больше не актуален: после подключения
+    // discovery должен проверить источник заново, не дожидаясь TTL.
+    clear_discovery_checks(tx, user_id, source_id).await?;
+    Ok(now)
 }
 
 /// После смены учётки sync страницы тайтла должен сработать сразу, а не

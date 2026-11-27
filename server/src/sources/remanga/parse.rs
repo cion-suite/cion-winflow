@@ -5,8 +5,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::sources::dto::{
-    ChapterKind, ContentKind, ExternalId, SearchPage, SourceChapter, SourceContent, SourceCovers,
-    SourcePage, SourceSearchItem, SourceTitle, TitleKind, TitleStatus,
+    ChapterKind, ContentKind, ExternalId, LoginOutcome, SearchPage, SourceChapter, SourceContent,
+    SourceCovers, SourcePage, SourceSearchItem, SourceTitle, TitleKind, TitleStatus,
 };
 use crate::sources::error::SourceError;
 use crate::sources::keys::{build_chapter_key, normalize_number, number_milli};
@@ -607,6 +607,47 @@ fn html_to_text(html: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// У v1-логина конверт `{content: ...}`, в отличие от плоских ответов v2.
+#[derive(Deserialize)]
+struct RawLogin {
+    #[serde(default)]
+    content: Option<RawLoginContent>,
+}
+
+#[derive(Deserialize)]
+struct RawLoginContent {
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    two_factor_auth: bool,
+    #[serde(default)]
+    methods: Vec<String>,
+}
+
+/// Разбирает успешный ответ входа. 400 с `{msg}` и 2FA-ветку адаптер
+/// обрабатывает отдельно: здесь только форма `content`.
+pub fn parse_login(raw: &str) -> Result<LoginOutcome, SourceError> {
+    let parsed: RawLogin = serde_json::from_str(raw).map_err(parse_error("login"))?;
+    let content = parsed.content.ok_or(SourceError::Parse {
+        stage: "login",
+        detail: "missing content".to_owned(),
+    })?;
+
+    Ok(LoginOutcome {
+        access_token: content
+            .access_token
+            .map(|token| token.trim().to_owned())
+            .filter(|token| !token.is_empty()),
+        two_factor_auth: content.two_factor_auth,
+        methods: content
+            .methods
+            .into_iter()
+            .map(|method| method.trim().to_owned())
+            .filter(|method| !method.is_empty())
+            .collect(),
+    })
+}
+
 fn parse_error<'a>(stage: &'static str) -> impl Fn(serde_json::Error) -> SourceError + 'a {
     move |error| {
         tracing::debug!(%error, stage, "cannot parse remanga response");
@@ -627,6 +668,7 @@ mod tests {
     const TITLE: &str = include_str!("fixtures/title.json");
     const CHAPTERS: &str = include_str!("fixtures/chapters.json");
     const CONTENT: &str = include_str!("fixtures/content.json");
+    const LOGIN: &str = include_str!("fixtures/login.json");
 
     #[test]
     fn parses_search_items_and_cursor() {
@@ -738,6 +780,32 @@ mod tests {
     fn paid_content_is_locked() {
         let raw = r#"{"is_paid":true,"content_type":"comics","pages":[]}"#;
         assert!(matches!(parse_content(raw), Err(SourceError::Locked)));
+    }
+
+    #[test]
+    fn parses_login_token_and_two_factor() {
+        let outcome = parse_login(LOGIN).expect("login");
+        assert_eq!(
+            outcome.access_token.as_deref(),
+            Some("login-token-1234567890abcdefghij")
+        );
+        assert!(!outcome.two_factor_auth);
+        assert!(outcome.methods.is_empty());
+
+        let two_factor =
+            parse_login(r#"{"content":{"two_factor_auth":true,"methods":["email","telegram"]}}"#)
+                .expect("2fa");
+        assert!(two_factor.access_token.is_none());
+        assert!(two_factor.two_factor_auth);
+        assert_eq!(two_factor.methods, ["email", "telegram"]);
+    }
+
+    #[test]
+    fn login_without_content_is_a_parse_error() {
+        assert!(matches!(
+            parse_login(r#"{"msg":"wrong password"}"#),
+            Err(SourceError::Parse { .. })
+        ));
     }
 
     #[test]

@@ -21,6 +21,9 @@ pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
         Capability::AltNames,
         // 18+ и закрытые тайтлы видны только после входа.
         Capability::Auth,
+        // Вход по логину/паролю: сервер получает v1-токен и хранит его как
+        // обычную Bearer-учётку.
+        Capability::Login,
     ],
     config: &[
         ConfigField {

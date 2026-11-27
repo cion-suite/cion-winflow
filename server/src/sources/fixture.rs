@@ -4,13 +4,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use reqwest::Url;
+use secrecy::SecretString;
 
 use crate::source_auth::SourceAuth;
 use crate::sources::config::{HostAllowlist, url_allowed};
 use crate::sources::descriptor::{Capability, SourceDescriptor};
 use crate::sources::dto::{
-    ChapterKind, ContentKind, ExternalId, SearchPage, SearchRequest, SourceChapter, SourceContent,
-    SourceCovers, SourcePage, SourceSearchItem, SourceText, SourceTitle, TitleKind,
+    ChapterKind, ContentKind, ExternalId, LoginOutcome, SearchPage, SearchRequest, SourceChapter,
+    SourceContent, SourceCovers, SourcePage, SourceSearchItem, SourceText, SourceTitle, TitleKind,
 };
 use crate::sources::error::SourceError;
 use crate::sources::http::AdapterCtx;
@@ -197,6 +198,21 @@ impl Fixture {
         _auth: Option<&SourceAuth>,
     ) -> Result<SourceText, SourceError> {
         Err(SourceError::UnsupportedCapability)
+    }
+
+    /// Тестовый токен для dispatch-тестов. Дескриптор fixture не объявляет
+    /// `Auth`/`Login`, поэтому через HTTP этот путь недоступен и в настройках
+    /// источник не появляется.
+    pub async fn login(
+        &self,
+        _login: &str,
+        _password: &SecretString,
+    ) -> Result<LoginOutcome, SourceError> {
+        Ok(LoginOutcome {
+            access_token: Some("fixture-login-token".to_owned()),
+            two_factor_auth: false,
+            methods: Vec::new(),
+        })
     }
 
     /// Fixture не поддерживает per-user вход.

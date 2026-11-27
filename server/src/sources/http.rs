@@ -219,6 +219,15 @@ pub struct TextResponse {
     pub cookies: Vec<String>,
 }
 
+/// Ответ без разбора статуса. Нужен логину: 400 с `{msg}` и 403 с HTML
+/// означают разные вещи, а обычный `send_text` прячет тело 4xx.
+pub struct RawResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+    pub cookies: Vec<String>,
+}
+
 #[derive(Clone, Copy)]
 enum Payload<'a> {
     None,
@@ -270,6 +279,18 @@ pub async fn post_json_with_cookies(
     send_text(ctx, &url, headers, Payload::Json(json), cookies).await
 }
 
+/// JSON-POST, который отдаёт тело и на 4xx. Используется только логином:
+/// Remanga отвечает 400 `{msg}` на неверный пароль и 403 HTML при блокировке,
+/// и эти случаи нельзя свести к одному `Blocked`/`Http`.
+pub async fn post_json_raw(
+    ctx: &AdapterCtx,
+    url: Url,
+    headers: &[(&str, &str)],
+    json: &str,
+) -> Result<RawResponse, SourceError> {
+    send_raw(ctx, &url, headers, Payload::Json(json), &[]).await
+}
+
 async fn send_text(
     ctx: &AdapterCtx,
     url: &Url,
@@ -277,6 +298,36 @@ async fn send_text(
     payload: Payload<'_>,
     cookies: &[String],
 ) -> Result<TextResponse, SourceError> {
+    let response = send_raw(ctx, url, headers, payload, cookies).await?;
+
+    if (200..300).contains(&response.status) {
+        return Ok(TextResponse {
+            body: response.body,
+            cookies: response.cookies,
+        });
+    }
+
+    // Маппинг статусов остаётся прежним: 429 и 5xx `send_raw` уже вернул
+    // ошибкой, а 401/403/404 получают собственные варианты.
+    Err(match response.status {
+        401 => SourceError::AuthRequired,
+        403 => SourceError::Blocked,
+        404 => SourceError::NotFound,
+        status => SourceError::Http {
+            status: Some(status),
+        },
+    })
+}
+
+/// Один путь для всех запросов метаданных: breaker, семафор, ретраи и лимит
+/// тела. 2xx и 4xx (кроме 429) возвращаются телом; 3xx, 429 и 5xx — ошибкой.
+async fn send_raw(
+    ctx: &AdapterCtx,
+    url: &Url,
+    headers: &[(&str, &str)],
+    payload: Payload<'_>,
+    cookies: &[String],
+) -> Result<RawResponse, SourceError> {
     if !ctx.breaker.allow() {
         return Err(SourceError::CircuitOpen);
     }
@@ -287,8 +338,10 @@ async fn send_text(
         .await
         .map_err(|_| SourceError::Network)?;
 
-    let mut last_status = None;
-    for attempt in 0..MAX_ATTEMPTS {
+    // `loop`, а не `for`: последняя попытка обязана вернуть результат, и
+    // компилятор видит, что хвоста после цикла быть не может.
+    let mut attempt = 0usize;
+    loop {
         let mut request = match payload {
             Payload::None => ctx.client.get(url.clone()),
             Payload::Form(form) => ctx.client.post(url.clone()).form(form),
@@ -308,15 +361,23 @@ async fn send_text(
         match request.send().await {
             Ok(response) => {
                 let status = response.status();
+                let code = status.as_u16();
+
                 if status.is_success() {
                     let cookies = collect_cookies(&response);
+                    let content_type = response_content_type(&response);
                     let body = read_body_capped(response, METADATA_BODY_LIMIT).await?;
                     ctx.breaker.record_success();
                     let body = String::from_utf8(body).map_err(|_| SourceError::Parse {
                         stage: "body",
                         detail: "response is not UTF-8".to_owned(),
                     })?;
-                    return Ok(TextResponse { body, cookies });
+                    return Ok(RawResponse {
+                        status: code,
+                        content_type,
+                        body,
+                        cookies,
+                    });
                 }
 
                 // Редиректы не следуем: источник может уводить на оплату
@@ -331,12 +392,7 @@ async fn send_text(
                     return Err(SourceError::Redirect { location });
                 }
 
-                let code = status.as_u16();
-                last_status = Some(code);
                 match code {
-                    401 => return Err(SourceError::AuthRequired),
-                    403 => return Err(SourceError::Blocked),
-                    404 => return Err(SourceError::NotFound),
                     429 => {
                         return Err(SourceError::RateLimited {
                             retry_after_secs: retry_after(&response),
@@ -345,15 +401,32 @@ async fn send_text(
                     500..=599 if attempt + 1 < MAX_ATTEMPTS => {
                         ctx.breaker.record_failure();
                         tokio::time::sleep(RETRY_BASE * (attempt as u32 + 1)).await;
-                        continue;
+                        attempt += 1;
                     }
-                    _ => break,
+                    500..=599 => {
+                        ctx.breaker.record_failure();
+                        return Err(SourceError::Http { status: Some(code) });
+                    }
+                    // Тело 4xx нужно вызывающему: потерянный UTF-8 не должен
+                    // скрывать сам статус, поэтому здесь lossy-декодирование.
+                    _ => {
+                        let cookies = collect_cookies(&response);
+                        let content_type = response_content_type(&response);
+                        let body = read_body_capped(response, METADATA_BODY_LIMIT).await?;
+                        return Ok(RawResponse {
+                            status: code,
+                            content_type,
+                            body: String::from_utf8_lossy(&body).into_owned(),
+                            cookies,
+                        });
+                    }
                 }
             }
             Err(_error) if attempt + 1 < MAX_ATTEMPTS => {
                 tracing::debug!("source request failed; retrying");
                 ctx.breaker.record_failure();
                 tokio::time::sleep(RETRY_BASE * (attempt as u32 + 1)).await;
+                attempt += 1;
             }
             Err(_error) => {
                 tracing::debug!("source request failed");
@@ -362,11 +435,14 @@ async fn send_text(
             }
         }
     }
+}
 
-    ctx.breaker.record_failure();
-    Err(SourceError::Http {
-        status: last_status,
-    })
+fn response_content_type(response: &Response) -> Option<String> {
+    response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
 }
 
 /// Только пары `name=value`: атрибуты `Path`, `Secure` и срок жизни

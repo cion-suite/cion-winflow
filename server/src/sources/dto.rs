@@ -433,6 +433,15 @@ pub struct SearchPage {
     pub total: Option<u64>,
 }
 
+/// Результат входа на источник. `access_token` — секрет: у структуры
+/// намеренно нет `Debug`, чтобы случайный лог не напечатал токен.
+/// `two_factor_auth`/`methods` нужны фазе 5б, которая добавит ввод кода.
+pub struct LoginOutcome {
+    pub access_token: Option<String>,
+    pub two_factor_auth: bool,
+    pub methods: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

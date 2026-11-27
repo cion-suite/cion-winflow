@@ -1,0 +1,8 @@
+{
+  "content": {
+    "access_token": "login-token-1234567890abcdefghij",
+    "refresh_token": null,
+    "two_factor_auth": false,
+    "methods": []
+  }
+}

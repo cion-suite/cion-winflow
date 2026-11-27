@@ -95,6 +95,14 @@ pub fn router(state: AppState) -> Router {
         20,
         2,
     );
+    // Вход в источник по паролю — как login: перебор Remanga-аккаунта не
+    // должен выкачивать чужую сеть. Счётчик на пользователя — в handler.
+    let source_login = with_rate_limit(
+        post(source_auth::handlers::login),
+        state.config.trusted_proxies.clone(),
+        10,
+        2,
+    );
 
     let api = Router::new()
         .route("/health", get(health))
@@ -106,6 +114,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me/password", change_password)
         .route("/me/source-credentials", get(source_auth::handlers::list))
         .route("/me/source-credentials/{code}", source_credentials)
+        .route("/me/source-credentials/{code}/login", source_login)
         .route("/me/export/bookmarks", get(bookmarks::handlers::export))
         .route(
             "/me/avatar",

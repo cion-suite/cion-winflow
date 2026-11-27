@@ -1,13 +1,16 @@
 use reqwest::Url;
+use secrecy::{ExposeSecret, SecretString};
+use zeroize::Zeroizing;
 
 use crate::source_auth::SourceAuth;
 use crate::sources::config::url_allowed;
 use crate::sources::dto::{
-    ExternalId, SearchPage, SearchRequest, SourceChapter, SourceContent, SourceTitle,
+    ExternalId, LoginOutcome, SearchPage, SearchRequest, SourceChapter, SourceContent, SourceTitle,
 };
 use crate::sources::error::SourceError;
 use crate::sources::http::{
     AdapterCtx, auth_headers as build_auth_headers, endpoint_url, get_text, header_pairs,
+    post_json_raw,
 };
 
 use super::config::{CODE, RemangaConfig};
@@ -78,6 +81,68 @@ impl Remanga {
         url: &Url,
     ) -> Vec<(&'static str, String)> {
         build_auth_headers(auth, url, &self.auth_hosts)
+    }
+
+    /// Вход по логину/паролю через v1 — тот же endpoint, что использует сайт.
+    /// Пароль живёт в `SecretString` и не попадает ни в ошибки, ни в логи;
+    /// тело запроса оборачивается в `Zeroizing`, чтобы буфер обнулился.
+    pub async fn login(
+        &self,
+        login: &str,
+        password: &SecretString,
+    ) -> Result<LoginOutcome, SourceError> {
+        let url = endpoint_url(&self.ctx, "/api/users/login/")?;
+        let body = Zeroizing::new(
+            serde_json::to_string(&serde_json::json!({
+                "user": login,
+                "password": password.expose_secret(),
+            }))
+            .map_err(|_| SourceError::Parse {
+                stage: "login",
+                detail: "cannot encode login body".to_owned(),
+            })?,
+        );
+
+        let response = post_json_raw(
+            &self.ctx,
+            url,
+            &[("Accept", "application/json")],
+            body.as_str(),
+        )
+        .await?;
+
+        // 400 `{msg}` — неверная пара; 403 JSON — отказ авторизации;
+        // 403 HTML — блокировка сайта (DDoS-Guard/Cloudflare).
+        let is_json = response
+            .content_type
+            .as_deref()
+            .is_some_and(|value| value.to_ascii_lowercase().contains("json"));
+
+        match response.status {
+            200..=299 => {
+                let outcome = parse::parse_login(&response.body)?;
+                if outcome.two_factor_auth {
+                    return Err(SourceError::TwoFactorRequired {
+                        methods: outcome.methods,
+                    });
+                }
+                if outcome.access_token.is_none() {
+                    return Err(SourceError::Parse {
+                        stage: "login",
+                        detail: "missing access token".to_owned(),
+                    });
+                }
+                Ok(outcome)
+            }
+            // Наружу HTTP 401 не отдаём: для клиента это отказ входа.
+            400 | 401 => Err(SourceError::LoginFailed),
+            403 if is_json => Err(SourceError::LoginFailed),
+            403 => Err(SourceError::Blocked),
+            404 => Err(SourceError::NotFound),
+            status => Err(SourceError::Http {
+                status: Some(status),
+            }),
+        }
     }
 
     pub async fn search(

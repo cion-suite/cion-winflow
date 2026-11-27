@@ -80,6 +80,9 @@ export const en = {
         "Source accounts are unavailable: the server has no encryption key configured.",
       sourceCredentialsInvalid:
         "Check the account data: fill in a token or a cookie.",
+      sourceLoginFailed: "Sign-in failed: check the login and password.",
+      sourceLogin2faRequired:
+        "Two-factor authentication is enabled on this account. Signing in with a code will come in the next version.",
       notFound: "Not found.",
       network: "Cannot reach the server.",
       unknown: "Something went wrong.",
@@ -494,6 +497,15 @@ export const en = {
           "Save your own source account for titles that require sign-in. Accounts are personal: other users cannot see them. The saved account is used for your source requests.",
         cardDescription:
           "A personal Remanga account for requests that require sign-in.",
+        signInTitle: "Sign in to Remanga",
+        signInDescription:
+          "Enter your Remanga login or email and password. The password is used once and is not stored.",
+        login: "Login or email",
+        password: "Password",
+        loginPlaceholder: "Login or email",
+        passwordPlaceholder: "Remanga password",
+        signIn: "Sign in",
+        manualTitle: "Paste a token manually",
         connected: "Connected",
         notConnected: "Not connected",
         bearer: "Bearer token",
@@ -508,7 +520,7 @@ export const en = {
         replaceHint:
           "An account is saved. Enter new values to replace it; the secret is never shown.",
         manualHint:
-          "Manual paste is temporary. Signing in with a button will come later.",
+          "Manual paste is a fallback for when password sign-in does not work.",
         lastError: "Last error: {{code}}",
         authInvalid: "The source rejected this account.",
       },

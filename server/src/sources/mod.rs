@@ -22,13 +22,14 @@ mod contract;
 
 pub use descriptor::{Capability, ConfigField, FieldType, SourceDescriptor};
 pub use dto::{
-    ChapterKind, ContentKind, CoverSize, ExternalId, SearchPage, SearchRequest, SourceChapter,
-    SourceContent, SourceCovers, SourcePage, SourceSearchItem, SourceText, SourceTitle, TextFormat,
-    TitleKind, TitleStatus,
+    ChapterKind, ContentKind, CoverSize, ExternalId, LoginOutcome, SearchPage, SearchRequest,
+    SourceChapter, SourceContent, SourceCovers, SourcePage, SourceSearchItem, SourceText,
+    SourceTitle, TextFormat, TitleKind, TitleStatus,
 };
 pub use error::SourceError;
 
 use reqwest::Url;
+use secrecy::SecretString;
 
 use crate::source_auth::SourceAuth;
 #[cfg(debug_assertions)]
@@ -112,6 +113,21 @@ impl SourceKind {
             Self::Mangamir(source) => source.content(chapter, auth).await,
             #[cfg(debug_assertions)]
             Self::Fixture(source) => source.content(chapter, auth).await,
+        }
+    }
+
+    /// Вход по логину/паролю. Поддерживает только источник с
+    /// `Capability::Login`; сервис проверяет флаги до вызова.
+    pub async fn login(
+        &self,
+        login: &str,
+        password: &SecretString,
+    ) -> Result<LoginOutcome, SourceError> {
+        match self {
+            Self::Remanga(source) => source.login(login, password).await,
+            Self::Rumix(_) | Self::Mangamir(_) => Err(SourceError::UnsupportedCapability),
+            #[cfg(debug_assertions)]
+            Self::Fixture(source) => source.login(login, password).await,
         }
     }
 

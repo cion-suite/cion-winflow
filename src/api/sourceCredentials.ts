@@ -10,6 +10,8 @@ export type SourceCredential = {
   code: string;
   name: string;
   configured: boolean;
+  /** Источник умеет серверный вход по логину/паролю. */
+  login_supported: boolean;
   updated_at: number | null;
   last_verified_at: number | null;
   /** Код последней ошибки авторизации, без секретов. */
@@ -25,6 +27,12 @@ export type SourceCredentialInput = {
   cookie?: string | null;
 };
 
+/** Пара для серверного входа. Пароль уходит один раз и не сохраняется. */
+export type SourceLoginInput = {
+  login: string;
+  password: string;
+};
+
 export const SOURCE_CREDENTIALS_QUERY_KEY = ["source-credentials"] as const;
 
 function credentialPath(code: string): string {
@@ -35,6 +43,11 @@ export const sourceCredentialsApi = {
   list: () => request<SourceCredentialsResponse>("/me/source-credentials"),
   save: (code: string, input: SourceCredentialInput) =>
     request<SourceCredential>(credentialPath(code), jsonMutation(input, "PUT")),
+  login: (code: string, input: SourceLoginInput) =>
+    request<SourceCredential>(
+      `${credentialPath(code)}/login`,
+      jsonMutation(input, "POST"),
+    ),
   remove: (code: string) =>
     request<void>(credentialPath(code), { method: "DELETE" }),
 };
@@ -72,6 +85,21 @@ export function useSaveSourceCredentialMutation() {
       code: string;
       input: SourceCredentialInput;
     }) => sourceCredentialsApi.save(code, input),
+    onSuccess: () => invalidateAfterCredentialChange(queryClient),
+  });
+}
+
+export function useLoginSourceCredentialMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      code,
+      input,
+    }: {
+      code: string;
+      input: SourceLoginInput;
+    }) => sourceCredentialsApi.login(code, input),
     onSuccess: () => invalidateAfterCredentialChange(queryClient),
   });
 }

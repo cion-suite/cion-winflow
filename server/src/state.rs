@@ -7,7 +7,7 @@ use reqwest::Client;
 use sqlx::SqlitePool;
 use tokio::sync::{RwLock, Semaphore};
 
-use crate::auth::limiter::LoginLimiter;
+use crate::auth::limiter::{LoginLimiter, SOURCE_LOGIN_MAX_ATTEMPTS, SOURCE_LOGIN_WINDOW_SECS};
 use crate::bookmarks::ImportJobs;
 use crate::config::Config;
 use crate::error::AppError;
@@ -64,6 +64,9 @@ pub struct AppState {
     /// Ограничивает одновременное декодирование и перекодирование картинок.
     pub image_semaphore: Arc<Semaphore>,
     pub login_limiter: Arc<LoginLimiter>,
+    /// Попытки входа в источник по паролю на пользователя: IP-лимит не
+    /// различает аккаунты за одним NAT.
+    pub source_login_limiter: Arc<LoginLimiter>,
     /// Скомпилированные адаптеры и их состояние; пересобирается после
     /// изменения строк `sources`, guard никогда не держится через `.await`.
     pub sources: Arc<RwLock<SourceRegistry>>,
@@ -114,6 +117,10 @@ impl AppState {
             password_semaphore: Arc::new(Semaphore::new(2)),
             image_semaphore: Arc::new(Semaphore::new(2)),
             login_limiter: Arc::new(LoginLimiter::default()),
+            source_login_limiter: Arc::new(LoginLimiter::new(
+                SOURCE_LOGIN_MAX_ATTEMPTS,
+                SOURCE_LOGIN_WINDOW_SECS,
+            )),
             sources: Arc::new(RwLock::new(registry)),
             metadata_client,
             image_client,

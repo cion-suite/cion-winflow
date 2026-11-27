@@ -5,6 +5,7 @@ import {
   type SourceCredential,
   useDeleteSourceCredentialMutation,
   useErrorText,
+  useLoginSourceCredentialMutation,
   useSaveSourceCredentialMutation,
   useSourceCredentialsQuery,
 } from "@/api";
@@ -24,8 +25,8 @@ import { Skeleton } from "@/ui/shadcn/skeleton";
 import { Spinner } from "@/ui/shadcn/spinner";
 
 /**
- * Личные учётки источников. Ручная вставка Bearer/Cookie — временный путь:
- * вход по кнопке через расширение появится в отдельной фазе.
+ * Личные учётки источников. Где источник это умеет, вход идёт по логину и
+ * паролю на сервере; ручная вставка Bearer/Cookie остаётся запасным путём.
  */
 export function SourceCredentialsSettings() {
   const t = useT();
@@ -76,16 +77,39 @@ export function SourceCredentialsSettings() {
 
 function CredentialCard({ credential }: { credential: SourceCredential }) {
   const t = useT();
+  const [loginName, setLoginName] = useState("");
+  const [password, setPassword] = useState("");
   const [bearer, setBearer] = useState("");
   const [cookie, setCookie] = useState("");
+  const signIn = useLoginSourceCredentialMutation();
   const save = useSaveSourceCredentialMutation();
   const remove = useDeleteSourceCredentialMutation();
-  const errorText = useErrorText(save.error ?? remove.error);
+  const errorText = useErrorText(signIn.error ?? save.error ?? remove.error);
 
-  const pending = save.isPending || remove.isPending;
+  const pending = signIn.isPending || save.isPending || remove.isPending;
+  const canSignIn = !pending && loginName.trim() !== "" && password !== "";
   const canSave = !pending && (bearer.trim() !== "" || cookie.trim() !== "");
+  const loginId = `source-credential-login-${credential.code}`;
+  const passwordId = `source-credential-password-${credential.code}`;
   const bearerId = `source-credential-bearer-${credential.code}`;
   const cookieId = `source-credential-cookie-${credential.code}`;
+
+  function handleLogin(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (!canSignIn) return;
+    signIn.mutate(
+      {
+        code: credential.code,
+        input: { login: loginName.trim(), password },
+      },
+      {
+        onSuccess: () => {
+          setLoginName("");
+          setPassword("");
+        },
+      },
+    );
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -126,6 +150,69 @@ function CredentialCard({ credential }: { credential: SourceCredential }) {
       </CardHeader>
 
       <CardContent className="flex flex-col gap-4">
+        {credential.login_supported && (
+          <>
+            <div className="flex flex-col gap-1">
+              <p className="text-sm font-medium">
+                {t("settingsPage.sources.signInTitle")}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t("settingsPage.sources.signInDescription")}
+              </p>
+            </div>
+
+            <form className="flex flex-col gap-3" onSubmit={handleLogin}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={loginId}>
+                    {t("settingsPage.sources.login")}
+                  </Label>
+                  <Input
+                    id={loginId}
+                    autoComplete="username"
+                    spellCheck={false}
+                    value={loginName}
+                    disabled={pending}
+                    placeholder={t("settingsPage.sources.loginPlaceholder")}
+                    onChange={(event) => {
+                      signIn.reset();
+                      setLoginName(event.target.value);
+                    }}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={passwordId}>
+                    {t("settingsPage.sources.password")}
+                  </Label>
+                  <Input
+                    id={passwordId}
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    disabled={pending}
+                    placeholder={t("settingsPage.sources.passwordPlaceholder")}
+                    onChange={(event) => {
+                      signIn.reset();
+                      setPassword(event.target.value);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="submit" disabled={!canSignIn}>
+                  {signIn.isPending && <Spinner />}
+                  {t("settingsPage.sources.signIn")}
+                </Button>
+              </div>
+            </form>
+
+            <p className="text-sm font-medium">
+              {t("settingsPage.sources.manualTitle")}
+            </p>
+          </>
+        )}
+
         <form className="flex flex-col gap-3" onSubmit={handleSubmit}>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-2">

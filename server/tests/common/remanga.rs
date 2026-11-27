@@ -12,7 +12,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, Method, Request, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -24,6 +24,22 @@ use super::{TestApp, body_json, get as http_get, json_request, with_cookie};
 /// Валидный токен, который стаб считает «правильной учёткой».
 pub const GOOD_BEARER: &str = "Bearer good-token";
 const KEY_B64: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=";
+
+/// Пара, которую v1-логин двойника принимает как правильную.
+pub const LOGIN_USER: &str = "remanga-user";
+pub const LOGIN_PASSWORD: &str = "remanga-password";
+/// 30-символьный непрозрачный токен, как у настоящей Remanga.
+pub const LOGIN_TOKEN: &str = "0123456789abcdefghijklmnopqrst";
+
+/// Поведение `/api/users/login/` в двойнике.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LoginMode {
+    #[default]
+    Ok,
+    InvalidPassword,
+    TwoFactor,
+    BlockedHtml,
+}
 
 #[derive(Debug, Clone)]
 pub struct CapturedRequest {
@@ -40,6 +56,8 @@ pub struct StubMode {
     pub content_requires_auth: bool,
     /// Картинки отвечают 403.
     pub image_forbidden: bool,
+    /// Как отвечает v1-логин.
+    pub login_mode: LoginMode,
 }
 
 #[derive(Clone)]
@@ -92,6 +110,7 @@ pub async fn start() -> RemangaStub {
     };
 
     let api = Router::new()
+        .route("/api/users/login/", post(login))
         .route("/api/v2/search/", get(search))
         .route("/api/v2/titles/chapters/", get(chapters))
         .route("/api/v2/titles/chapters/{id}/", get(content))
@@ -148,6 +167,60 @@ fn is_authed(headers: &HeaderMap) -> bool {
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         == Some(GOOD_BEARER)
+}
+
+async fn login(
+    State(shared): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    capture(&shared.requests, "/api/users/login/", &headers);
+    let mode = shared
+        .mode
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .login_mode;
+
+    match mode {
+        LoginMode::Ok => {
+            let user = body["user"].as_str().unwrap_or_default();
+            let password = body["password"].as_str().unwrap_or_default();
+            if user == LOGIN_USER && password == LOGIN_PASSWORD {
+                Json(json!({
+                    "content": {
+                        "access_token": LOGIN_TOKEN,
+                        "two_factor_auth": false,
+                        "methods": []
+                    }
+                }))
+                .into_response()
+            } else {
+                invalid_login().into_response()
+            }
+        }
+        LoginMode::InvalidPassword => invalid_login().into_response(),
+        LoginMode::TwoFactor => Json(json!({
+            "content": {
+                "two_factor_auth": true,
+                "methods": ["email", "telegram"]
+            }
+        }))
+        .into_response(),
+        LoginMode::BlockedHtml => (
+            StatusCode::FORBIDDEN,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            "<html>restricted access from your current network</html>",
+        )
+            .into_response(),
+    }
+}
+
+/// v1 отвечает 400 с `{msg}` на неверную пару; тело наружу не отдаётся.
+fn invalid_login() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "msg": "Введен неверный логин/почта или пароль." })),
+    )
 }
 
 async fn search(State(shared): State<Shared>, headers: HeaderMap) -> Response {

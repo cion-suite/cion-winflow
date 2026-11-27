@@ -20,6 +20,14 @@ pub enum SourceError {
     /// (Remanga и 18+ тайтлы). С учёткой это тот же 404, но окончательный.
     #[error("authentication may be required at source")]
     AuthMaybeRequired,
+    /// Источник отклонил логин/пароль. Текст ответа источника наружу не
+    /// уходит: он может содержать чужие детали и не переводится.
+    #[error("source rejected the login")]
+    LoginFailed,
+    /// У аккаунта включён второй фактор. Методы показываем в сообщении,
+    /// структурное поле появится вместе с вводом кода в фазе 5б.
+    #[error("two-factor authentication is required at source")]
+    TwoFactorRequired { methods: Vec<String> },
     /// 403 от сайта: чаще всего Cloudflare или блокировка по региону.
     #[error("source blocked the request")]
     Blocked,
@@ -56,6 +64,8 @@ impl SourceError {
             Self::InvalidExternalId => "invalid_external_id",
             Self::NotFound => "not_found",
             Self::AuthRequired | Self::AuthMaybeRequired => "auth_required",
+            Self::LoginFailed => "login_failed",
+            Self::TwoFactorRequired { .. } => "two_factor_required",
             Self::Blocked => "blocked",
             Self::RateLimited { .. } => "rate_limited",
             Self::Http { .. } | Self::Redirect { .. } | Self::Network => "upstream_failed",
@@ -113,6 +123,20 @@ impl SourceError {
                 "source_auth_maybe_required",
                 "the title may require an account at this source",
             ),
+            Self::LoginFailed => {
+                AppError::bad_request("source_login_failed", "source rejected the login")
+            }
+            Self::TwoFactorRequired { methods } => {
+                let message = if methods.is_empty() {
+                    "two-factor authentication is required at source".to_owned()
+                } else {
+                    format!(
+                        "two-factor authentication is required at source; methods: {}",
+                        methods.join(", ")
+                    )
+                };
+                AppError::conflict("source_login_2fa_required", message)
+            }
             Self::UnsupportedKind(kind) => AppError::bad_request(
                 "source_unsupported_kind",
                 format!("source does not support kind `{kind}`"),

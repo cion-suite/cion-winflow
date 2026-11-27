@@ -166,6 +166,7 @@ export {
   SOURCE_CREDENTIALS_QUERY_KEY,
   sourceCredentialsApi,
   useDeleteSourceCredentialMutation,
+  useLoginSourceCredentialMutation,
   useSaveSourceCredentialMutation,
   useSourceCredentialsQuery,
 } from "./sourceCredentials";
@@ -173,6 +174,7 @@ export type {
   SourceCredential,
   SourceCredentialInput,
   SourceCredentialsResponse,
+  SourceLoginInput,
 } from "./sourceCredentials";
 export type {
   AvatarResponse,
