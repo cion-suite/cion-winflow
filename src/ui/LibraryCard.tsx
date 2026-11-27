@@ -15,7 +15,7 @@ export type LibraryCardItem = {
   score: number | null;
   custom_tab_id: number | null;
   read_count: number;
-  chapter_count: number;
+  available_count: number;
   title: {
     name: string;
     kind: string;
@@ -31,7 +31,7 @@ type LibraryCardProps = {
 /** Карточка тайтла в библиотеке: обложка, тип, прогресс и оценка. */
 export function LibraryCard({ item, coverUrl }: LibraryCardProps) {
   const t = useT();
-  const hasProgress = item.chapter_count > 0;
+  const hasProgress = item.available_count > 0 || item.read_count > 0;
 
   return (
     <Link
@@ -66,7 +66,9 @@ export function LibraryCard({ item, coverUrl }: LibraryCardProps) {
         </span>
         {hasProgress && (
           <span className="inline-flex shrink-0 items-center gap-1 tabular-nums">
-            {Math.min(item.read_count, item.chapter_count)}/{item.chapter_count}
+            {item.available_count > 0
+              ? `${item.read_count}/${item.available_count}`
+              : item.read_count}
           </span>
         )}
       </div>

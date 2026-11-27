@@ -477,6 +477,8 @@ export const en = {
           "Upload a Remanga or ExManga JSON export: titles, statuses and read chapters will be transferred to your library.",
         action: "Import bookmarks",
         running: "Import in progress: {{processed}} of {{total}}.",
+        reimportHint:
+          "Progress beyond the currently available chapters is stored only for titles imported after this update. Re-import your bookmarks to restore it for older titles.",
       },
       export: {
         title: "Export bookmarks",

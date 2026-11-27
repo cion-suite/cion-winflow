@@ -83,9 +83,13 @@ pub struct LibraryItemDto {
     pub custom_tab_id: Option<i64>,
     pub added_at: i64,
     pub updated_at: i64,
-    /// Сколько глав прочитано по журналу chapter_reads.
+    /// Эффективный прогресс: `max(chapter_reads, imported_read_count)`.
     pub read_count: i64,
-    /// Число глав самого полного источника: прогресс на карточке.
+    /// Импортированная отметка high-water; 0, если импорта не было.
+    pub imported_read_count: i64,
+    /// Доступные главы предпочтительного источника: знаменатель карточки.
+    pub available_count: i64,
+    /// Число глав самого полного источника: сортировка и экспорт.
     pub chapter_count: i64,
     pub title: TitleSummaryDto,
 }
@@ -146,6 +150,8 @@ struct LibraryRow {
     has_cover: bool,
     title_updated_at: i64,
     read_count: i64,
+    imported_read_count: i64,
+    available_count: i64,
     chapter_count: i64,
 }
 
@@ -164,6 +170,8 @@ impl LibraryRow {
             added_at: self.added_at,
             updated_at: self.updated_at,
             read_count: self.read_count,
+            imported_read_count: self.imported_read_count,
+            available_count: self.available_count,
             chapter_count: self.chapter_count,
             title: TitleSummaryDto {
                 id: self.title_id,
@@ -248,8 +256,18 @@ pub async fn list_library(
                 t.kind, t.name, t.year, t.status AS title_status, t.rating, \
                 EXISTS (SELECT 1 FROM title_covers c WHERE c.title_id = t.id) AS has_cover, \
                 t.updated_at AS title_updated_at, \
-                (SELECT COUNT(*) FROM chapter_reads r \
-                 WHERE r.user_id = l.user_id AND r.title_id = l.title_id) AS read_count, \
+                (SELECT MAX( \
+                     (SELECT COUNT(*) FROM chapter_reads r \
+                      WHERE r.user_id = l.user_id AND r.title_id = l.title_id), \
+                     COALESCE(l.imported_read_count, 0))) AS read_count, \
+                COALESCE(l.imported_read_count, 0) AS imported_read_count, \
+                (SELECT COALESCE( \
+                     NULLIF((SELECT e.available_count FROM source_entries e \
+                             WHERE e.title_id = l.title_id \
+                               AND e.source_id = t.preferred_source_id), 0), \
+                     (SELECT MAX(e.available_count) FROM source_entries e \
+                      WHERE e.title_id = l.title_id), \
+                     0)) AS available_count, \
                 (SELECT COALESCE(MAX(e.chapter_count), 0) FROM source_entries e \
                  WHERE e.title_id = l.title_id) AS chapter_count, \
                 (SELECT MAX(ch.published_at) FROM chapters ch \

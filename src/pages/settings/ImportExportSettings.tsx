@@ -64,6 +64,9 @@ export function ImportExportSettings({
               {errorText}
             </p>
           )}
+          <p className="text-xs text-muted-foreground">
+            {t("settingsPage.import.reimportHint")}
+          </p>
         </CardContent>
       </Card>
 

@@ -21,7 +21,8 @@ struct ExportFile {
 struct ExportBookmark {
     #[serde(rename = "type")]
     bookmark_type: i64,
-    /// Сколько глав прочитано (журнал chapter_reads).
+    /// Сколько глав прочитано, но не больше `progress_total`: high-water
+    /// 930 при 17 доступных главах в формате Remanga выглядел бы битым.
     progress: i64,
     /// Сколько глав у самого полного источника; импорт это поле не читает.
     progress_total: i64,
@@ -55,8 +56,10 @@ pub async fn export_bookmarks(
 
     let rows = sqlx::query_as::<_, (String, Option<i64>, String, i64, i64, Option<String>)>(
         "SELECT l.status, l.custom_tab_id, t.name, \
-                (SELECT COUNT(*) FROM chapter_reads r \
-                 WHERE r.user_id = l.user_id AND r.title_id = l.title_id) AS read_count, \
+                (SELECT MAX( \
+                     (SELECT COUNT(*) FROM chapter_reads r \
+                      WHERE r.user_id = l.user_id AND r.title_id = l.title_id), \
+                     COALESCE(l.imported_read_count, 0))) AS read_count, \
                 (SELECT COALESCE(MAX(e.chapter_count), 0) FROM source_entries e \
                  WHERE e.title_id = l.title_id) AS chapter_count, \
                 (SELECT e.external_id FROM source_entries e \
@@ -82,7 +85,7 @@ pub async fn export_bookmarks(
                     .or_else(|| standard_type(&status))?;
                 Some(ExportBookmark {
                     bookmark_type,
-                    progress: read_count,
+                    progress: read_count.min(chapter_count),
                     progress_total: chapter_count,
                     name,
                     dir,

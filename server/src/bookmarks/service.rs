@@ -443,45 +443,70 @@ async fn process_item(
     };
 
     let now = now_unix();
-    let existing =
-        sqlx::query_scalar::<_, i64>("SELECT 1 FROM library WHERE user_id = ? AND title_id = ?")
+    // High-water монотонен: число из файла может быть больше доступных глав,
+    // поэтому оно хранится отдельно от журнала chapter_reads.
+    let imported_read_count = item.progress.max(0);
+    let existing_imported = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(imported_read_count, 0) FROM library \
+         WHERE user_id = ? AND title_id = ?",
+    )
+    .bind(plan.user_id)
+    .bind(title_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    // Статус перезаписываем по эффективному прогрессу: импортированные
+    // 930 глав не должны выглядеть как «ещё не читал».
+    let effective_reads = current_reads.max(existing_imported.unwrap_or(0));
+
+    let (library_created, library_updated) = match existing_imported {
+        None => {
+            sqlx::query(
+                "INSERT INTO library (user_id, title_id, status, score, custom_tab_id, \
+                                      added_at, updated_at, imported_read_count) \
+                 VALUES (?, ?, ?, NULL, ?, ?, ?, ?)",
+            )
             .bind(plan.user_id)
             .bind(title_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .is_some();
+            .bind(status)
+            .bind(custom_tab_id)
+            .bind(now)
+            .bind(now)
+            .bind(imported_read_count)
+            .execute(&state.pool)
+            .await?;
+            (true, false)
+        }
+        Some(_) => {
+            // Отметка только растёт: ручное снятие глав её не уменьшает.
+            sqlx::query(
+                "UPDATE library SET imported_read_count = MAX(COALESCE(imported_read_count, 0), ?) \
+                 WHERE user_id = ? AND title_id = ?",
+            )
+            .bind(imported_read_count)
+            .bind(plan.user_id)
+            .bind(title_id)
+            .execute(&state.pool)
+            .await?;
 
-    let (library_created, library_updated) = if !existing {
-        sqlx::query(
-            "INSERT INTO library (user_id, title_id, status, score, custom_tab_id, added_at, updated_at) \
-             VALUES (?, ?, ?, NULL, ?, ?, ?)",
-        )
-        .bind(plan.user_id)
-        .bind(title_id)
-        .bind(status)
-        .bind(custom_tab_id)
-        .bind(now)
-        .bind(now)
-        .execute(&state.pool)
-        .await?;
-        (true, false)
-    } else if current_reads < item.progress {
-        // Перезаписываем статус, только если в файле прогресс больше:
-        // ручные изменения при повторном импорте не должны откатываться.
-        sqlx::query(
-            "UPDATE library SET status = ?, custom_tab_id = ?, updated_at = ? \
-             WHERE user_id = ? AND title_id = ?",
-        )
-        .bind(status)
-        .bind(custom_tab_id)
-        .bind(now)
-        .bind(plan.user_id)
-        .bind(title_id)
-        .execute(&state.pool)
-        .await?;
-        (false, true)
-    } else {
-        (false, false)
+            if effective_reads < imported_read_count {
+                // Перезаписываем статус, только если в файле прогресс больше
+                // уже достигнутого: ручные изменения не откатываются.
+                sqlx::query(
+                    "UPDATE library SET status = ?, custom_tab_id = ?, updated_at = ? \
+                     WHERE user_id = ? AND title_id = ?",
+                )
+                .bind(status)
+                .bind(custom_tab_id)
+                .bind(now)
+                .bind(plan.user_id)
+                .bind(title_id)
+                .execute(&state.pool)
+                .await?;
+                (false, true)
+            } else {
+                (false, false)
+            }
+        }
     };
 
     let read_marked = mark_progress(

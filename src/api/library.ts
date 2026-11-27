@@ -13,9 +13,13 @@ export type LibraryItem = {
   score: number | null;
   added_at: number;
   updated_at: number;
-  /** Прочитано глав по журналу chapter_reads. */
+  /** Эффективный прогресс: max(chapter_reads, imported_read_count). */
   read_count: number;
-  /** Глав в самом полном источнике. */
+  /** Импортированная отметка прочитанного; 0, если импорта не было. */
+  imported_read_count: number;
+  /** Доступные главы предпочтительного источника: знаменатель карточки. */
+  available_count: number;
+  /** Глав в самом полном источнике: сортировка и экспорт. */
   chapter_count: number;
   /** Своя закладка как статус: перекрывает встроенный `status`. */
   custom_tab_id: number | null;

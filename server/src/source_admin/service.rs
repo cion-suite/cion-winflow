@@ -355,6 +355,27 @@ pub async fn import(
         .await
         .map_err(|error| error.into_app(auth.is_some()))?;
 
+    // Снимок доступных глав до upsert: по нему auto-mark отличает новые и
+    // разблокировавшиеся главы от давно доступных, которые сняли вручную.
+    // Тайтл известен заранее при автопривязке к существующей карточке, иначе
+    // его даёт уже импортированный entry. У нового тайтла high-water нет.
+    let snapshot_title_id = match input.title_id {
+        Some(title_id) => Some(title_id),
+        None => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT title_id FROM source_entries WHERE source_id = ? AND external_id = ?",
+            )
+            .bind(source_id)
+            .bind(external_id.as_str())
+            .fetch_optional(&state.pool)
+            .await?
+        }
+    };
+    let snapshot = match snapshot_title_id {
+        Some(title_id) => crate::library::progress::snapshot_available(state, title_id).await?,
+        None => None,
+    };
+
     let now = now_unix();
     let mut tx = state.pool.begin().await?;
 
@@ -507,6 +528,12 @@ pub async fn import(
     if let Err(error) = crate::catalog::alias_ranges::materialize_title(&state.pool, title_id).await
     {
         tracing::warn!(title_id, %error, "cannot materialize alias ranges after import");
+    }
+    if let Some(snapshot) = snapshot.as_ref()
+        && let Err(error) =
+            crate::library::progress::mark_newly_available(state, title_id, snapshot).await
+    {
+        tracing::warn!(title_id, %error, "cannot auto-mark newly available chapters after import");
     }
 
     Ok(ImportResponse {
@@ -1051,6 +1078,10 @@ async fn refresh_entries(
         .await?
         .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
 
+    // Снимок доступных глав до обновления: после upsert по нему отмечаются
+    // только появившиеся главы, а не всё, что когда-то сняли вручную.
+    let snapshot = crate::library::progress::snapshot_available(state, title_id).await?;
+
     let entries = sqlx::query_as::<_, (i64, i64, String, String)>(
         "SELECT e.id, e.source_id, e.external_id, s.code \
          FROM source_entries e JOIN sources s ON s.id = e.source_id \
@@ -1206,6 +1237,12 @@ async fn refresh_entries(
     if let Err(error) = crate::catalog::alias_ranges::materialize_title(&state.pool, title_id).await
     {
         tracing::warn!(title_id, %error, "cannot materialize alias ranges after refresh");
+    }
+    if let Some(snapshot) = snapshot.as_ref()
+        && let Err(error) =
+            crate::library::progress::mark_newly_available(state, title_id, snapshot).await
+    {
+        tracing::warn!(title_id, %error, "cannot auto-mark newly available chapters after refresh");
     }
 
     Ok((results, metadata, auth_errors))
