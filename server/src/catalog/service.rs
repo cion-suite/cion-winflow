@@ -290,7 +290,7 @@ pub async fn get_title(
             .map(|descriptor| (descriptor.code.to_owned(), descriptor.lang))
             .collect()
     };
-    let chapters = chapters::title_chapters(pool, &info, &source_langs, view_lang).await?;
+    let chapters = chapters::title_chapters(pool, &info, &source_langs, view_lang, user_id).await?;
     let aliases = links::load_aliases(pool, title_id).await?;
     let read_keys = sqlx::query_scalar::<_, String>(
         "SELECT chapter_key FROM chapter_reads WHERE user_id = ? AND title_id = ?",

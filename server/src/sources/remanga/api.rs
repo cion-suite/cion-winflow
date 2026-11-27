@@ -1,11 +1,14 @@
 use reqwest::Url;
 
+use crate::source_auth::SourceAuth;
 use crate::sources::config::url_allowed;
 use crate::sources::dto::{
     ExternalId, SearchPage, SearchRequest, SourceChapter, SourceContent, SourceTitle,
 };
 use crate::sources::error::SourceError;
-use crate::sources::http::{AdapterCtx, endpoint_url, get_text};
+use crate::sources::http::{
+    AdapterCtx, auth_headers as build_auth_headers, endpoint_url, get_text, header_pairs,
+};
 
 use super::config::{CODE, RemangaConfig};
 use super::parse;
@@ -20,6 +23,9 @@ pub struct Remanga {
     config: RemangaConfig,
     /// `base_url` API плюс site и CDN: один allowlist на все исходящие картинки.
     allowlist: crate::sources::config::HostAllowlist,
+    /// Хосты, которым можно отдавать сессионные заголовки: API и сайт.
+    /// CDN картинок сюда не входит.
+    auth_hosts: crate::sources::config::HostAllowlist,
 }
 
 impl Remanga {
@@ -38,10 +44,25 @@ impl Remanga {
         let allowlist =
             crate::sources::config::HostAllowlist::new(hosts).map_err(SourceError::Config)?;
 
+        let mut auth_hosts = Vec::new();
+        if let Some(host) = ctx.base_url.host_str() {
+            auth_hosts.push(host.to_owned());
+        }
+        if let Some(host) = config
+            .site()
+            .ok()
+            .and_then(|site| site.host_str().map(str::to_owned))
+        {
+            auth_hosts.push(host);
+        }
+        let auth_hosts =
+            crate::sources::config::HostAllowlist::new(auth_hosts).map_err(SourceError::Config)?;
+
         Ok(Self {
             ctx,
             config,
             allowlist,
+            auth_hosts,
         })
     }
 
@@ -49,7 +70,21 @@ impl Remanga {
         CODE
     }
 
-    pub async fn search(&self, request: SearchRequest) -> Result<SearchPage, SourceError> {
+    /// Учётка уходит только на хосты источника: cookie Remanga не должна
+    /// попадать на `*.reimg.org` и другие CDN.
+    pub fn auth_headers(
+        &self,
+        auth: Option<&SourceAuth>,
+        url: &Url,
+    ) -> Vec<(&'static str, String)> {
+        build_auth_headers(auth, url, &self.auth_hosts)
+    }
+
+    pub async fn search(
+        &self,
+        request: SearchRequest,
+        auth: Option<&SourceAuth>,
+    ) -> Result<SearchPage, SourceError> {
         let query = request.query.trim();
         if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
             return Err(SourceError::BadFilter(format!(
@@ -73,12 +108,19 @@ impl Remanga {
             .append_pair("query", query)
             .append_pair("page", &page.to_string());
 
-        let raw = get_text(&self.ctx, url, &[("Accept", "application/json")]).await?;
+        let base = [("Accept", "application/json")];
+        let auth = self.auth_headers(auth, &url);
+        let headers = header_pairs(&base, &auth);
+        let raw = get_text(&self.ctx, url, &headers).await?;
         parse::parse_search(&raw)
     }
 
-    pub async fn title(&self, external_id: &ExternalId) -> Result<SourceTitle, SourceError> {
-        let raw = self.title_raw(external_id).await?;
+    pub async fn title(
+        &self,
+        external_id: &ExternalId,
+        auth: Option<&SourceAuth>,
+    ) -> Result<SourceTitle, SourceError> {
+        let raw = self.title_raw(external_id, auth).await?;
         let mut title = parse::parse_title(&raw)?;
         title.lang = Some(self.config.language.clone());
         Ok(title)
@@ -87,11 +129,17 @@ impl Remanga {
     pub async fn chapters(
         &self,
         external_id: &ExternalId,
+        auth: Option<&SourceAuth>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
-        let raw = self.title_raw(external_id).await?;
+        let raw = self.title_raw(external_id, auth).await?;
         let branches = parse::parse_branches(&raw)?;
         if branches.is_empty() {
-            return Err(SourceError::NotFound);
+            // Пустой список у Remanga тоже может означать скрытый тайтл.
+            return Err(if auth.is_none() {
+                SourceError::AuthMaybeRequired
+            } else {
+                SourceError::NotFound
+            });
         }
 
         let multi_branch = branches.len() > 1;
@@ -111,7 +159,10 @@ impl Remanga {
                     url.query_pairs_mut().append_pair("page", cursor);
                 }
 
-                let raw = get_text(&self.ctx, url, &[("Accept", "application/json")]).await?;
+                let base = [("Accept", "application/json")];
+                let auth_headers = self.auth_headers(auth, &url);
+                let headers = header_pairs(&base, &auth_headers);
+                let raw = get_text(&self.ctx, url, &headers).await?;
                 let page = parse::parse_chapters(&raw, &self.config.language, group.as_deref())?;
                 chapters.extend(page.items);
 
@@ -132,14 +183,27 @@ impl Remanga {
         Ok(chapters)
     }
 
-    pub async fn content(&self, chapter: &SourceChapter) -> Result<SourceContent, SourceError> {
+    pub async fn content(
+        &self,
+        chapter: &SourceChapter,
+        auth: Option<&SourceAuth>,
+    ) -> Result<SourceContent, SourceError> {
         let mut url = endpoint_url(&self.ctx, "/api/v2/titles/chapters/")?;
         url.set_path(&format!(
             "/api/v2/titles/chapters/{}/",
             chapter.external_id.as_str()
         ));
 
-        let raw = get_text(&self.ctx, url, &[("Accept", "application/json")]).await?;
+        let base = [("Accept", "application/json")];
+        let auth_headers = self.auth_headers(auth, &url);
+        let headers = header_pairs(&base, &auth_headers);
+        let raw = match get_text(&self.ctx, url, &headers).await {
+            // Без входа Remanga может отдать 404 вместо 401 для 18+ главы.
+            Err(SourceError::NotFound) if auth.is_none() => {
+                return Err(SourceError::AuthMaybeRequired);
+            }
+            other => other?,
+        };
         let content = parse::parse_content(&raw)?;
 
         // Известный тип не должен расходиться с фактическим ответом
@@ -162,6 +226,7 @@ impl Remanga {
     pub async fn text(
         &self,
         _chapter: &SourceChapter,
+        _auth: Option<&SourceAuth>,
     ) -> Result<crate::sources::dto::SourceText, SourceError> {
         Err(SourceError::UnsupportedCapability)
     }
@@ -191,10 +256,21 @@ impl Remanga {
         }
     }
 
-    async fn title_raw(&self, external_id: &ExternalId) -> Result<String, SourceError> {
+    async fn title_raw(
+        &self,
+        external_id: &ExternalId,
+        auth: Option<&SourceAuth>,
+    ) -> Result<String, SourceError> {
         let mut url = endpoint_url(&self.ctx, "/api/v2/titles/")?;
         url.set_path(&format!("/api/v2/titles/{}/", external_id.as_str()));
-        get_text(&self.ctx, url, &[("Accept", "application/json")]).await
+        let base = [("Accept", "application/json")];
+        let auth_headers = self.auth_headers(auth, &url);
+        let headers = header_pairs(&base, &auth_headers);
+        match get_text(&self.ctx, url, &headers).await {
+            // 18+ и закрытые тайтлы Remanga скрывает за 404, а не 401.
+            Err(SourceError::NotFound) if auth.is_none() => Err(SourceError::AuthMaybeRequired),
+            other => other,
+        }
     }
 
     fn resolve_reference(&self, reference: &str) -> Result<Url, SourceError> {

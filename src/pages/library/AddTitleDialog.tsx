@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { SearchIcon } from "lucide-react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 
 import {
   sourceCoverUrl,
@@ -9,6 +9,7 @@ import {
   useErrorText,
   type DiscoverItem,
 } from "@/api";
+import { apiErrorKey, requiresSourceAccount } from "@/lib/apiErrors";
 import { useT } from "@/lib/i18n";
 import { titlePath } from "@/lib/routes";
 import { CoverImage } from "@/ui/CoverImage";
@@ -223,14 +224,25 @@ export function AddTitleDialog({ open, onOpenChange }: AddTitleDialogProps) {
 
         {sourceErrors.length > 0 && (
           <div className="flex flex-col gap-1">
-            {sourceErrors.map((error) => (
-              <p
-                key={`${error.code}:${error.message}`}
-                className="text-xs text-muted-foreground"
-              >
-                {t("library.sourceUnavailable", { source: error.source_name })}
-              </p>
-            ))}
+            {sourceErrors.map((sourceError) => {
+              const key = apiErrorKey(sourceError.error_code);
+              return (
+                <p
+                  key={`${sourceError.code}:${sourceError.message}`}
+                  className="text-xs text-muted-foreground"
+                >
+                  {sourceError.source_name}: {key ? t(key) : sourceError.message}
+                  {requiresSourceAccount(sourceError.error_code) && (
+                    <>
+                      {" "}
+                      <Link className="underline" to="/settings">
+                        {t("settingsPage.tabs.sources")}
+                      </Link>
+                    </>
+                  )}
+                </p>
+              );
+            })}
           </div>
         )}
       </DialogContent>

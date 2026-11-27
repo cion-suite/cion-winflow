@@ -17,9 +17,10 @@ use crate::{
     auth::session::{self, CurrentUser},
     error::AppError,
     extract::{ApiJson, ApiPath, ApiQuery},
+    source_auth::{SourceAuth, service as source_auth_service},
     sources::{
         CoverSize, ExternalId, SourceCovers, SourceKind,
-        http::{IMAGE_BODY_LIMIT, fetch_bytes},
+        http::{IMAGE_BODY_LIMIT, fetch_bytes, header_pairs},
     },
     state::AppState,
 };
@@ -392,7 +393,7 @@ pub async fn fetch_source_covers(
 ) -> Result<Json<SourceCoversResponse>, AppError> {
     user.require_admin()?;
     Ok(Json(
-        refresh_source_covers(&state, title_id, input.replace_manual).await?,
+        refresh_source_covers(&state, title_id, input.replace_manual, user.id).await?,
     ))
 }
 
@@ -448,6 +449,7 @@ pub async fn refresh_source_covers(
     state: &AppState,
     title_id: i64,
     replace_manual: bool,
+    user_id: i64,
 ) -> Result<SourceCoversResponse, AppError> {
     let (preferred_source_id, lang) = sqlx::query_as::<_, (Option<i64>, Option<String>)>(
         "SELECT preferred_source_id, lang FROM titles WHERE id = ?",
@@ -504,6 +506,18 @@ pub async fn refresh_source_covers(
         };
         drop(runtime);
 
+        let auth = match source_auth_service::resolve(state, user_id, entry.source_id).await {
+            Ok(auth) => auth,
+            Err(error) => {
+                response.errors.push(source_cover_error(
+                    &entry.code,
+                    error.code(),
+                    &error.to_string(),
+                ));
+                continue;
+            }
+        };
+
         let external_id = match ExternalId::new(entry.external_id.clone()) {
             Ok(external_id) => external_id,
             Err(error) => {
@@ -516,7 +530,7 @@ pub async fn refresh_source_covers(
             }
         };
 
-        let source_title = match adapter.title(&external_id).await {
+        let source_title = match adapter.title(&external_id, auth.as_ref()).await {
             Ok(source_title) => source_title,
             Err(error) => {
                 response.errors.push(source_cover_error(
@@ -546,7 +560,10 @@ pub async fn refresh_source_covers(
                 &adapter,
                 size,
                 reference,
-                SourceCoverMode::Refresh { replace_manual },
+                CoverWriteCtx {
+                    mode: SourceCoverMode::Refresh { replace_manual },
+                    auth: auth.as_ref(),
+                },
             )
             .await
             {
@@ -598,6 +615,7 @@ pub async fn import_source_covers(
     source_id: i64,
     adapter: &SourceKind,
     covers: &SourceCovers,
+    auth: Option<&SourceAuth>,
 ) -> i64 {
     if covers.is_empty() {
         return 0;
@@ -640,7 +658,10 @@ pub async fn import_source_covers(
             adapter,
             size,
             reference,
-            SourceCoverMode::FillMissing,
+            CoverWriteCtx {
+                mode: SourceCoverMode::FillMissing,
+                auth,
+            },
         )
         .await
         {
@@ -684,6 +705,13 @@ enum CoverWrite {
     Kept,
 }
 
+/// Режим записи и учётка идут вместе: они не меняются между размерами.
+#[derive(Debug, Clone, Copy)]
+struct CoverWriteCtx<'a> {
+    mode: SourceCoverMode,
+    auth: Option<&'a SourceAuth>,
+}
+
 async fn store_source_cover(
     state: &AppState,
     title_id: i64,
@@ -691,16 +719,16 @@ async fn store_source_cover(
     adapter: &SourceKind,
     size: CoverSize,
     reference: &str,
-    mode: SourceCoverMode,
+    ctx: CoverWriteCtx<'_>,
 ) -> Result<CoverWrite, AppError> {
-    let processed = download_source_cover(state, adapter, size, reference).await?;
+    let processed = download_source_cover(state, adapter, size, reference, ctx.auth).await?;
 
     // Скачивание и декодирование — вне лока; сверка с ручной загрузкой
     // и запись файла со строкой — под локом (title, size).
     let lock = state.cover_lock(title_id, size);
     let stored = {
         let _guard = lock.lock().await;
-        store_source_cover_locked(state, title_id, source_id, size, &processed, mode).await
+        store_source_cover_locked(state, title_id, source_id, size, &processed, ctx.mode).await
     };
     state.release_cover_lock(title_id, size);
     stored
@@ -711,8 +739,11 @@ async fn download_source_cover(
     adapter: &SourceKind,
     size: CoverSize,
     reference: &str,
+    auth: Option<&SourceAuth>,
 ) -> Result<ProcessedCover, AppError> {
     let url = adapter.resolve_cover(reference)?;
+    let signed = adapter.auth_headers(auth, &url);
+    let headers = header_pairs(&[], &signed);
 
     let bytes = {
         let _permit = state
@@ -721,7 +752,7 @@ async fn download_source_cover(
             .acquire_owned()
             .await
             .map_err(|_| AppError::Task)?;
-        let response = fetch_bytes(&state.image_client, url, &[], IMAGE_BODY_LIMIT).await?;
+        let response = fetch_bytes(&state.image_client, url, &headers, IMAGE_BODY_LIMIT).await?;
         if response.status != 200 {
             return Err(AppError::bad_gateway(
                 "source_upstream_failed",

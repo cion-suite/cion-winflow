@@ -1,5 +1,7 @@
 #![allow(dead_code)] // каждый тест использует своё подмножество helpers
 
+pub mod remanga;
+
 use std::net::SocketAddr;
 
 use axum::{

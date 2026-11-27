@@ -82,7 +82,7 @@ pub async fn attach_source(
     ApiJson(input): ApiJson<AttachInput>,
 ) -> Result<Json<ImportResponse>, AppError> {
     user.require_admin()?;
-    Ok(Json(links::attach(&state, title_id, input).await?))
+    Ok(Json(links::attach(&state, user.id, title_id, input).await?))
 }
 
 pub async fn detach_source(

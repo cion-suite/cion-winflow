@@ -16,6 +16,10 @@ pub enum SourceError {
     NotFound,
     #[error("authentication is required at source")]
     AuthRequired,
+    /// 404 без учётки у источника, который скрывает часть тайтлов без входа
+    /// (Remanga и 18+ тайтлы). С учёткой это тот же 404, но окончательный.
+    #[error("authentication may be required at source")]
+    AuthMaybeRequired,
     /// 403 от сайта: чаще всего Cloudflare или блокировка по региону.
     #[error("source blocked the request")]
     Blocked,
@@ -51,7 +55,7 @@ impl SourceError {
             }
             Self::InvalidExternalId => "invalid_external_id",
             Self::NotFound => "not_found",
-            Self::AuthRequired => "auth_required",
+            Self::AuthRequired | Self::AuthMaybeRequired => "auth_required",
             Self::Blocked => "blocked",
             Self::RateLimited { .. } => "rate_limited",
             Self::Http { .. } | Self::Redirect { .. } | Self::Network => "upstream_failed",
@@ -81,48 +85,67 @@ impl SourceError {
 
 impl From<SourceError> for AppError {
     fn from(error: SourceError) -> Self {
-        match error {
-            SourceError::UnsupportedKind(kind) => Self::bad_request(
+        // Без контекста учётки считаем, что её не было: это безопаснее, чем
+        // показать «учётка отклонена» пользователю, который её не подключал.
+        error.into_app(false)
+    }
+}
+
+impl SourceError {
+    /// Маппинг с учётом того, была ли учётка у действующего пользователя.
+    /// Один и тот же 401/404 означает разные вещи: «подключите аккаунт» и
+    /// «сохранённый аккаунт отклонён». HTTP 401 наружу не отдаём никогда:
+    /// фронтенд принял бы его за истёкшую сессию и разлогинил пользователя.
+    pub fn into_app(self, auth_present: bool) -> AppError {
+        match self {
+            Self::AuthRequired if auth_present => {
+                AppError::bad_gateway("source_auth_invalid", "source rejected the saved account")
+            }
+            Self::AuthRequired => AppError::forbidden(
+                "source_auth_not_configured",
+                "source requires an account; connect it in settings",
+            ),
+            // С учёткой неоднозначный 404 становится окончательным.
+            Self::AuthMaybeRequired if auth_present => {
+                AppError::not_found("source_not_found", "not found at source")
+            }
+            Self::AuthMaybeRequired => AppError::forbidden(
+                "source_auth_maybe_required",
+                "the title may require an account at this source",
+            ),
+            Self::UnsupportedKind(kind) => AppError::bad_request(
                 "source_unsupported_kind",
                 format!("source does not support kind `{kind}`"),
             ),
-            SourceError::UnsupportedCapability => Self::bad_request(
+            Self::UnsupportedCapability => AppError::bad_request(
                 "source_bad_request",
                 "source does not support this operation",
             ),
-            SourceError::BadFilter(message) => Self::bad_request("source_bad_request", message),
-            SourceError::InvalidExternalId => {
-                Self::bad_request("source_invalid_external_id", "external id is invalid")
+            Self::BadFilter(message) => AppError::bad_request("source_bad_request", message),
+            Self::InvalidExternalId => {
+                AppError::bad_request("source_invalid_external_id", "external id is invalid")
             }
-            SourceError::NotFound => Self::not_found("source_not_found", "not found at source"),
-            SourceError::Locked => Self::forbidden("source_locked", "chapter is locked at source"),
-            SourceError::AuthRequired => {
-                Self::bad_gateway("source_auth_required", "source requires authentication")
-            }
-            SourceError::Blocked => {
-                Self::bad_gateway("source_upstream_failed", "source blocked the request")
-            }
-            SourceError::RateLimited { retry_after_secs } => Self::service_unavailable(
+            Self::NotFound => AppError::not_found("source_not_found", "not found at source"),
+            Self::Locked => AppError::forbidden("source_locked", "chapter is locked at source"),
+            Self::Blocked => AppError::bad_gateway("source_blocked", "source blocked the request"),
+            Self::RateLimited { retry_after_secs } => AppError::service_unavailable(
                 "source_rate_limited",
                 "source rate limited the request",
                 // Без заголовка источника клиенту нужен разумный интервал
                 Some(retry_after_secs.unwrap_or(60)),
             ),
-            SourceError::Http { .. }
-            | SourceError::Redirect { .. }
-            | SourceError::Network
-            | SourceError::CircuitOpen => {
-                Self::bad_gateway("source_upstream_failed", "source request failed")
+            Self::Http { .. } | Self::Redirect { .. } | Self::Network | Self::CircuitOpen => {
+                AppError::bad_gateway("source_upstream_failed", "source request failed")
             }
-            SourceError::Parse { .. } => {
-                Self::bad_gateway("source_parse_failed", "cannot parse source response")
+            Self::Parse { .. } => {
+                AppError::bad_gateway("source_parse_failed", "cannot parse source response")
             }
-            SourceError::Disabled => {
-                Self::service_unavailable("source_disabled", "source is disabled", None)
+            Self::Disabled => {
+                AppError::service_unavailable("source_disabled", "source is disabled", None)
             }
-            SourceError::Config(detail) => {
+            Self::Config(detail) => {
                 tracing::warn!(detail, "source configuration error");
-                Self::service_unavailable(
+                AppError::service_unavailable(
                     "source_disabled",
                     "source configuration is invalid",
                     None,

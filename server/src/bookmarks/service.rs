@@ -29,6 +29,7 @@ use crate::{
     error::AppError,
     library::service::MAX_TABS,
     source_admin::service::{self as source_admin, ImportInput, ImportResponse},
+    source_auth::{SourceAuth, service as source_auth_service},
     sources::{ExternalId, SearchRequest, SourceKind, remanga, text::normalize_name},
     state::AppState,
 };
@@ -60,6 +61,8 @@ pub enum ImportState {
 pub struct ImportErrorDto {
     pub name: String,
     pub message: String,
+    /// Машинный код ошибки API для локализации в UI.
+    pub code: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -122,7 +125,7 @@ impl ImportJob {
         }
     }
 
-    fn record_failure(&mut self, name: &str, message: String) {
+    fn record_failure(&mut self, name: &str, message: String, code: String) {
         self.failed += 1;
         self.processed += 1;
         if self.errors.len() < MAX_ERRORS {
@@ -130,6 +133,7 @@ impl ImportJob {
                 // Название тоже из файла: не храним мегабайты в задании.
                 name: name.chars().take(MAX_ERROR_CHARS).collect(),
                 message: message.chars().take(MAX_ERROR_CHARS).collect(),
+                code,
             });
         } else {
             self.errors_truncated = true;
@@ -241,6 +245,9 @@ struct ImportPlan {
     /// id строки `sources`; по нему ищем уже импортированный entry.
     source_id: i64,
     adapter: SourceKind,
+    /// Учётка инициатора: фоновое задание не имеет сессии, поэтому
+    /// резолвим её один раз при старте.
+    auth: Option<SourceAuth>,
     custom_tab_ids: HashMap<i64, i64>,
     /// Языки источников для группировки глав страницы тайтла.
     source_langs: HashMap<String, &'static str>,
@@ -288,6 +295,9 @@ pub async fn start(
 
     let now = now_unix();
 
+    // Учётка инициатора: импорт идёт в фоне, без сессии.
+    let auth = source_auth_service::resolve(state, user_id, source_id).await?;
+
     let mut job = ImportJob {
         id: new_secret()?,
         sequence: JOB_SEQUENCE.fetch_add(1, Ordering::Relaxed),
@@ -308,7 +318,7 @@ pub async fn start(
     };
     // Строки, которые не разобрались, сразу считаются ошибками задания.
     for message in outcome.invalid {
-        job.record_failure("", message);
+        job.record_failure("", message, "bookmarks_invalid".to_owned());
     }
 
     let job = Arc::new(SyncMutex::new(job));
@@ -321,7 +331,7 @@ pub async fn start(
             Ok(ids) => ids,
             Err(error) => {
                 let mut job = lock(&job);
-                job.record_failure("", error.to_string());
+                job.record_failure("", error.to_string(), error.code().to_owned());
                 job.finish(ImportState::Failed);
                 return Err(error);
             }
@@ -333,6 +343,7 @@ pub async fn start(
         source_code: source_code.to_owned(),
         source_id,
         adapter,
+        auth,
         custom_tab_ids,
         source_langs,
     };
@@ -381,7 +392,11 @@ fn spawn_import(
                     }
                     Err(error) => {
                         tracing::warn!(title = %name, %error, "bookmark import item failed");
-                        lock(&job).record_failure(&name, error.to_string());
+                        lock(&job).record_failure(
+                            &name,
+                            error.to_string(),
+                            error.code().to_owned(),
+                        );
                     }
                 }
             });
@@ -390,7 +405,11 @@ fn spawn_import(
         while let Some(result) = tasks.join_next().await {
             if let Err(error) = result {
                 tracing::error!(%error, "bookmark import task failed");
-                lock(&job).record_failure("", "import task failed".to_owned());
+                lock(&job).record_failure(
+                    "",
+                    "import task failed".to_owned(),
+                    "internal_error".to_owned(),
+                );
             }
         }
 
@@ -504,7 +523,9 @@ async fn import_title(
     match import_via(state, plan, &item.dir).await {
         Ok(response) => Ok((response.title_id, response.title_created)),
         Err(first) if is_missing_at_source(&first) => {
-            let Some(external_id) = find_by_name(&plan.adapter, &item.name).await else {
+            let Some(external_id) =
+                find_by_name(&plan.adapter, &item.name, plan.auth.as_ref()).await
+            else {
                 return Err(first);
             };
             match import_via(state, plan, external_id.as_str()).await {
@@ -558,18 +579,20 @@ async fn import_via_once(
         auto_link,
     };
 
-    match source_admin::import(state, &plan.source_code, input(true)).await {
+    match source_admin::import(state, &plan.source_code, input(true), plan.auth.as_ref()).await {
         // Одинаковое название у разных произведений: автослияние нашло
         // тайтл, к которому уже привязан другой entry этого источника.
         // Создаём отдельный тайтл, не сливая произведения.
         Err(AppError::Conflict {
             code: "source_already_attached",
             ..
-        }) => source_admin::import(state, &plan.source_code, input(false)).await,
+        }) => {
+            source_admin::import(state, &plan.source_code, input(false), plan.auth.as_ref()).await
+        }
         // Та же ситуация, но второй импорт успел вставить entry первым:
         // SQLite сообщает о нарушении уникальности вместо 409.
         Err(error) if is_unique_violation(&error) => {
-            source_admin::import(state, &plan.source_code, input(false)).await
+            source_admin::import(state, &plan.source_code, input(false), plan.auth.as_ref()).await
         }
         // Один пакетный импорт легко упирается в лимит источника. Ждём
         // столько, сколько просит источник, и повторяем один раз.
@@ -580,7 +603,7 @@ async fn import_via_once(
         }) => {
             let wait = retry_after_secs.unwrap_or(5).min(120);
             tokio::time::sleep(Duration::from_secs(wait)).await;
-            source_admin::import(state, &plan.source_code, input(true)).await
+            source_admin::import(state, &plan.source_code, input(true), plan.auth.as_ref()).await
         }
         other => other,
     }
@@ -606,7 +629,11 @@ fn is_busy(error: &AppError) -> bool {
     busy_code || message.contains("locked") || message.contains("busy")
 }
 
-async fn find_by_name(adapter: &SourceKind, name: &str) -> Option<ExternalId> {
+async fn find_by_name(
+    adapter: &SourceKind,
+    name: &str,
+    auth: Option<&SourceAuth>,
+) -> Option<ExternalId> {
     let query = name.trim();
     if query.is_empty() || query.chars().count() > 200 {
         return None;
@@ -618,11 +645,14 @@ async fn find_by_name(adapter: &SourceKind, name: &str) -> Option<ExternalId> {
     let mut cursor = None;
     for _ in 0..3 {
         let page = adapter
-            .search(SearchRequest {
-                query: query.to_owned(),
-                cursor: cursor.take(),
-                filters: Value::Null,
-            })
+            .search(
+                SearchRequest {
+                    query: query.to_owned(),
+                    cursor: cursor.take(),
+                    filters: Value::Null,
+                },
+                auth,
+            )
             .await
             .ok()?;
         if let Some(item) = page.items.into_iter().find(|item| {
@@ -671,7 +701,7 @@ async fn mark_progress(
     }
 
     let title = selection::load_title_info(pool, title_id).await?;
-    let chapters = chapters::title_chapters(pool, &title, source_langs, None).await?;
+    let chapters = chapters::title_chapters(pool, &title, source_langs, None, user_id).await?;
     let mut available: Vec<&TitleChapterDto> = chapters
         .chapters
         .iter()

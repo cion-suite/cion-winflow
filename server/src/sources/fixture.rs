@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use reqwest::Url;
 
+use crate::source_auth::SourceAuth;
 use crate::sources::config::{HostAllowlist, url_allowed};
 use crate::sources::descriptor::{Capability, SourceDescriptor};
 use crate::sources::dto::{
@@ -72,7 +73,11 @@ impl Fixture {
         Ok(Self { ctx, allowlist })
     }
 
-    pub async fn search(&self, request: SearchRequest) -> Result<SearchPage, SourceError> {
+    pub async fn search(
+        &self,
+        request: SearchRequest,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SearchPage, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
         let query = request.query.trim();
         if query.is_empty() {
@@ -97,7 +102,11 @@ impl Fixture {
         })
     }
 
-    pub async fn title(&self, external_id: &ExternalId) -> Result<SourceTitle, SourceError> {
+    pub async fn title(
+        &self,
+        external_id: &ExternalId,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceTitle, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
         if !known_title(external_id) {
             return Err(SourceError::NotFound);
@@ -127,6 +136,7 @@ impl Fixture {
     pub async fn chapters(
         &self,
         external_id: &ExternalId,
+        _auth: Option<&SourceAuth>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
         if !known_title(external_id) {
@@ -157,7 +167,11 @@ impl Fixture {
         ])
     }
 
-    pub async fn content(&self, chapter: &SourceChapter) -> Result<SourceContent, SourceError> {
+    pub async fn content(
+        &self,
+        chapter: &SourceChapter,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceContent, SourceError> {
         CALLS.fetch_add(1, Ordering::SeqCst);
         if chapter.is_locked {
             return Err(SourceError::Locked);
@@ -177,8 +191,21 @@ impl Fixture {
         Ok(SourceContent::Images { pages })
     }
 
-    pub async fn text(&self, _chapter: &SourceChapter) -> Result<SourceText, SourceError> {
+    pub async fn text(
+        &self,
+        _chapter: &SourceChapter,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceText, SourceError> {
         Err(SourceError::UnsupportedCapability)
+    }
+
+    /// Fixture не поддерживает per-user вход.
+    pub fn auth_headers(
+        &self,
+        _auth: Option<&SourceAuth>,
+        _url: &Url,
+    ) -> Vec<(&'static str, String)> {
+        Vec::new()
     }
 
     pub fn resolve_image(&self, image_ref: &str) -> Result<Url, SourceError> {

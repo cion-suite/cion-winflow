@@ -30,6 +30,7 @@ pub use error::SourceError;
 
 use reqwest::Url;
 
+use crate::source_auth::SourceAuth;
 #[cfg(debug_assertions)]
 use crate::sources::fixture::Fixture;
 use crate::sources::mangamir::Mangamir;
@@ -58,56 +59,89 @@ impl SourceKind {
         }
     }
 
-    pub async fn search(&self, request: SearchRequest) -> Result<SearchPage, SourceError> {
+    pub async fn search(
+        &self,
+        request: SearchRequest,
+        auth: Option<&SourceAuth>,
+    ) -> Result<SearchPage, SourceError> {
         match self {
-            Self::Remanga(source) => source.search(request).await,
-            Self::Rumix(source) => source.search(request).await,
-            Self::Mangamir(source) => source.search(request).await,
+            Self::Remanga(source) => source.search(request, auth).await,
+            Self::Rumix(source) => source.search(request, auth).await,
+            Self::Mangamir(source) => source.search(request, auth).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.search(request).await,
+            Self::Fixture(source) => source.search(request, auth).await,
         }
     }
 
-    pub async fn title(&self, external_id: &ExternalId) -> Result<SourceTitle, SourceError> {
+    pub async fn title(
+        &self,
+        external_id: &ExternalId,
+        auth: Option<&SourceAuth>,
+    ) -> Result<SourceTitle, SourceError> {
         match self {
-            Self::Remanga(source) => source.title(external_id).await,
-            Self::Rumix(source) => source.title(external_id).await,
-            Self::Mangamir(source) => source.title(external_id).await,
+            Self::Remanga(source) => source.title(external_id, auth).await,
+            Self::Rumix(source) => source.title(external_id, auth).await,
+            Self::Mangamir(source) => source.title(external_id, auth).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.title(external_id).await,
+            Self::Fixture(source) => source.title(external_id, auth).await,
         }
     }
 
     pub async fn chapters(
         &self,
         external_id: &ExternalId,
+        auth: Option<&SourceAuth>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         match self {
-            Self::Remanga(source) => source.chapters(external_id).await,
-            Self::Rumix(source) => source.chapters(external_id).await,
-            Self::Mangamir(source) => source.chapters(external_id).await,
+            Self::Remanga(source) => source.chapters(external_id, auth).await,
+            Self::Rumix(source) => source.chapters(external_id, auth).await,
+            Self::Mangamir(source) => source.chapters(external_id, auth).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.chapters(external_id).await,
+            Self::Fixture(source) => source.chapters(external_id, auth).await,
         }
     }
 
-    pub async fn content(&self, chapter: &SourceChapter) -> Result<SourceContent, SourceError> {
+    pub async fn content(
+        &self,
+        chapter: &SourceChapter,
+        auth: Option<&SourceAuth>,
+    ) -> Result<SourceContent, SourceError> {
         match self {
-            Self::Remanga(source) => source.content(chapter).await,
-            Self::Rumix(source) => source.content(chapter).await,
-            Self::Mangamir(source) => source.content(chapter).await,
+            Self::Remanga(source) => source.content(chapter, auth).await,
+            Self::Rumix(source) => source.content(chapter, auth).await,
+            Self::Mangamir(source) => source.content(chapter, auth).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.content(chapter).await,
+            Self::Fixture(source) => source.content(chapter, auth).await,
         }
     }
 
-    pub async fn text(&self, chapter: &SourceChapter) -> Result<SourceText, SourceError> {
+    pub async fn text(
+        &self,
+        chapter: &SourceChapter,
+        auth: Option<&SourceAuth>,
+    ) -> Result<SourceText, SourceError> {
         match self {
-            Self::Remanga(source) => source.text(chapter).await,
-            Self::Rumix(source) => source.text(chapter).await,
-            Self::Mangamir(source) => source.text(chapter).await,
+            Self::Remanga(source) => source.text(chapter, auth).await,
+            Self::Rumix(source) => source.text(chapter, auth).await,
+            Self::Mangamir(source) => source.text(chapter, auth).await,
             #[cfg(debug_assertions)]
-            Self::Fixture(source) => source.text(chapter).await,
+            Self::Fixture(source) => source.text(chapter, auth).await,
+        }
+    }
+
+    /// Заголовки учётки для конкретного URL. Пусто у источников без per-user
+    /// входа и на чужих хостах (CDN картинок).
+    pub fn auth_headers(
+        &self,
+        auth: Option<&SourceAuth>,
+        url: &Url,
+    ) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Remanga(source) => source.auth_headers(auth, url),
+            Self::Rumix(source) => source.auth_headers(auth, url),
+            Self::Mangamir(source) => source.auth_headers(auth, url),
+            #[cfg(debug_assertions)]
+            Self::Fixture(source) => source.auth_headers(auth, url),
         }
     }
 

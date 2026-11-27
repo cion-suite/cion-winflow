@@ -1,5 +1,6 @@
 use reqwest::Url;
 
+use crate::source_auth::SourceAuth;
 use crate::sources::config::{HostAllowlist, url_allowed};
 use crate::sources::dto::{
     ExternalId, SearchPage, SearchRequest, SourceChapter, SourceContent, SourceText, SourceTitle,
@@ -51,7 +52,20 @@ impl Mangamir {
         CODE
     }
 
-    pub async fn search(&self, request: SearchRequest) -> Result<SearchPage, SourceError> {
+    /// Mangamir не поддерживает per-user вход: сессионных заголовков нет.
+    pub fn auth_headers(
+        &self,
+        _auth: Option<&SourceAuth>,
+        _url: &Url,
+    ) -> Vec<(&'static str, String)> {
+        Vec::new()
+    }
+
+    pub async fn search(
+        &self,
+        request: SearchRequest,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SearchPage, SourceError> {
         let query = request.query.trim();
         if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
             return Err(SourceError::BadFilter(format!(
@@ -67,7 +81,11 @@ impl Mangamir {
         parse::parse_search(&raw, &self.ctx.base_url)
     }
 
-    pub async fn title(&self, external_id: &ExternalId) -> Result<SourceTitle, SourceError> {
+    pub async fn title(
+        &self,
+        external_id: &ExternalId,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceTitle, SourceError> {
         let raw = self.page(external_id).await?;
         parse::parse_title(&raw, &self.ctx.base_url, external_id, &self.config.language)
     }
@@ -75,6 +93,7 @@ impl Mangamir {
     pub async fn chapters(
         &self,
         external_id: &ExternalId,
+        _auth: Option<&SourceAuth>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         let url = self.title_url(external_id)?;
         let page = get_text_with_cookies(&self.ctx, url.clone(), &self.request_headers()).await?;
@@ -164,7 +183,11 @@ impl Mangamir {
         Ok(chapters)
     }
 
-    pub async fn content(&self, chapter: &SourceChapter) -> Result<SourceContent, SourceError> {
+    pub async fn content(
+        &self,
+        chapter: &SourceChapter,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceContent, SourceError> {
         let reference = chapter
             .external_url
             .as_deref()
@@ -212,7 +235,11 @@ impl Mangamir {
         Ok(content)
     }
 
-    pub async fn text(&self, _chapter: &SourceChapter) -> Result<SourceText, SourceError> {
+    pub async fn text(
+        &self,
+        _chapter: &SourceChapter,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceText, SourceError> {
         Err(SourceError::UnsupportedCapability)
     }
 

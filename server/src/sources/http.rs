@@ -14,6 +14,8 @@ use reqwest::{
 };
 use tokio::sync::Semaphore;
 
+use crate::source_auth::SourceAuth;
+use crate::sources::config::{HostAllowlist, url_allowed};
 use crate::sources::error::SourceError;
 
 pub const METADATA_BODY_LIMIT: usize = 5 * 1024 * 1024;
@@ -386,6 +388,42 @@ pub struct FetchResponse {
     pub status: u16,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
+}
+
+/// Заголовки учётки для запроса к `url`. Значения добавляются только на
+/// хосты самого источника: сессионная cookie не должна уходить на сторонние
+/// CDN картинок. Значения владеемые, потому что `Authorization` может
+/// требовать префикс `Bearer`.
+pub fn auth_headers(
+    auth: Option<&SourceAuth>,
+    url: &Url,
+    source_hosts: &HostAllowlist,
+) -> Vec<(&'static str, String)> {
+    let Some(auth) = auth else {
+        return Vec::new();
+    };
+    if !url_allowed(url, source_hosts) {
+        return Vec::new();
+    }
+
+    let mut headers = Vec::new();
+    if let Some(value) = auth.authorization() {
+        headers.push(("Authorization", value));
+    }
+    if let Some(cookie) = auth.cookie() {
+        headers.push(("Cookie", cookie.to_owned()));
+    }
+    headers
+}
+
+/// Сливает статические заголовки адаптера с владеемыми заголовками учётки.
+pub fn header_pairs<'a>(
+    base: &[(&'a str, &'a str)],
+    auth: &'a [(&'static str, String)],
+) -> Vec<(&'a str, &'a str)> {
+    let mut pairs: Vec<(&'a str, &'a str)> = base.to_vec();
+    pairs.extend(auth.iter().map(|(name, value)| (*name, value.as_str())));
+    pairs
 }
 
 /// Один запрос без ретраев: статус возвращается вызывающему,

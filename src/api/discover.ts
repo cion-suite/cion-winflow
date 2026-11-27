@@ -21,9 +21,12 @@ export type DiscoverItem = {
 };
 
 export type DiscoverSourceError = {
+  /** Код источника, у которого произошла ошибка. */
   code: string;
   source_name: string;
   message: string;
+  /** Машинный код ошибки API для локализации. */
+  error_code: string;
 };
 
 export type DiscoverSearchResponse = {

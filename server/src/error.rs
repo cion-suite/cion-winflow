@@ -71,6 +71,35 @@ pub enum AppError {
 }
 
 impl AppError {
+    /// Машинный код для ответа и для DTO, где ошибка источника должна
+    /// дойти до клиента рядом с текстом (импорт, sync, discovery).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Unauthorized => "unauthorized",
+            Self::InvalidCredentials { .. } => "invalid_credentials",
+            Self::Forbidden { code, .. }
+            | Self::BadRequest { code, .. }
+            | Self::Conflict { code, .. }
+            | Self::NotFound { code, .. }
+            | Self::BadGateway { code, .. }
+            | Self::ServiceUnavailable { code, .. }
+            | Self::Unprocessable { code, .. } => code,
+            Self::RateLimited { .. } => "rate_limited",
+            Self::Database(_)
+            | Self::Io(_)
+            | Self::PasswordHash
+            | Self::Random
+            | Self::Task
+            | Self::Internal => "internal_error",
+        }
+    }
+
+    /// Короткий текст для DTO, где ошибка источника возвращается рядом с
+    /// машинным кодом. Полное сообщение может быть длиннее лимита задания.
+    pub fn short_message(&self) -> String {
+        self.to_string().chars().take(200).collect()
+    }
+
     pub fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
         Self::BadRequest {
             code,

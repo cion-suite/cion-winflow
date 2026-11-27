@@ -24,11 +24,14 @@ async fn remanga_search_title_chapters_content() {
     .expect("adapter");
 
     let page = adapter
-        .search(SearchRequest {
-            query: "naruto".to_owned(),
-            cursor: None,
-            filters: Value::Null,
-        })
+        .search(
+            SearchRequest {
+                query: "naruto".to_owned(),
+                cursor: None,
+                filters: Value::Null,
+            },
+            None,
+        )
         .await
         .expect("search");
     assert!(!page.items.is_empty(), "search must return items");
@@ -41,7 +44,10 @@ async fn remanga_search_title_chapters_content() {
     }
 
     let first = &page.items[0];
-    let title = adapter.title(&first.external_id).await.expect("title");
+    let title = adapter
+        .title(&first.external_id, None)
+        .await
+        .expect("title");
     assert!(!title.name.is_empty());
 
     // Все варианты обложки из ответа `titles/{dir}` разрешаются в URL.
@@ -54,7 +60,7 @@ async fn remanga_search_title_chapters_content() {
     }
 
     let chapters = adapter
-        .chapters(&first.external_id)
+        .chapters(&first.external_id, None)
         .await
         .expect("chapters");
     assert!(!chapters.is_empty(), "title must have chapters");
@@ -64,7 +70,7 @@ async fn remanga_search_title_chapters_content() {
         .find(|chapter| !chapter.is_locked)
         .expect("at least one unlocked chapter");
 
-    let content = adapter.content(chapter).await.expect("content");
+    let content = adapter.content(chapter, None).await.expect("content");
     match content {
         SourceContent::Images { pages } => assert!(!pages.is_empty()),
         other => panic!("expected images, got {other:?}"),

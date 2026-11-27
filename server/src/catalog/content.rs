@@ -3,15 +3,21 @@
 
 use std::collections::HashMap;
 
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Extension, State},
+};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::{
-    auth::session::now_unix,
+    auth::session::{CurrentUser, now_unix},
     error::AppError,
     extract::{ApiPath, ApiQuery},
-    sources::{ChapterKind, ContentKind, ExternalId, SourceChapter, SourceContent, SourcePage},
+    source_auth::service as source_auth_service,
+    sources::{
+        ChapterKind, ContentKind, ExternalId, SourceChapter, SourceContent, SourceError, SourcePage,
+    },
     state::AppState,
 };
 
@@ -68,20 +74,29 @@ pub struct ContentQuery {
 
 pub async fn canonical_content(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     ApiPath((title_id, chapter_key)): ApiPath<(i64, String)>,
     ApiQuery(query): ApiQuery<ContentQuery>,
 ) -> Result<Json<ContentResponse>, AppError> {
     let view_lang = super::service::normalize_lang(query.lang.as_deref());
     Ok(Json(
-        canonical(&state, title_id, &chapter_key, view_lang.as_deref()).await?,
+        canonical(
+            &state,
+            user.id,
+            title_id,
+            &chapter_key,
+            view_lang.as_deref(),
+        )
+        .await?,
     ))
 }
 
 pub async fn direct_content(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     ApiPath(chapter_id): ApiPath<i64>,
 ) -> Result<Json<ContentResponse>, AppError> {
-    Ok(Json(direct(&state, chapter_id).await?))
+    Ok(Json(direct(&state, user.id, chapter_id).await?))
 }
 
 /// Код источника → язык дескриптора для **включённых** источников тайтла.
@@ -111,6 +126,7 @@ async fn title_source_langs(
 
 pub async fn canonical(
     state: &AppState,
+    user_id: i64,
     title_id: i64,
     requested_key: &str,
     view_lang: Option<&str>,
@@ -159,11 +175,12 @@ pub async fn canonical(
     let ordered = selection::order(candidates, title.preferred_source_id, &ranks, now);
     let first_source = source_ref(&ordered[0]);
     let mut fallback_reason: Option<&'static str> = None;
-    let mut last_error = None;
+    let mut last_error: Option<AppError> = None;
     let mut any_disabled = false;
     let mut attempted = false;
     let mut any_locked = false;
     let mut any_missing = false;
+    let mut any_auth_required = false;
 
     for (index, candidate) in ordered.iter().enumerate() {
         let runtime = {
@@ -183,7 +200,7 @@ pub async fn canonical(
                 if index == 0 {
                     fallback_reason.get_or_insert(error.reason());
                 }
-                last_error = Some(error);
+                last_error = Some(error.into());
                 continue;
             }
         };
@@ -207,8 +224,29 @@ pub async fn canonical(
             AvailabilityView::Available | AvailabilityView::Unknown => {}
         }
 
-        // Уже известный список страниц: сеть не нужна
-        if let Some(content) = cached_content(&state.pool, candidate).await? {
+        let auth = source_auth_service::resolve(state, user_id, candidate.source_id).await?;
+        let auth_present = auth.is_some();
+
+        // Помеченную главу без собственной учётки не открываем: иначе
+        // пользователь увидит чужой контент или «пустую» страницу.
+        if candidate.auth_required && !auth_present {
+            any_auth_required = true;
+            if index == 0 {
+                fallback_reason.get_or_insert("auth_required");
+            }
+            continue;
+        }
+
+        let verified = if candidate.auth_required {
+            source_auth_service::verified_recently(&state.pool, user_id, candidate.source_id, now)
+                .await?
+        } else {
+            true
+        };
+
+        // Уже известный список страниц: сеть не нужна. Помеченную главу
+        // отдаём из кэша только при свежей проверке учётки.
+        if verified && let Some(content) = cached_content(&state.pool, candidate).await? {
             return Ok(response(
                 candidate,
                 &canonical_key,
@@ -219,9 +257,43 @@ pub async fn canonical(
 
         attempted = true;
         let source_chapter = source_chapter(candidate)?;
-        match adapter.content(&source_chapter).await {
+
+        if candidate.auth_required {
+            match adapter.content(&source_chapter, auth.as_ref()).await {
+                Ok(content) => {
+                    source_auth_service::mark_verified(&state.pool, user_id, candidate.source_id)
+                        .await?;
+                    let content = persist_success(state, candidate, content, true).await?;
+                    return Ok(response(
+                        candidate,
+                        &canonical_key,
+                        content,
+                        fallback(index, first_source, fallback_reason),
+                    ));
+                }
+                Err(error) => {
+                    let (kind, mapped) =
+                        classify_failure(state, user_id, candidate, error, true).await?;
+                    note_failure(kind, index, &mut fallback_reason);
+                    match kind {
+                        ContentFailure::Locked => any_locked = true,
+                        ContentFailure::Missing => any_missing = true,
+                        ContentFailure::AuthRequired | ContentFailure::AuthInvalid => {
+                            any_auth_required = true;
+                        }
+                        _ => {}
+                    }
+                    last_error = Some(mapped);
+                }
+            }
+            continue;
+        }
+
+        // Обычная глава: сначала без учётки — публичный контент не должен
+        // зависеть от аккаунта. При 401/404 и наличии учётки повторяем.
+        match adapter.content(&source_chapter, None).await {
             Ok(content) => {
-                let content = persist_success(state, candidate, content).await?;
+                let content = persist_success(state, candidate, content, false).await?;
                 return Ok(response(
                     candidate,
                     &canonical_key,
@@ -229,31 +301,60 @@ pub async fn canonical(
                     fallback(index, first_source, fallback_reason),
                 ));
             }
-            Err(error) if matches!(&error, crate::sources::SourceError::Locked) => {
-                any_locked = true;
-                mark_availability(&state.pool, candidate, "locked").await?;
-                if index == 0 {
-                    fallback_reason.get_or_insert("locked");
+            Err(error) if auth_present && retry_with_auth(&error) => {
+                match adapter.content(&source_chapter, auth.as_ref()).await {
+                    Ok(content) => {
+                        source_auth_service::mark_verified(
+                            &state.pool,
+                            user_id,
+                            candidate.source_id,
+                        )
+                        .await?;
+                        let content = persist_success(state, candidate, content, true).await?;
+                        return Ok(response(
+                            candidate,
+                            &canonical_key,
+                            content,
+                            fallback(index, first_source, fallback_reason),
+                        ));
+                    }
+                    Err(error) => {
+                        let (kind, mapped) =
+                            classify_failure(state, user_id, candidate, error, true).await?;
+                        note_failure(kind, index, &mut fallback_reason);
+                        match kind {
+                            ContentFailure::Locked => any_locked = true,
+                            ContentFailure::Missing => any_missing = true,
+                            ContentFailure::AuthRequired | ContentFailure::AuthInvalid => {
+                                any_auth_required = true;
+                            }
+                            _ => {}
+                        }
+                        last_error = Some(mapped);
+                    }
                 }
-                last_error = Some(error);
-            }
-            Err(error) if matches!(&error, crate::sources::SourceError::NotFound) => {
-                mark_availability(&state.pool, candidate, "missing").await?;
-                if index == 0 {
-                    fallback_reason.get_or_insert("missing");
-                }
-                last_error = Some(error);
             }
             Err(error) => {
-                if index == 0 && fallback_reason.is_none() {
-                    fallback_reason = Some(error.reason());
+                let (kind, mapped) =
+                    classify_failure(state, user_id, candidate, error, false).await?;
+                note_failure(kind, index, &mut fallback_reason);
+                match kind {
+                    ContentFailure::Locked => any_locked = true,
+                    ContentFailure::Missing => any_missing = true,
+                    ContentFailure::AuthRequired | ContentFailure::AuthInvalid => {
+                        any_auth_required = true;
+                    }
+                    _ => {}
                 }
-                last_error = Some(error);
+                last_error = Some(mapped);
             }
         }
     }
 
     if !attempted {
+        if any_auth_required {
+            return Err(source_auth_service::auth_not_configured());
+        }
         if any_locked {
             return Err(AppError::forbidden(
                 "source_locked",
@@ -268,7 +369,7 @@ pub async fn canonical(
         }
     }
     if let Some(error) = last_error {
-        return Err(error.into());
+        return Err(error);
     }
     if any_disabled {
         return Err(crate::sources::SourceError::Disabled.into());
@@ -279,13 +380,17 @@ pub async fn canonical(
     ))
 }
 
-pub async fn direct(state: &AppState, chapter_id: i64) -> Result<ContentResponse, AppError> {
+pub async fn direct(
+    state: &AppState,
+    user_id: i64,
+    chapter_id: i64,
+) -> Result<ContentResponse, AppError> {
     let candidate = sqlx::query_as::<_, ChapterCandidate>(
         "SELECT ch.id AS chapter_id, ch.chapter_key, ch.external_id, ch.number_text, \
                 ch.number_milli, ch.volume, ch.chapter_kind, ch.content_kind, ch.name, \
-                ch.group_name, ch.language, ch.is_locked, ch.availability, \
+                ch.group_name, ch.language, ch.is_locked, ch.auth_required, ch.availability, \
                 ch.availability_checked_at, ch.page_count, ch.ordinal_site, ch.external_url, \
-                ch.embed_url, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
+                ch.embed_url, ch.published_at, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
                 s.code AS source_code, s.name AS source_name, (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled \
          FROM chapters ch \
          JOIN source_entries e ON e.id = ch.source_entry_id \
@@ -313,31 +418,145 @@ pub async fn direct(state: &AppState, chapter_id: i64) -> Result<ContentResponse
     .ok_or(crate::sources::SourceError::Disabled)?;
     let adapter = runtime.adapter()?.clone();
 
-    if let Some(content) = cached_content(&state.pool, &candidate).await? {
+    let auth = source_auth_service::resolve(state, user_id, candidate.source_id).await?;
+    let auth_present = auth.is_some();
+
+    if candidate.auth_required && !auth_present {
+        return Err(source_auth_service::auth_not_configured());
+    }
+
+    let verified = if candidate.auth_required {
+        source_auth_service::verified_recently(&state.pool, user_id, candidate.source_id, now)
+            .await?
+    } else {
+        true
+    };
+
+    if verified && let Some(content) = cached_content(&state.pool, &candidate).await? {
         return Ok(response(&candidate, &candidate.chapter_key, content, None));
     }
 
     let source_chapter = source_chapter(&candidate)?;
-    match adapter.content(&source_chapter).await {
-        Ok(content) => {
-            let content = persist_success(state, &candidate, content).await?;
-            Ok(response(&candidate, &candidate.chapter_key, content, None))
+
+    let (content, used_auth) = if candidate.auth_required {
+        match adapter.content(&source_chapter, auth.as_ref()).await {
+            Ok(content) => (content, true),
+            Err(error) => return Err(direct_failure(state, user_id, &candidate, error, true).await),
         }
-        Err(crate::sources::SourceError::Locked) => {
-            mark_availability(&state.pool, &candidate, "locked").await?;
-            Err(AppError::forbidden(
-                "source_locked",
-                "chapter is locked at source",
-            ))
+    } else {
+        match adapter.content(&source_chapter, None).await {
+            Ok(content) => (content, false),
+            Err(error) if auth_present && retry_with_auth(&error) => {
+                match adapter.content(&source_chapter, auth.as_ref()).await {
+                    Ok(content) => (content, true),
+                    Err(error) => {
+                        return Err(direct_failure(state, user_id, &candidate, error, true).await);
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(direct_failure(state, user_id, &candidate, error, false).await);
+            }
         }
-        Err(crate::sources::SourceError::NotFound) => {
-            mark_availability(&state.pool, &candidate, "missing").await?;
-            Err(AppError::not_found(
-                "source_not_found",
-                "chapter is missing at source",
-            ))
+    };
+
+    if used_auth {
+        source_auth_service::mark_verified(&state.pool, user_id, candidate.source_id).await?;
+    }
+    let content = persist_success(state, &candidate, content, used_auth).await?;
+    Ok(response(&candidate, &candidate.chapter_key, content, None))
+}
+
+/// Характер ошибки контента. От него зависит, что писать в глобальные
+/// флаги доступности: auth-ошибка одного пользователя не должна помечать
+/// главу закрытой для всех.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentFailure {
+    Locked,
+    Missing,
+    AuthRequired,
+    AuthInvalid,
+    Blocked,
+    Other,
+}
+
+impl ContentFailure {
+    /// Словарь `fallback.reason` для UI (`missing`/`locked`), а не
+    /// `SourceError::reason`, где тот же 404 называется `not_found`.
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Locked => "locked",
+            Self::Missing => "missing",
+            Self::AuthRequired => "auth_required",
+            Self::AuthInvalid => "auth_invalid",
+            Self::Blocked => "blocked",
+            Self::Other => "upstream_failed",
         }
-        Err(error) => Err(error.into()),
+    }
+}
+
+fn retry_with_auth(error: &SourceError) -> bool {
+    matches!(
+        error,
+        SourceError::AuthRequired | SourceError::AuthMaybeRequired | SourceError::NotFound
+    )
+}
+
+fn note_failure(kind: ContentFailure, index: usize, fallback_reason: &mut Option<&'static str>) {
+    if index == 0 {
+        fallback_reason.get_or_insert(kind.reason());
+    }
+}
+
+async fn classify_failure(
+    state: &AppState,
+    user_id: i64,
+    candidate: &ChapterCandidate,
+    error: SourceError,
+    used_auth: bool,
+) -> Result<(ContentFailure, AppError), AppError> {
+    let kind = match &error {
+        SourceError::Locked => ContentFailure::Locked,
+        SourceError::NotFound => ContentFailure::Missing,
+        // С учёткой неоднозначный 404 окончателен: главы нет.
+        SourceError::AuthMaybeRequired if used_auth => ContentFailure::Missing,
+        SourceError::AuthRequired | SourceError::AuthMaybeRequired => {
+            if used_auth {
+                ContentFailure::AuthInvalid
+            } else {
+                ContentFailure::AuthRequired
+            }
+        }
+        SourceError::Blocked => ContentFailure::Blocked,
+        _ => ContentFailure::Other,
+    };
+
+    match kind {
+        ContentFailure::Locked => {
+            mark_availability(&state.pool, candidate, "locked").await?;
+        }
+        ContentFailure::Missing => {
+            mark_availability(&state.pool, candidate, "missing").await?;
+        }
+        ContentFailure::AuthInvalid => {
+            source_auth_service::mark_auth_error(&state.pool, user_id, candidate.source_id).await?;
+        }
+        _ => {}
+    }
+
+    Ok((kind, error.into_app(used_auth)))
+}
+
+async fn direct_failure(
+    state: &AppState,
+    user_id: i64,
+    candidate: &ChapterCandidate,
+    error: SourceError,
+    used_auth: bool,
+) -> AppError {
+    match classify_failure(state, user_id, candidate, error, used_auth).await {
+        Ok((_, mapped)) => mapped,
+        Err(error) => error,
     }
 }
 
@@ -366,6 +585,7 @@ async fn persist_success(
     state: &AppState,
     candidate: &ChapterCandidate,
     content: SourceContent,
+    auth_required: bool,
 ) -> Result<ContentDto, AppError> {
     let content_kind = content.kind();
     let dto = match content {
@@ -373,11 +593,13 @@ async fn persist_success(
             let pages = replace_pages(&state.pool, candidate.chapter_id, &pages).await?;
             sqlx::query(
                 "UPDATE chapters SET availability = 'available', availability_checked_at = ?, \
-                        content_kind = 'images', page_count = ?, embed_url = NULL, is_locked = 0 \
+                        content_kind = 'images', page_count = ?, embed_url = NULL, is_locked = 0, \
+                        auth_required = ? \
                  WHERE id = ?",
             )
             .bind(now_unix())
             .bind(i64::try_from(pages.len()).unwrap_or(i64::MAX))
+            .bind(i64::from(auth_required))
             .bind(candidate.chapter_id)
             .execute(&state.pool)
             .await?;
@@ -386,11 +608,13 @@ async fn persist_success(
         SourceContent::Video { embed_url } => {
             sqlx::query(
                 "UPDATE chapters SET availability = 'available', availability_checked_at = ?, \
-                        content_kind = 'video', page_count = NULL, embed_url = ?, is_locked = 0 \
+                        content_kind = 'video', page_count = NULL, embed_url = ?, is_locked = 0, \
+                        auth_required = ? \
                  WHERE id = ?",
             )
             .bind(now_unix())
             .bind(&embed_url)
+            .bind(i64::from(auth_required))
             .bind(candidate.chapter_id)
             .execute(&state.pool)
             .await?;
@@ -399,10 +623,12 @@ async fn persist_success(
         SourceContent::Text { format } => {
             sqlx::query(
                 "UPDATE chapters SET availability = 'available', availability_checked_at = ?, \
-                        content_kind = 'text', page_count = NULL, is_locked = 0 \
+                        content_kind = 'text', page_count = NULL, is_locked = 0, \
+                        auth_required = ? \
                  WHERE id = ?",
             )
             .bind(now_unix())
+            .bind(i64::from(auth_required))
             .bind(candidate.chapter_id)
             .execute(&state.pool)
             .await?;

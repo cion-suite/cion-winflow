@@ -1,10 +1,10 @@
 //! Чтение и запись per-user учёток источников.
 //!
 //! Сервис не отдаёт плейнтекст наружу: наружу идут только `configured` и
-//! метаданные проверки. Расшифрованные значения получает [`for_user`] —
-//! адаптеры источников на следующей фазе.
+//! метаданные проверки. Расшифрованные значения получает [`resolve`] и
+//! передаёт адаптерам; сами адаптеры о БД не знают.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -16,6 +16,12 @@ use crate::{
     sources::descriptor::Capability,
     state::AppState,
 };
+
+/// Сколько считается «недавно проверенной» учётка. Пока проверка свежая,
+/// помеченную главу можно отдать из кэша без повторного запроса.
+pub const VERIFIED_TTL_SECS: i64 = 24 * 60 * 60;
+/// Код последней auth-ошибки в `user_source_credentials.last_error`.
+pub const AUTH_ERROR_CODE: &str = "auth_invalid";
 
 /// Заголовки не должны превращаться в способ залить мегабайты в БД.
 const MAX_BEARER_LEN: usize = 4 * 1024;
@@ -195,6 +201,15 @@ pub async fn delete(state: &AppState, user_id: i64, code: &str) -> Result<(), Ap
     Ok(())
 }
 
+/// Единая ошибка «нужна личная учётка»: один и тот же текст и код не должны
+/// расходиться между выдачей контента, картинками и импортом.
+pub fn auth_not_configured() -> AppError {
+    AppError::forbidden(
+        "source_auth_not_configured",
+        "this chapter requires a source account; connect it in settings",
+    )
+}
+
 /// Расшифрованная учётка для запросов от имени пользователя. `None` — учётка
 /// не подключена; ошибка расшифровки — `credentials_unavailable` (503), а не
 /// «нет учётки»: сервер обязан отличать эти состояния.
@@ -225,6 +240,91 @@ pub async fn for_user(
             )
             .map(Some),
     }
+}
+
+/// Учётка для запросов сервиса: без ключа в env функция просто выключена и
+/// источник получает анонимный запрос. Ошибку расшифровки (ключ сменился или
+/// строка повреждена) не глотаем — она станет 503 у конкретного запроса.
+pub async fn resolve(
+    state: &AppState,
+    user_id: i64,
+    source_id: i64,
+) -> Result<Option<SourceAuth>, AppError> {
+    let Some(cipher) = state.source_credentials.as_deref() else {
+        return Ok(None);
+    };
+    for_user(&state.pool, cipher, user_id, source_id).await
+}
+
+/// Источники, для которых у пользователя сохранена учётка. Нужна карточке
+/// «Источники»: UI показывает «подключить аккаунт» без сетевого запроса.
+pub async fn configured_sources(pool: &SqlitePool, user_id: i64) -> Result<HashSet<i64>, AppError> {
+    let ids = sqlx::query_scalar::<_, i64>(
+        "SELECT source_id FROM user_source_credentials WHERE user_id = ?",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids.into_iter().collect())
+}
+
+/// Проверка отмечается успехом любого авторизованного запроса: отдельного
+/// endpoint у Remanga нет, а «сохранено, не проверено» не должно длиться вечно.
+pub async fn mark_verified(
+    pool: &SqlitePool,
+    user_id: i64,
+    source_id: i64,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE user_source_credentials SET last_verified_at = ?, last_error = NULL \
+         WHERE user_id = ? AND source_id = ?",
+    )
+    .bind(now_unix())
+    .bind(user_id)
+    .bind(source_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Персональная auth-ошибка пишется только в учётку: глобальный
+/// `source_entries.last_error` не должен зависеть от одного пользователя.
+pub async fn mark_auth_error(
+    pool: &SqlitePool,
+    user_id: i64,
+    source_id: i64,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE user_source_credentials SET last_error = ? WHERE user_id = ? AND source_id = ?",
+    )
+    .bind(AUTH_ERROR_CODE)
+    .bind(user_id)
+    .bind(source_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Свежесть проверки: без неё помеченную главой главу нельзя отдавать из
+/// кэша — доступ мог быть отозван на источнике.
+pub async fn verified_recently(
+    pool: &SqlitePool,
+    user_id: i64,
+    source_id: i64,
+    now: i64,
+) -> Result<bool, AppError> {
+    let verified_at: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT last_verified_at FROM user_source_credentials \
+         WHERE user_id = ? AND source_id = ?",
+    )
+    .bind(user_id)
+    .bind(source_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(verified_at
+        .flatten()
+        .is_some_and(|at| now.saturating_sub(at) < VERIFIED_TTL_SECS))
 }
 
 fn validate(auth: &SourceAuth) -> Result<(), AppError> {

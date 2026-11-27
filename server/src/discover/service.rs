@@ -8,6 +8,7 @@ use crate::{
     catalog::selection,
     error::AppError,
     source_admin::service::{self as source_admin, ImportInput},
+    source_auth::{SourceAuth, service as source_auth_service},
     sources::{
         Capability, ExternalId, SearchRequest, SourceError, SourceKind, TitleKind,
         text::normalize_name,
@@ -44,9 +45,12 @@ pub struct DiscoverItemDto {
 
 #[derive(Debug, Serialize)]
 pub struct DiscoverSourceError {
+    /// Код источника, у которого произошла ошибка.
     pub code: String,
     pub source_name: String,
     pub message: String,
+    /// Машинный код ошибки API: UI переводит его, а не сырой текст.
+    pub error_code: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,29 +162,48 @@ pub async fn search(
         }
     }
 
-    let query = query.to_owned();
-    let mut handles = Vec::with_capacity(jobs.len());
+    // Учётки резолвим до spawn: задача не должна трогать БД, а guard
+    // реестра нельзя держать через сетевой `.await`.
+    let mut prepared = Vec::with_capacity(jobs.len());
+    let mut errors = Vec::new();
     for job in jobs {
+        match source_auth_service::resolve(state, user_id, job.source_id).await {
+            Ok(auth) => prepared.push((job, auth)),
+            Err(error) => errors.push(DiscoverSourceError {
+                code: job.code.clone(),
+                source_name: job.name,
+                message: error.short_message(),
+                error_code: error.code().to_owned(),
+            }),
+        }
+    }
+
+    let query = query.to_owned();
+    let mut handles = Vec::with_capacity(prepared.len());
+    for (job, auth) in prepared {
         let rank = selection::rank_of(&priorities[job.lang], job.source_id);
         let query = query.clone();
         let code = job.code;
         let name = job.name;
         let source_id = job.source_id;
+        let auth_present = auth.is_some();
         let handle = tokio::spawn(async move {
             job.adapter
-                .search(SearchRequest {
-                    query,
-                    cursor: None,
-                    filters: Value::Null,
-                })
+                .search(
+                    SearchRequest {
+                        query,
+                        cursor: None,
+                        filters: Value::Null,
+                    },
+                    auth.as_ref(),
+                )
                 .await
         });
-        handles.push((name, code, source_id, rank, handle));
+        handles.push((name, code, source_id, rank, auth_present, handle));
     }
 
     let mut batches = Vec::new();
-    let mut errors = Vec::new();
-    for (source_name, code, source_id, rank, handle) in handles {
+    for (source_name, code, source_id, rank, auth_present, handle) in handles {
         match handle.await {
             Ok(Ok(page)) => batches.push(SearchBatch {
                 source_name,
@@ -189,15 +212,20 @@ pub async fn search(
                 rank,
                 items: page.items,
             }),
-            Ok(Err(error)) => errors.push(DiscoverSourceError {
-                code,
-                source_name,
-                message: short_error(&error),
-            }),
+            Ok(Err(error)) => {
+                let mapped = error.into_app(auth_present);
+                errors.push(DiscoverSourceError {
+                    code,
+                    source_name,
+                    message: mapped.short_message(),
+                    error_code: mapped.code().to_owned(),
+                });
+            }
             Err(error) => errors.push(DiscoverSourceError {
                 code,
                 source_name,
                 message: format!("source request failed: {error}"),
+                error_code: "internal_error".to_owned(),
             }),
         }
     }
@@ -278,7 +306,12 @@ fn retain_unique_titles(batches: &mut [SearchBatch]) {
 /// сначала по основному названию, затем по альтернативным. Привязка идёт тем
 /// же импортом, что и ручное добавление, поэтому дублей не создаёт.
 /// Ошибки отдельных источников не отменяют добавление.
-async fn auto_link_sources(state: &AppState, title_id: i64, origin_source_id: i64) -> Vec<String> {
+async fn auto_link_sources(
+    state: &AppState,
+    title_id: i64,
+    origin_source_id: i64,
+    user_id: i64,
+) -> Vec<String> {
     let Ok(Some(names)) = title_names(state, title_id).await else {
         return Vec::new();
     };
@@ -348,12 +381,21 @@ async fn auto_link_sources(state: &AppState, title_id: i64, origin_source_id: i6
 
     let mut linked = Vec::new();
     for job in jobs {
+        let auth = match source_auth_service::resolve(state, user_id, job.source_id).await {
+            Ok(auth) => auth,
+            Err(error) => {
+                tracing::warn!(title_id, source = %job.code, %error, "cannot resolve credential for auto-link");
+                continue;
+            }
+        };
         let mut candidate = None;
         if names.name.chars().count() <= MAX_QUERY_CHARS {
-            candidate = find_by_main_name(&job.adapter, names.name.trim(), &main_key).await;
+            candidate =
+                find_by_main_name(&job.adapter, names.name.trim(), &main_key, auth.as_ref()).await;
         }
         if candidate.is_none() {
-            candidate = find_by_alt_names(&job.adapter, &names.alt_names, &wanted).await;
+            candidate =
+                find_by_alt_names(&job.adapter, &names.alt_names, &wanted, auth.as_ref()).await;
         }
         let Some(external_id) = candidate else {
             continue;
@@ -367,6 +409,7 @@ async fn auto_link_sources(state: &AppState, title_id: i64, origin_source_id: i6
                 title_id: Some(title_id),
                 auto_link: true,
             },
+            auth.as_ref(),
         )
         .await
         {
@@ -408,13 +451,17 @@ async fn find_by_main_name(
     adapter: &SourceKind,
     query: &str,
     main_key: &str,
+    auth: Option<&SourceAuth>,
 ) -> Option<ExternalId> {
     let page = adapter
-        .search(SearchRequest {
-            query: query.to_owned(),
-            cursor: None,
-            filters: Value::Null,
-        })
+        .search(
+            SearchRequest {
+                query: query.to_owned(),
+                cursor: None,
+                filters: Value::Null,
+            },
+            auth,
+        )
         .await
         .ok()?;
 
@@ -430,6 +477,7 @@ async fn find_by_alt_names(
     adapter: &SourceKind,
     alt_names: &[String],
     wanted: &HashSet<String>,
+    auth: Option<&SourceAuth>,
 ) -> Option<ExternalId> {
     let mut queries = Vec::new();
     let mut seen = HashSet::new();
@@ -447,11 +495,14 @@ async fn find_by_alt_names(
 
     for query in queries {
         let Ok(page) = adapter
-            .search(SearchRequest {
-                query,
-                cursor: None,
-                filters: Value::Null,
-            })
+            .search(
+                SearchRequest {
+                    query,
+                    cursor: None,
+                    filters: Value::Null,
+                },
+                auth,
+            )
             .await
         else {
             continue;
@@ -502,6 +553,10 @@ pub async fn add(
 
     let external_id = ExternalId::new(input.external_id)?;
 
+    // Учётка зрителя на весь импорт: иначе добавление 18+ тайтла сломается
+    // даже у пользователя, который уже подключил аккаунт.
+    let auth = source_auth_service::resolve(state, user_id, runtime.id).await?;
+
     let existing = sqlx::query_as::<_, (i64, i64)>(
         "SELECT id, title_id FROM source_entries \
          WHERE source_id = ? AND external_id = ?",
@@ -526,7 +581,7 @@ pub async fn add(
                 match runtime.adapter() {
                     Ok(adapter) => {
                         let adapter = adapter.clone();
-                        match adapter.title(&external_id).await {
+                        match adapter.title(&external_id, auth.as_ref()).await {
                             Ok(source_title) => {
                                 crate::catalog::cover::import_source_covers(
                                     state,
@@ -534,6 +589,7 @@ pub async fn add(
                                     runtime.id,
                                     &adapter,
                                     &source_title.covers,
+                                    auth.as_ref(),
                                 )
                                 .await;
                             }
@@ -558,6 +614,7 @@ pub async fn add(
                     title_id: None,
                     auto_link: true,
                 },
+                auth.as_ref(),
             )
             .await?;
             (
@@ -592,7 +649,7 @@ pub async fn add(
     // Добавление одного источника автоматически привязывает тот же тайтл
     // с остальных включённых источников: пользователь не повторяет это
     // вручную для каждого произведения.
-    let linked = auto_link_sources(state, title_id, runtime.id).await;
+    let linked = auto_link_sources(state, title_id, runtime.id, user_id).await;
     if !linked.is_empty() {
         tracing::info!(title_id, sources = ?linked, "auto-linked missing sources");
     }
@@ -604,10 +661,6 @@ pub async fn add(
         library_created: inserted.rows_affected() == 1,
         status,
     })
-}
-
-fn short_error(error: &SourceError) -> String {
-    error.to_string().chars().take(200).collect()
 }
 
 #[cfg(test)]

@@ -99,7 +99,10 @@ async fn chapters_are_requested_through_livewire() {
     .expect("adapter");
 
     let external_id = ExternalId::new("vo-vseoruzhii").expect("external id");
-    let chapters = adapter.chapters(&external_id).await.expect("chapters");
+    let chapters = adapter
+        .chapters(&external_id, None)
+        .await
+        .expect("chapters");
 
     // Страница содержит 212, 3, 1; ответ Livewire — 212, 5, 1. Полный список
     // должен прийти именно из Livewire.

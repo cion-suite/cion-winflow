@@ -1,5 +1,6 @@
 use reqwest::Url;
 
+use crate::source_auth::SourceAuth;
 use crate::sources::config::{HostAllowlist, url_allowed};
 use crate::sources::dto::{
     ExternalId, SearchPage, SearchRequest, SourceChapter, SourceContent, SourceText, SourceTitle,
@@ -48,7 +49,20 @@ impl Rumix {
         CODE
     }
 
-    pub async fn search(&self, request: SearchRequest) -> Result<SearchPage, SourceError> {
+    /// RuMix не поддерживает per-user вход: сессионных заголовков нет.
+    pub fn auth_headers(
+        &self,
+        _auth: Option<&SourceAuth>,
+        _url: &Url,
+    ) -> Vec<(&'static str, String)> {
+        Vec::new()
+    }
+
+    pub async fn search(
+        &self,
+        request: SearchRequest,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SearchPage, SourceError> {
         let query = request.query.trim();
         if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
             return Err(SourceError::BadFilter(format!(
@@ -77,7 +91,11 @@ impl Rumix {
         parse::parse_search(&raw, &self.ctx.base_url, offset)
     }
 
-    pub async fn title(&self, external_id: &ExternalId) -> Result<SourceTitle, SourceError> {
+    pub async fn title(
+        &self,
+        external_id: &ExternalId,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceTitle, SourceError> {
         let raw = self.page(external_id).await?;
         parse::parse_title(&raw, &self.ctx.base_url, external_id, &self.config.language)
     }
@@ -85,6 +103,7 @@ impl Rumix {
     pub async fn chapters(
         &self,
         external_id: &ExternalId,
+        _auth: Option<&SourceAuth>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         let raw = self.page(external_id).await?;
         let chapters = parse::parse_chapters(&raw, &self.ctx.base_url, &self.config.language)?;
@@ -94,7 +113,11 @@ impl Rumix {
         Ok(chapters)
     }
 
-    pub async fn content(&self, chapter: &SourceChapter) -> Result<SourceContent, SourceError> {
+    pub async fn content(
+        &self,
+        chapter: &SourceChapter,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceContent, SourceError> {
         let reference = chapter
             .external_url
             .as_deref()
@@ -144,7 +167,11 @@ impl Rumix {
         Ok(content)
     }
 
-    pub async fn text(&self, _chapter: &SourceChapter) -> Result<SourceText, SourceError> {
+    pub async fn text(
+        &self,
+        _chapter: &SourceChapter,
+        _auth: Option<&SourceAuth>,
+    ) -> Result<SourceText, SourceError> {
         Err(SourceError::UnsupportedCapability)
     }
 

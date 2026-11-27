@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Extension, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_NONE_MATCH},
@@ -9,12 +9,14 @@ use axum::{
 use serde::Deserialize;
 
 use crate::{
-    auth::session::now_unix,
+    auth::session::{CurrentUser, now_unix},
     catalog::{content::replace_pages, selection},
     error::AppError,
     extract::{ApiPath, ApiQuery},
+    source_auth::{SourceAuth, service as source_auth_service},
     sources::{
-        ChapterKind, ContentKind, ExternalId, SourceChapter, SourceContent, SourceError, SourceKind,
+        Capability, ChapterKind, ContentKind, ExternalId, SourceChapter, SourceContent,
+        SourceError, SourceKind, http::header_pairs,
     },
     state::AppState,
 };
@@ -40,6 +42,8 @@ struct PageSourceRow {
     group_name: Option<String>,
     language: Option<String>,
     is_locked: bool,
+    /// Глава открывается только с учёткой источника.
+    auth_required: bool,
     external_url: Option<String>,
     source_entry_id: i64,
     source_id: i64,
@@ -54,6 +58,7 @@ pub struct CoverParams {
 
 pub async fn page_image(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     ApiPath(page_id): ApiPath<i64>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
@@ -64,15 +69,31 @@ pub async fn page_image(
         registry.runtime_by_id(row.source_id)
     }
     .ok_or(SourceError::Disabled)?;
+    // Только источник с per-user входом может скрывать главу за 404/401.
+    let auth_possible = runtime.descriptor.has(Capability::Auth);
     let adapter = runtime.adapter()?.clone();
 
-    // Ключ — запись источника, глава и номер страницы; подписанный URL не входит
-    let key = format!(
-        "{}:{}:{}",
-        row.source_entry_id, row.chapter_external_id, row.idx
-    );
+    let auth = source_auth_service::resolve(&state, user.id, row.source_id).await?;
+    // Помеченную главу без собственной учётки не отдаём даже из кэша.
+    if row.auth_required && auth.is_none() {
+        return Err(source_auth_service::auth_not_configured());
+    }
+
+    // Ключ — запись источника, глава и номер страницы; подписанный URL не входит.
+    // Картинки, полученные с личной учёткой, кэшируются в её пространстве.
+    let key = if row.auth_required {
+        format!(
+            "user:{}:{}:{}:{}",
+            user.id, row.source_entry_id, row.chapter_external_id, row.idx
+        )
+    } else {
+        format!(
+            "{}:{}:{}",
+            row.source_entry_id, row.chapter_external_id, row.idx
+        )
+    };
     serve_cached(&state.image_cache, &key, &headers, || {
-        fetch_page(&state, &adapter, &row)
+        fetch_page(&state, &adapter, &row, auth.as_ref(), auth_possible)
     })
     .await
 }
@@ -134,12 +155,17 @@ async fn fetch_page(
     state: &AppState,
     adapter: &SourceKind,
     row: &PageSourceRow,
+    auth: Option<&SourceAuth>,
+    auth_possible: bool,
 ) -> Result<Vec<u8>, AppError> {
     let mut refreshes = 0_u8;
 
     loop {
         let reference = load_reference(state, row.page_id).await?;
         let url = adapter.resolve_image(&reference).map_err(map_image_error)?;
+        // Сессионные заголовки уходят только на хосты источника, не на CDN.
+        let signed = adapter.auth_headers(auth, &url);
+        let headers = header_pairs(&[], &signed);
 
         let _permit = state
             .image_download_semaphore
@@ -151,7 +177,7 @@ async fn fetch_page(
         let response = crate::sources::http::fetch_bytes(
             &state.image_client,
             url.clone(),
-            &[],
+            &headers,
             crate::sources::http::IMAGE_BODY_LIMIT,
         )
         .await?;
@@ -167,14 +193,16 @@ async fn fetch_page(
 
         if matches!(response.status, 401 | 403 | 410) {
             if refreshes >= MAX_REFRESHES {
-                mark_locked(state, row).await?;
-                return Err(AppError::forbidden(
-                    "source_locked",
-                    "chapter images are no longer available at source",
+                // 401/403/410 картинки не означают, что глава закрыта для
+                // всех: это может быть личная auth-проблема или блок сайта.
+                return Err(image_status_error(
+                    response.status,
+                    auth.is_some(),
+                    auth_possible,
                 ));
             }
             refreshes += 1;
-            refresh_pages(state, adapter, row).await?;
+            refresh_pages(state, adapter, row, auth, auth_possible).await?;
             continue;
         }
 
@@ -188,14 +216,32 @@ async fn fetch_page(
     }
 }
 
+/// Ошибка скачивания картинки по HTTP-статусу. Глобальная доступность главы
+/// здесь не меняется: 401/403/410 бывают и персональными, и временными.
+fn image_status_error(status: u16, auth_present: bool, auth_possible: bool) -> AppError {
+    match status {
+        401 if auth_present => {
+            AppError::bad_gateway("source_auth_invalid", "source rejected the saved account")
+        }
+        401 if auth_possible => source_auth_service::auth_not_configured(),
+        403 => AppError::bad_gateway("source_blocked", "source blocked the image request"),
+        _ => AppError::not_found(
+            "source_not_found",
+            "chapter images are no longer available at source",
+        ),
+    }
+}
+
 async fn refresh_pages(
     state: &AppState,
     adapter: &SourceKind,
     row: &PageSourceRow,
+    auth: Option<&SourceAuth>,
+    auth_possible: bool,
 ) -> Result<(), AppError> {
     let chapter = source_chapter(row)?;
 
-    match adapter.content(&chapter).await {
+    match adapter.content(&chapter, auth).await {
         Ok(SourceContent::Images { pages }) => {
             let pages = replace_pages(&state.pool, row.chapter_id, &pages).await?;
             sqlx::query(
@@ -221,14 +267,20 @@ async fn refresh_pages(
                 "chapter is locked at source",
             ))
         }
-        Err(SourceError::NotFound) => {
+        Err(error @ SourceError::NotFound) => {
+            if auth.is_none() && auth_possible {
+                // 404 без входа у Remanga неоднозначен: глава может быть скрыта.
+                return Err(source_auth_service::auth_not_configured());
+            }
             mark_missing(state, row).await?;
-            Err(AppError::not_found(
-                "source_not_found",
-                "chapter is missing at source",
-            ))
+            Err(error.into_app(auth.is_some()))
         }
-        Err(error) => Err(error.into()),
+        Err(error @ (SourceError::AuthRequired | SourceError::AuthMaybeRequired)) => {
+            // Персональную ошибку учётки фиксирует путь контента; здесь
+            // достаточно правильного кода ответа.
+            Err(error.into_app(auth.is_some()))
+        }
+        Err(error) => Err(error.into_app(auth.is_some())),
     }
 }
 
@@ -261,7 +313,7 @@ async fn load_page(state: &AppState, page_id: i64) -> Result<PageSourceRow, AppE
         "SELECT p.id AS page_id, p.idx, ch.id AS chapter_id, \
                 ch.external_id AS chapter_external_id, ch.chapter_key, ch.chapter_kind, \
                 ch.content_kind, ch.number_text, ch.number_milli, ch.volume, ch.name, \
-                ch.group_name, ch.language, ch.is_locked, ch.external_url, \
+                ch.group_name, ch.language, ch.is_locked, ch.auth_required, ch.external_url, \
                 e.id AS source_entry_id, e.source_id, t.id AS title_id \
          FROM pages p \
          JOIN chapters ch ON ch.id = p.chapter_id \

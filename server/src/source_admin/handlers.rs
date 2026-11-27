@@ -89,15 +89,17 @@ pub async fn refresh_title(
     ApiPath(title_id): ApiPath<i64>,
 ) -> Result<Json<RefreshResponse>, AppError> {
     user.require_admin()?;
-    Ok(Json(service::refresh_title(&state, title_id).await?))
+    Ok(Json(
+        service::refresh_title(&state, title_id, user.id).await?,
+    ))
 }
 
 /// Автосинхронизация страницы тайтла: доступна любому читателю, но
 /// ограничена по времени внутри сервиса и rate limit на маршруте.
 pub async fn sync_title(
     State(state): State<AppState>,
-    Extension(_user): Extension<CurrentUser>,
+    Extension(user): Extension<CurrentUser>,
     ApiPath(title_id): ApiPath<i64>,
 ) -> Result<Json<SyncResponse>, AppError> {
-    Ok(Json(service::sync_title(&state, title_id).await?))
+    Ok(Json(service::sync_title(&state, title_id, user.id).await?))
 }

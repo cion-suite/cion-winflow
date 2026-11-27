@@ -30,11 +30,14 @@ async fn rumix_search_title_chapters_content() {
     .expect("adapter");
 
     let page = adapter
-        .search(SearchRequest {
-            query: "arifureta".to_owned(),
-            cursor: None,
-            filters: Value::Null,
-        })
+        .search(
+            SearchRequest {
+                query: "arifureta".to_owned(),
+                cursor: None,
+                filters: Value::Null,
+            },
+            None,
+        )
         .await
         .expect("search");
     assert!(!page.items.is_empty(), "search must return items");
@@ -47,10 +50,13 @@ async fn rumix_search_title_chapters_content() {
         .find(|item| item.external_id.as_str() == "arifureta__silneishii_remeslennik_v_mire")
         .unwrap_or(&page.items[0]);
 
-    let title = adapter.title(&item.external_id).await.expect("title");
+    let title = adapter.title(&item.external_id, None).await.expect("title");
     assert!(!title.name.is_empty());
 
-    let chapters = adapter.chapters(&item.external_id).await.expect("chapters");
+    let chapters = adapter
+        .chapters(&item.external_id, None)
+        .await
+        .expect("chapters");
     assert!(!chapters.is_empty(), "title must have chapters");
 
     // Первая глава (c0) бесплатная и не запланирована; новейшие могут быть
@@ -60,7 +66,7 @@ async fn rumix_search_title_chapters_content() {
         .find(|chapter| chapter.chapter_key == "v1:c0")
         .or_else(|| chapters.last())
         .expect("readable chapter");
-    let content = adapter.content(chapter).await.expect("content");
+    let content = adapter.content(chapter, None).await.expect("content");
     let SourceContent::Images { pages } = content else {
         panic!("expected images");
     };

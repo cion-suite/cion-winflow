@@ -33,6 +33,8 @@ pub struct ChapterCandidate {
     pub group_name: Option<String>,
     pub language: Option<String>,
     pub is_locked: bool,
+    /// Глава открывается только с учёткой источника.
+    pub auth_required: bool,
     pub availability: String,
     pub availability_checked_at: Option<i64>,
     pub page_count: Option<i64>,
@@ -117,7 +119,7 @@ pub async fn candidates(
     let rows = sqlx::query_as::<_, ChapterCandidate>(
         "SELECT ch.id AS chapter_id, ch.chapter_key, ch.external_id, ch.number_text, \
                 ch.number_milli, ch.volume, ch.chapter_kind, ch.content_kind, ch.name, \
-                ch.group_name, ch.language, ch.is_locked, ch.availability, \
+                ch.group_name, ch.language, ch.is_locked, ch.auth_required, ch.availability, \
                 ch.availability_checked_at, ch.page_count, ch.ordinal_site, ch.external_url, \
                 ch.embed_url, ch.published_at, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
                 s.code AS source_code, s.name AS source_name, (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled \

@@ -1,13 +1,14 @@
 //! Объединённый список глав для страницы тайтла: только БД, без сети.
 //! Варианты группируются по каноническому `chapter_key`, alias → canonical.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::auth::session::now_unix;
 use crate::error::AppError;
+use crate::source_auth::service as source_auth_service;
 
 use super::selection::{self, AvailabilityView, ChapterCandidate, TitleInfo};
 
@@ -69,6 +70,10 @@ pub struct TitleSourceDto {
     pub missing_count: i64,
     pub stats_updated_at: Option<i64>,
     pub last_error: Option<String>,
+    /// Источник требует вход, чтобы отдать главы.
+    pub auth_required: bool,
+    /// У текущего пользователя сохранена учётка этого источника.
+    pub user_has_credentials: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +99,7 @@ struct EntryRow {
     missing_count: i64,
     stats_updated_at: Option<i64>,
     last_error: Option<String>,
+    auth_required: bool,
 }
 
 /// `source_langs` — язык из дескриптора по коду источника: реестр знает его,
@@ -104,6 +110,7 @@ pub async fn title_chapters(
     title: &TitleInfo,
     source_langs: &HashMap<String, &'static str>,
     view_lang: Option<&str>,
+    user_id: i64,
 ) -> Result<TitleChapters, AppError> {
     let now = now_unix();
 
@@ -111,7 +118,7 @@ pub async fn title_chapters(
         "SELECT s.id AS source_id, s.name AS source_name, s.code AS source_code, \
                 (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled, e.id AS source_entry_id, e.is_primary, \
                 e.chapter_count, e.available_count, e.locked_count, e.missing_count, \
-                e.stats_updated_at, e.last_error \
+                e.stats_updated_at, e.last_error, e.auth_required \
          FROM source_entries e JOIN sources s ON s.id = e.source_id \
          WHERE e.title_id = ? \
          ORDER BY e.is_primary DESC, s.name, e.id",
@@ -119,6 +126,11 @@ pub async fn title_chapters(
     .bind(title.id)
     .fetch_all(pool)
     .await?;
+
+    // Учётки нужны только карточке «Источники»; для прогресса это лишний
+    // запрос, но один на страницу.
+    let credential_sources: HashSet<i64> =
+        source_auth_service::configured_sources(pool, user_id).await?;
 
     // Устаревший URL или localStorage не должен опустошать страницу:
     // язык просмотра действует, только если такой источник включён.
@@ -162,7 +174,7 @@ pub async fn title_chapters(
     let rows = sqlx::query_as::<_, ChapterCandidate>(
         "SELECT ch.id AS chapter_id, ch.chapter_key, ch.external_id, ch.number_text, \
                 ch.number_milli, ch.volume, ch.chapter_kind, ch.content_kind, ch.name, \
-                ch.group_name, ch.language, ch.is_locked, ch.availability, \
+                ch.group_name, ch.language, ch.is_locked, ch.auth_required, ch.availability, \
                 ch.availability_checked_at, ch.page_count, ch.ordinal_site, ch.external_url, \
                 ch.embed_url, ch.published_at, e.id AS source_entry_id, e.source_id, e.title_id, e.is_primary, \
                 s.code AS source_code, s.name AS source_name, (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled \
@@ -308,6 +320,8 @@ pub async fn title_chapters(
                 missing_count: entry.missing_count,
                 stats_updated_at: entry.stats_updated_at,
                 last_error: entry.last_error,
+                auth_required: entry.auth_required,
+                user_has_credentials: credential_sources.contains(&entry.source_id),
             }
         })
         .collect();

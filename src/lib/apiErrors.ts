@@ -33,7 +33,11 @@ const ERROR_KEYS: Partial<Record<string, string>> = {
   source_locked: "errors.sourceLocked",
   source_upstream_failed: "errors.sourceUpstreamFailed",
   source_parse_failed: "errors.sourceUpstreamFailed",
-  source_auth_required: "errors.sourceUpstreamFailed",
+  source_auth_required: "errors.sourceAuthNotConfigured",
+  source_auth_not_configured: "errors.sourceAuthNotConfigured",
+  source_auth_invalid: "errors.sourceAuthInvalid",
+  source_auth_maybe_required: "errors.sourceAuthMaybeRequired",
+  source_blocked: "errors.sourceBlocked",
   source_rate_limited: "errors.sourceUpstreamFailed",
   source_disabled: "errors.sourceDisabled",
   source_not_found: "errors.sourceNotFound",
@@ -64,4 +68,16 @@ const ERROR_KEYS: Partial<Record<string, string>> = {
 
 export function apiErrorKey(code: string | null): string | null {
   return code ? (ERROR_KEYS[code] ?? null) : null;
+}
+
+/** Коды, при которых пользователю стоит предложить подключить аккаунт. */
+const SOURCE_ACCOUNT_CODES = new Set([
+  "source_auth_not_configured",
+  "source_auth_invalid",
+  "source_auth_maybe_required",
+  "source_auth_required",
+]);
+
+export function requiresSourceAccount(code: string | null): boolean {
+  return code !== null && SOURCE_ACCOUNT_CODES.has(code);
 }

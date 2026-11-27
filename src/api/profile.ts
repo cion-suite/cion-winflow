@@ -52,6 +52,8 @@ export type BookmarkImportState = "running" | "completed" | "failed";
 export type BookmarkImportError = {
   name: string;
   message: string;
+  /** Машинный код ошибки API для локализации. */
+  code: string;
 };
 
 /** Фоновое задание импорта закладок: профиль опрашивает его, пока running. */

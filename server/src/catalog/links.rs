@@ -12,6 +12,7 @@ use crate::{
     catalog::selection,
     error::AppError,
     source_admin::service::{self, ImportInput, ImportResponse},
+    source_auth::service as source_auth_service,
     state::AppState,
 };
 
@@ -56,17 +57,30 @@ pub struct AliasListResponse {
 /// ленивое добавление, но с явным `title_id`.
 pub async fn attach(
     state: &AppState,
+    user_id: i64,
     title_id: i64,
     input: AttachInput,
 ) -> Result<ImportResponse, AppError> {
+    let code = input.code.trim();
+    let source_id = state
+        .sources
+        .read()
+        .await
+        .runtime(code)
+        .map(|runtime| runtime.id);
+    let auth = match source_id {
+        Some(source_id) => source_auth_service::resolve(state, user_id, source_id).await?,
+        None => None,
+    };
     service::import(
         state,
-        input.code.trim(),
+        code,
         ImportInput {
             external_id: input.external_id,
             title_id: Some(title_id),
             auto_link: true,
         },
+        auth.as_ref(),
     )
     .await
 }

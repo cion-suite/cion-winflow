@@ -9,6 +9,7 @@ use crate::{
     auth::session::now_unix,
     catalog::selection,
     error::{AppError, FieldError},
+    source_auth::{SourceAuth, service as source_auth_service},
     sources::{
         ConfigField, FieldType, SourceDescriptor, SourceError, SourceTitle, TitleKind,
         config::{mask_config, merge_config, validate_config, validate_outbound_url},
@@ -292,11 +293,14 @@ pub async fn search(
     let runtime = runtime(state, code).await?;
     let adapter = runtime.adapter()?.clone();
     let page = adapter
-        .search(SearchRequest {
-            query: input.query,
-            cursor: input.cursor,
-            filters,
-        })
+        .search(
+            SearchRequest {
+                query: input.query,
+                cursor: input.cursor,
+                filters,
+            },
+            None,
+        )
         .await?;
 
     Ok(SearchResponse {
@@ -323,6 +327,7 @@ pub async fn import(
     state: &AppState,
     code: &str,
     input: ImportInput,
+    auth: Option<&SourceAuth>,
 ) -> Result<ImportResponse, AppError> {
     let descriptor = descriptor(state, code).await?;
     if !descriptor.has(Capability::Chapters) {
@@ -338,10 +343,17 @@ pub async fn import(
     let external_id = crate::sources::ExternalId::new(input.external_id)?;
 
     // Сеть до транзакции: импорт не атомарен между сетью и БД (§5).
-    // Тип нового тайтла берём из метаданных источника.
-    let source_title = adapter.title(&external_id).await?;
+    // Тип нового тайтла берём из метаданных источника. Ошибка источника
+    // маппится с учётом того, была ли у пользователя учётка.
+    let source_title = adapter
+        .title(&external_id, auth)
+        .await
+        .map_err(|error| error.into_app(auth.is_some()))?;
     let kind = source_title.kind;
-    let chapters = adapter.chapters(&external_id).await?;
+    let chapters = adapter
+        .chapters(&external_id, auth)
+        .await
+        .map_err(|error| error.into_app(auth.is_some()))?;
 
     let now = now_unix();
     let mut tx = state.pool.begin().await?;
@@ -485,6 +497,7 @@ pub async fn import(
         source_id,
         &adapter,
         &source_title.covers,
+        auth,
     )
     .await;
 
@@ -518,11 +531,14 @@ pub async fn probe(state: &AppState, code: &str) -> Result<ProbeResponse, AppErr
     let checked_at = now_unix();
 
     let (status, message) = match adapter
-        .search(SearchRequest {
-            query: "test".to_owned(),
-            cursor: None,
-            filters: Value::Null,
-        })
+        .search(
+            SearchRequest {
+                query: "test".to_owned(),
+                cursor: None,
+                filters: Value::Null,
+            },
+            None,
+        )
         .await
     {
         Ok(_) => ("ok", None),
@@ -868,6 +884,8 @@ pub struct RefreshEntryDto {
     pub status: &'static str,
     pub imported_chapters: i64,
     pub error: Option<String>,
+    /// Машинный код ошибки: UI переводит его, а не показывает сырой текст.
+    pub error_code: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -918,9 +936,14 @@ struct SourceMetadata {
 const SYNC_TTL_SECS: i64 = 10 * 60;
 
 /// Обновляет главы всех источников тайтла. Сеть идёт до транзакции,
-/// ошибка одного источника не отменяет остальные.
-pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshResponse, AppError> {
-    let (entries, _) = refresh_entries(state, title_id, true).await?;
+/// ошибка одного источника не отменяет остальные. Учётки резолвятся для
+/// действующего пользователя: администратор видит то же, что и читатель.
+pub async fn refresh_title(
+    state: &AppState,
+    title_id: i64,
+    user_id: i64,
+) -> Result<RefreshResponse, AppError> {
+    let (entries, _, _) = refresh_entries(state, title_id, true, user_id).await?;
     let preferred_source_id = selection::recompute_preferred(&state.pool, title_id).await?;
     Ok(RefreshResponse {
         title_id,
@@ -934,7 +957,11 @@ pub async fn refresh_title(state: &AppState, title_id: i64) -> Result<RefreshRes
 /// приоритета: первый непустой источник заполняет поле, остальные —
 /// только пропуски. Это позволяет тайтлу без Remanga получить тип,
 /// описание и обложки из другого источника, даже если там их меньше.
-pub async fn sync_title(state: &AppState, title_id: i64) -> Result<SyncResponse, AppError> {
+pub async fn sync_title(
+    state: &AppState,
+    title_id: i64,
+    user_id: i64,
+) -> Result<SyncResponse, AppError> {
     let (preferred_source_id, synced_at) = sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
         "SELECT preferred_source_id, metadata_synced_at FROM titles WHERE id = ?",
     )
@@ -954,7 +981,8 @@ pub async fn sync_title(state: &AppState, title_id: i64) -> Result<SyncResponse,
         });
     }
 
-    let (entries, mut metadata) = refresh_entries(state, title_id, false).await?;
+    let (entries, mut metadata, auth_errors) =
+        refresh_entries(state, title_id, false, user_id).await?;
     let mut preferred_source_id = selection::recompute_preferred(&state.pool, title_id).await?;
 
     // Порядок метаданных: preferred → rank → is_primary → привязка.
@@ -982,15 +1010,21 @@ pub async fn sync_title(state: &AppState, title_id: i64) -> Result<SyncResponse,
 
     // Обложки: preferred (уже с учётом нового языка) заполняет размеры
     // первым, остальные источники — только пропуски. Ручные не трогаем.
-    if let Err(error) = crate::catalog::cover::refresh_source_covers(state, title_id, false).await {
+    if let Err(error) =
+        crate::catalog::cover::refresh_source_covers(state, title_id, false, user_id).await
+    {
         tracing::warn!(title_id, %error, "cannot refresh source covers during sync");
     }
 
-    sqlx::query("UPDATE titles SET metadata_synced_at = ? WHERE id = ?")
-        .bind(now)
-        .bind(title_id)
-        .execute(&state.pool)
-        .await?;
+    if !auth_errors {
+        // Auth-ошибка одного пользователя не должна «остужать» sync на
+        // 10 минут: пользователь с подключённым аккаунтом повторит сразу.
+        sqlx::query("UPDATE titles SET metadata_synced_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(title_id)
+            .execute(&state.pool)
+            .await?;
+    }
 
     Ok(SyncResponse {
         title_id,
@@ -1003,12 +1037,14 @@ pub async fn sync_title(state: &AppState, title_id: i64) -> Result<SyncResponse,
 
 /// Общая часть refresh/sync: главы всех entry и метаданные успешных
 /// `title()`. `import_covers` включает старое поведение ручного refresh —
-/// заполнить пустые размеры обложек сразу.
+/// заполнить пустые размеры обложек сразу. Третий элемент — были ли
+/// auth-ошибки: по нему sync не двигает TTL.
 async fn refresh_entries(
     state: &AppState,
     title_id: i64,
     import_covers: bool,
-) -> Result<(Vec<RefreshEntryDto>, Vec<SourceMetadata>), AppError> {
+    user_id: i64,
+) -> Result<(Vec<RefreshEntryDto>, Vec<SourceMetadata>, bool), AppError> {
     sqlx::query_scalar::<_, i64>("SELECT 1 FROM titles WHERE id = ?")
         .bind(title_id)
         .fetch_optional(&state.pool)
@@ -1026,8 +1062,9 @@ async fn refresh_entries(
 
     let mut results = Vec::with_capacity(entries.len());
     let mut metadata = Vec::new();
+    let mut auth_errors = false;
 
-    for (entry_id, source_id, external_id, code) in entries {
+    for (entry_id, source_id, external_id, source_code) in entries {
         let runtime = {
             let registry = state.sources.read().await;
             registry.runtime_by_id(source_id)
@@ -1035,7 +1072,7 @@ async fn refresh_entries(
         let Some(runtime) = runtime else {
             let message = "source is not registered".to_owned();
             store_sync_error(&state.pool, entry_id, &message).await?;
-            results.push(failed(entry_id, code, message));
+            results.push(failed(entry_id, source_code, message, None));
             continue;
         };
 
@@ -1045,7 +1082,7 @@ async fn refresh_entries(
             Err(error) => {
                 let message = short_error(&error);
                 store_sync_error(&state.pool, entry_id, &message).await?;
-                results.push(failed(entry_id, code, message));
+                results.push(failed(entry_id, source_code, message, Some(error.reason())));
                 continue;
             }
         };
@@ -1056,13 +1093,30 @@ async fn refresh_entries(
             Err(error) => {
                 let message = short_error(&error);
                 store_sync_error(&state.pool, entry_id, &message).await?;
-                results.push(failed(entry_id, code, message));
+                results.push(failed(entry_id, source_code, message, Some(error.reason())));
                 continue;
             }
         };
 
-        match adapter.title(&external_id).await {
+        // Учётка действующего пользователя. Ошибка расшифровки — это его
+        // auth-проблема, а не повод перезаписать глобальный last_error.
+        let auth = match source_auth_service::resolve(state, user_id, source_id).await {
+            Ok(auth) => auth,
+            Err(error) => {
+                let message = error.short_message();
+                tracing::warn!(entry_id, code = %source_code, %message, "cannot resolve source credential");
+                results.push(failed(entry_id, source_code, message, Some(error.code())));
+                auth_errors = true;
+                continue;
+            }
+        };
+        let auth_present = auth.is_some();
+
+        match adapter.title(&external_id, auth.as_ref()).await {
             Ok(source_title) => {
+                if !auth_present {
+                    set_entry_auth_required(&state.pool, entry_id, false).await?;
+                }
                 if import_covers {
                     crate::catalog::cover::import_source_covers(
                         state,
@@ -1070,6 +1124,7 @@ async fn refresh_entries(
                         source_id,
                         &adapter,
                         &source_title.covers,
+                        auth.as_ref(),
                     )
                     .await;
                 }
@@ -1080,16 +1135,22 @@ async fn refresh_entries(
                 });
             }
             Err(error) => {
+                if is_auth_error(&error) {
+                    auth_errors = true;
+                    if !auth_present {
+                        set_entry_auth_required(&state.pool, entry_id, true).await?;
+                    }
+                }
                 tracing::warn!(
                     entry_id,
-                    code = %code,
+                    code = %source_code,
                     error = %error,
                     "cannot refresh source metadata"
                 );
             }
         }
 
-        match adapter.chapters(&external_id).await {
+        match adapter.chapters(&external_id, auth.as_ref()).await {
             Ok(chapters) => {
                 let now = now_unix();
                 let mut tx = state.pool.begin().await?;
@@ -1097,10 +1158,12 @@ async fn refresh_entries(
                 // пишется внутри и не должно быть затёрто успехом refresh.
                 sqlx::query(
                     "UPDATE source_entries SET last_synced_at = ?, last_error = NULL, \
-                            adapter_version = ? WHERE id = ?",
+                            adapter_version = ?, auth_required = CASE WHEN ? THEN auth_required ELSE 0 END \
+                     WHERE id = ?",
                 )
                 .bind(now)
                 .bind(i64::from(version))
+                .bind(auth_present)
                 .bind(entry_id)
                 .execute(&mut *tx)
                 .await?;
@@ -1110,17 +1173,30 @@ async fn refresh_entries(
                 selection::recompute_stats(&state.pool, entry_id).await?;
                 results.push(RefreshEntryDto {
                     source_entry_id: entry_id,
-                    code,
+                    code: source_code,
                     status: "ok",
                     imported_chapters: imported,
                     error: None,
+                    error_code: None,
                 });
             }
             Err(error) => {
                 let message = short_error(&error);
-                tracing::warn!(entry_id, code = %code, %message, "source refresh failed");
-                store_sync_error(&state.pool, entry_id, &message).await?;
-                results.push(failed(entry_id, code, message));
+                let auth_error = is_auth_error(&error);
+                let mapped = error.into_app(auth_present);
+                let entry_code = mapped.code();
+                tracing::warn!(entry_id, code = %source_code, %message, "source refresh failed");
+                if auth_error {
+                    auth_errors = true;
+                    if !auth_present {
+                        set_entry_auth_required(&state.pool, entry_id, true).await?;
+                    }
+                    // Глобальный last_error не трогаем: у другого
+                    // пользователя с учёткой этот источник рабочий.
+                } else {
+                    store_sync_error(&state.pool, entry_id, &message).await?;
+                }
+                results.push(failed(entry_id, source_code, message, Some(entry_code)));
             }
         }
     }
@@ -1132,7 +1208,27 @@ async fn refresh_entries(
         tracing::warn!(title_id, %error, "cannot materialize alias ranges after refresh");
     }
 
-    Ok((results, metadata))
+    Ok((results, metadata, auth_errors))
+}
+
+fn is_auth_error(error: &SourceError) -> bool {
+    matches!(
+        error,
+        SourceError::AuthRequired | SourceError::AuthMaybeRequired
+    )
+}
+
+async fn set_entry_auth_required(
+    pool: &sqlx::SqlitePool,
+    entry_id: i64,
+    required: bool,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE source_entries SET auth_required = ? WHERE id = ?")
+        .bind(required)
+        .bind(entry_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Приводит метаданные разных источников к одному виду: первый источник в
@@ -1366,13 +1462,19 @@ async fn apply_source_metadata(
     Ok(changed)
 }
 
-fn failed(source_entry_id: i64, code: String, error: String) -> RefreshEntryDto {
+fn failed(
+    source_entry_id: i64,
+    code: String,
+    error: String,
+    error_code: Option<&'static str>,
+) -> RefreshEntryDto {
     RefreshEntryDto {
         source_entry_id,
         code,
         status: "error",
         imported_chapters: 0,
         error: Some(error),
+        error_code,
     }
 }
 

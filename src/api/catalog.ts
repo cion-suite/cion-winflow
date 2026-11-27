@@ -107,6 +107,10 @@ export type TitleSource = {
   missing_count: number;
   stats_updated_at: number | null;
   last_error: string | null;
+  /** Источник требует вход, чтобы отдать главы. */
+  auth_required: boolean;
+  /** У текущего пользователя сохранена учётка этого источника. */
+  user_has_credentials: boolean;
 };
 
 export type ChapterAlias = {
@@ -136,6 +140,8 @@ export type TitleSyncEntry = {
   status: "ok" | "error";
   imported_chapters: number;
   error: string | null;
+  /** Машинный код ошибки: UI переводит его, а не сырой текст. */
+  error_code: string | null;
 };
 
 export type TitleSyncResponse = {

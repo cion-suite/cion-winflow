@@ -1,6 +1,7 @@
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { FileJsonIcon, UploadIcon } from "lucide-react";
+import { Link } from "react-router";
 
 import {
   invalidateAfterBookmarkImport,
@@ -9,6 +10,7 @@ import {
   useErrorText,
   type BookmarkImportJob,
 } from "@/api";
+import { apiErrorKey, requiresSourceAccount } from "@/lib/apiErrors";
 import { useT } from "@/lib/i18n";
 import { Button } from "@/ui/shadcn/button";
 import {
@@ -306,14 +308,25 @@ function ImportErrors({ job }: { job: BookmarkImportJob }) {
         {t("profile.importBookmarks.errors")}
       </p>
       <ul className="max-h-40 overflow-y-auto rounded-md bg-muted/50 p-2 text-xs">
-        {job.errors.map((error, index) => (
-          <li key={`${error.name}-${index}`} className="break-words">
-            {error.name !== "" && (
-              <span className="font-medium">{error.name}: </span>
-            )}
-            {error.message}
-          </li>
-        ))}
+        {job.errors.map((error, index) => {
+          const key = apiErrorKey(error.code);
+          return (
+            <li key={`${error.name}-${index}`} className="break-words">
+              {error.name !== "" && (
+                <span className="font-medium">{error.name}: </span>
+              )}
+              {key ? t(key) : error.message}
+              {requiresSourceAccount(error.code) && (
+                <>
+                  {" "}
+                  <Link className="underline" to="/settings">
+                    {t("profile.importBookmarks.connectAccount")}
+                  </Link>
+                </>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {job.errors_truncated && (
         <p className="text-xs text-muted-foreground">

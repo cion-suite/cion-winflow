@@ -202,7 +202,7 @@ function TitleSources({
   const visible = useMemo(
     () =>
       sourceOrder(sources, preferredSourceId).filter(
-        (source) => source.available_count > 0,
+        (source) => source.available_count > 0 || source.auth_required,
       ),
     [sources, preferredSourceId],
   );
@@ -237,6 +237,14 @@ function TitleSources({
               </ItemContent>
               {!source.enabled && (
                 <Badge variant="outline">{t("title.sourceDisabled")}</Badge>
+              )}
+              {source.auth_required && !source.user_has_credentials && (
+                <Link
+                  to="/settings"
+                  className="text-xs text-muted-foreground underline underline-offset-4"
+                >
+                  {t("title.connectAccount")}
+                </Link>
               )}
             </Item>
           ))}

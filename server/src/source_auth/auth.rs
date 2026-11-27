@@ -40,6 +40,23 @@ impl SourceAuth {
         self.cookie.as_ref().map(|value| value.expose_secret())
     }
 
+    /// Готовое значение заголовка `Authorization`. Пользователь может
+    /// вставить как голый токен, так и строку со схемой: второй `Bearer`
+    /// не добавляем. Расширение-компаньон присылает уже полное значение.
+    pub fn authorization(&self) -> Option<String> {
+        let bearer = self.bearer()?.trim();
+        // `get(..7)` вместо среза: токен может начинаться с многобайтного
+        // символа, и жёсткий срез по байтам запаниковал бы.
+        if bearer
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
+        {
+            Some(bearer.to_owned())
+        } else {
+            Some(format!("Bearer {bearer}"))
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.bearer.is_none() && self.cookie.is_none()
     }
@@ -73,5 +90,32 @@ impl std::fmt::Debug for SourceAuth {
             .field("bearer", &self.bearer.is_some())
             .field("cookie", &self.cookie.is_some())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SourceAuth;
+
+    #[test]
+    fn authorization_adds_scheme_only_once() {
+        let bare = SourceAuth::new(Some("token".to_owned()), None);
+        assert_eq!(bare.authorization().as_deref(), Some("Bearer token"));
+
+        let full = SourceAuth::new(Some("Bearer token".to_owned()), None);
+        assert_eq!(full.authorization().as_deref(), Some("Bearer token"));
+
+        let lowered = SourceAuth::new(Some("bearer token".to_owned()), None);
+        assert_eq!(lowered.authorization().as_deref(), Some("bearer token"));
+    }
+
+    #[test]
+    fn authorization_does_not_panic_on_multibyte_token() {
+        // Срез по байтам на границе символа паниковал бы.
+        let auth = SourceAuth::new(Some("токен-не-латиница".to_owned()), None);
+        assert_eq!(
+            auth.authorization().as_deref(),
+            Some("Bearer токен-не-латиница")
+        );
     }
 }

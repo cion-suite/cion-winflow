@@ -48,6 +48,14 @@ export const en = {
       chapterNotFound: "Chapter not found.",
       sourceLocked: "The chapter is locked at the source.",
       sourceUpstreamFailed: "The source is unavailable right now.",
+      sourceAuthNotConfigured:
+        "This title requires a source account. Connect it in Settings → Sources.",
+      sourceAuthInvalid:
+        "The source rejected the saved account. Check it in Settings → Sources.",
+      sourceAuthMaybeRequired:
+        "The title may require a source account — if it is 18+, connect Remanga in Settings → Sources.",
+      sourceBlocked:
+        "The source blocked the request (Cloudflare or region).",
       sourceDisabled: "The source is disabled.",
       sourceNotFound: "The chapter is missing at the source.",
       contentKindUnknown: "Open the chapter first.",
@@ -244,6 +252,7 @@ export const en = {
       preferredSource: "Preferred",
       sourceStats: "{{chapters}} chapters · {{available}} available",
       sourceDisabled: "Disabled",
+      connectAccount: "Connect account",
       sourceError: "Sync error: {{message}}",
       addToLibrary: "Add to library",
       edit: "Edit",
@@ -295,7 +304,6 @@ export const en = {
       searchPlaceholder: "Search in library",
       searching: "Searching…",
       searchEmpty: "Nothing found in your library.",
-      sourceUnavailable: "{{source}} is unavailable right now.",
       add: "Add",
       open: "Open",
       inLibrary: "In library",
@@ -450,6 +458,7 @@ export const en = {
         failedCount: "Errors: {{count}}",
         errors: "Errors",
         errorsTruncated: "Only the first errors are shown.",
+        connectAccount: "Connect account",
         close: "Close",
         again: "Import more",
       },
@@ -478,7 +487,7 @@ export const en = {
       sources: {
         title: "Sources",
         description:
-          "Save your own source account for titles that require sign-in. Accounts are personal: other users cannot see them. The stored account will be used by source requests in a later update.",
+          "Save your own source account for titles that require sign-in. Accounts are personal: other users cannot see them. The saved account is used for your source requests.",
         cardDescription:
           "A personal Remanga account for requests that require sign-in.",
         connected: "Connected",
