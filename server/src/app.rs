@@ -13,7 +13,7 @@ use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 
 use crate::{
     auth::{self, limiter::ClientIpKeyExtractor},
-    catalog, discover, error,
+    bookmarks, catalog, discover, error,
     error::AppError,
     images, library, profile, progress, source_admin,
     state::AppState,
@@ -70,18 +70,46 @@ pub fn router(state: AppState) -> Router {
         2,
     );
 
+    // Импорт закладок ходит в чужую сеть сотни раз: ставим отдельный лимит
+    // на запуск. GET (опрос задания) не ограничиваем — профиль опрашивает
+    // его каждые 1.5 с.
+    let bookmarks_import = with_rate_limit(
+        post(bookmarks::handlers::start),
+        state.config.trusted_proxies.clone(),
+        10,
+        10,
+    );
+    // Смена пароля — Argon2; лимит не даёт перебирать текущий пароль
+    // украденной сессией.
+    let change_password = with_rate_limit(
+        put(auth::handlers::change_password),
+        state.config.trusted_proxies.clone(),
+        5,
+        10,
+    );
+
     let api = Router::new()
         .route("/health", get(health))
         .route("/auth/register", register)
         .route("/auth/login", login)
         .route("/auth/logout", post(auth::handlers::logout))
         .route("/me", get(auth::handlers::me))
+        .route("/me/username", put(auth::handlers::update_username))
+        .route("/me/password", change_password)
+        .route("/me/export/bookmarks", get(bookmarks::handlers::export))
         .route(
             "/me/avatar",
             // Дефолтные 2 МиБ не пропустят 5-мегабайтный файл
             post(profile::avatar::upload_avatar)
                 .delete(profile::avatar::delete_avatar)
                 .layer(DefaultBodyLimit::max(profile::BODY_LIMIT)),
+        )
+        .route(
+            "/me/import/bookmarks",
+            // JSON-экспорт закладок больше дефолтных 2 МиБ
+            get(bookmarks::handlers::latest)
+                .merge(bookmarks_import)
+                .layer(DefaultBodyLimit::max(bookmarks::BODY_LIMIT)),
         )
         .route("/users/{id}/profile", get(profile::handlers::get_profile))
         .route("/users/{id}/avatar", get(profile::avatar::get_avatar))

@@ -39,6 +39,11 @@ export const en = {
       libraryTabNameInvalid: "The tab name is invalid.",
       libraryTabNotFound: "The custom tab was not found.",
       libraryNotInLibrary: "Add the title to the library first.",
+      bookmarksInvalid: "Could not read the bookmarks JSON file.",
+      bookmarksEmpty: "The file contains no bookmarks.",
+      bookmarksTooLarge: "The bookmarks file is too large (max 3 MB).",
+      bookmarksFileRequired: "Choose a bookmarks JSON file.",
+      importInProgress: "A bookmarks import is already running.",
       scoreInvalid: "Score must be between 1 and 10.",
       chapterNotFound: "Chapter not found.",
       sourceLocked: "The chapter is locked at the source.",
@@ -392,6 +397,7 @@ export const en = {
       },
       errors: {
         invalidCredentials: "Invalid username or password.",
+        invalidPassword: "The current password is incorrect.",
         invalidInvite: "The invite is invalid, expired or already used.",
         registrationClosed: "Registration is closed.",
         usernameTaken: "This username is already taken.",
@@ -419,6 +425,75 @@ export const en = {
       libraryEmptyDescription: "This user has not added any titles yet.",
       libraryEmptyFiltered: "Nothing in this tab",
       libraryEmptyFilteredDescription: "Try another tab.",
+      importBookmarks: {
+        title: "Import Remanga bookmarks",
+        description:
+          "Upload a JSON export of Remanga or ExManga bookmarks. Titles will be added to the library, and statuses and read chapters will be transferred.",
+        chooseFile: "Choose JSON file",
+        noFile: "No file selected",
+        start: "Start import",
+        starting: "Starting…",
+        loading: "Checking the import…",
+        runningTitle: "Import in progress",
+        progress: "{{processed}} of {{total}}",
+        background:
+          "The import runs in the background — you can close this window, the library will update automatically.",
+        completedTitle: "Import completed",
+        failedTitle: "Import completed with errors",
+        summary:
+          "Added to library: {{created}}, updated: {{updated}}, new titles: {{imported}}.",
+        readMarked: "Chapters marked: {{count}}",
+        failedCount: "Errors: {{count}}",
+        errors: "Errors",
+        errorsTruncated: "Only the first errors are shown.",
+        close: "Close",
+        again: "Import more",
+      },
+    },
+    settingsPage: {
+      title: "Settings",
+      description: "Account, import and export.",
+      tabs: {
+        importExport: "Import/Export",
+        account: "Account",
+      },
+      import: {
+        title: "Import bookmarks",
+        description:
+          "Upload a Remanga or ExManga JSON export: titles, statuses and read chapters will be transferred to your library.",
+        action: "Import bookmarks",
+        running: "Import in progress: {{processed}} of {{total}}.",
+      },
+      export: {
+        title: "Export bookmarks",
+        description: "Download your library as a Remanga bookmarks JSON.",
+        action: "Download JSON",
+        hint: "Titles linked to Remanga are exported. Custom tabs keep their original status id; manually created tabs are exported under their built-in status.",
+      },
+      account: {
+        title: "Profile",
+        description:
+          "Your nickname and avatar are visible to other users of this instance.",
+        username: "Nickname",
+        usernameHint: "3–32 characters: Latin letters, digits, `_` and `-`.",
+        saveUsername: "Save nickname",
+        usernameSaved: "Nickname changed.",
+        avatar: "Avatar",
+        avatarHint:
+          "JPEG, PNG, WebP or GIF up to 5 MB; the image is cropped to a square.",
+      },
+      password: {
+        title: "Password",
+        description:
+          "Changing the password will sign out all other sessions.",
+        current: "Current password",
+        new: "New password",
+        confirm: "Repeat new password",
+        save: "Change password",
+        saved: "Password changed. Other sessions were signed out.",
+        mismatch: "The new passwords do not match.",
+        tooShort: "The password must be at least 10 characters.",
+      },
     },
     changelog: {
       description: "Release notes for every version.",

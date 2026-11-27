@@ -8,6 +8,7 @@ use sqlx::SqlitePool;
 use tokio::sync::{RwLock, Semaphore};
 
 use crate::auth::limiter::LoginLimiter;
+use crate::bookmarks::ImportJobs;
 use crate::config::Config;
 use crate::error::AppError;
 use crate::images::ImageCache;
@@ -75,6 +76,8 @@ pub struct AppState {
     /// Сериализует запись файла и версии аватара: загрузка и удаление
     /// в разных вкладках не должны оставить версию без файла и наоборот.
     avatar_locks: Arc<SyncMutex<HashMap<i64, AvatarLock>>>,
+    /// Фоновые импорты закладок: состояние живёт в памяти процесса.
+    pub bookmark_imports: Arc<ImportJobs>,
 }
 
 impl AppState {
@@ -103,6 +106,7 @@ impl AppState {
             image_download_semaphore: Arc::new(Semaphore::new(16)),
             cover_locks: Arc::new(SyncMutex::new(HashMap::new())),
             avatar_locks: Arc::new(SyncMutex::new(HashMap::new())),
+            bookmark_imports: Arc::new(ImportJobs::new()),
         })
     }
 

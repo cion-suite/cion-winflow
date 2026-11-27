@@ -1,6 +1,7 @@
 /** Код ошибки API -> ключ i18n; неизвестный код показываем текстом сервера. */
 const ERROR_KEYS: Partial<Record<string, string>> = {
   invalid_credentials: "auth.errors.invalidCredentials",
+  invalid_password: "auth.errors.invalidPassword",
   invalid_invite: "auth.errors.invalidInvite",
   registration_closed: "auth.errors.registrationClosed",
   username_taken: "auth.errors.usernameTaken",
@@ -22,6 +23,11 @@ const ERROR_KEYS: Partial<Record<string, string>> = {
   library_tab_name_invalid: "errors.libraryTabNameInvalid",
   library_tab_not_found: "errors.libraryTabNotFound",
   library_not_in_library: "errors.libraryNotInLibrary",
+  bookmarks_invalid: "errors.bookmarksInvalid",
+  bookmarks_empty: "errors.bookmarksEmpty",
+  bookmarks_too_large: "errors.bookmarksTooLarge",
+  bookmarks_file_required: "errors.bookmarksFileRequired",
+  import_in_progress: "errors.importInProgress",
   score_invalid: "errors.scoreInvalid",
   chapter_not_found: "errors.chapterNotFound",
   source_locked: "errors.sourceLocked",

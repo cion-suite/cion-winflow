@@ -29,6 +29,9 @@ pub const USER_PASSWORD: &str = "user-password-123";
 
 pub struct TestApp {
     pub pool: SqlitePool,
+    /// Состояние нужно тестам, которые вызывают сервисы напрямую
+    /// (например, фоновый импорт закладок).
+    pub state: AppState,
     router: Router,
     // TempDir удаляет каталоги только при drop: держим их живыми
     _db_dir: TempDir,
@@ -73,7 +76,8 @@ impl TestApp {
             .expect("app state");
         Self {
             pool,
-            router: router(state),
+            router: router(state.clone()),
+            state,
             _db_dir: db_dir,
             _static_dir: static_dir,
             _data_dir: data_dir,

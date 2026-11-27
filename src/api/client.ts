@@ -101,3 +101,19 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
 }
+
+/** Скачивание файла: тело — Blob, ошибки сервера — тот же ApiError. */
+export async function requestBlob(path: string): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(apiUrl(path), {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+  } catch (cause) {
+    throw new ApiError(0, "network_error", "Network request failed", { cause });
+  }
+
+  if (!response.ok) throw await errorFrom(response);
+  return response.blob();
+}

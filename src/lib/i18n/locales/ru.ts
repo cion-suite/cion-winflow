@@ -39,6 +39,11 @@ export const ru = {
       libraryTabNameInvalid: "Некорректное название закладки.",
       libraryTabNotFound: "Закладка не найдена.",
       libraryNotInLibrary: "Сначала добавьте тайтл в библиотеку.",
+      bookmarksInvalid: "Не удалось прочитать JSON-файл закладок.",
+      bookmarksEmpty: "В файле нет закладок.",
+      bookmarksTooLarge: "Файл закладок слишком большой (максимум 3 МБ).",
+      bookmarksFileRequired: "Выберите JSON-файл закладок.",
+      importInProgress: "Импорт закладок уже выполняется.",
       scoreInvalid: "Оценка должна быть от 1 до 10.",
       chapterNotFound: "Глава не найдена.",
       sourceLocked: "Глава закрыта на источнике.",
@@ -392,6 +397,7 @@ export const ru = {
       },
       errors: {
         invalidCredentials: "Неверное имя пользователя или пароль.",
+        invalidPassword: "Текущий пароль неверен.",
         invalidInvite: "Инвайт недействителен, истёк или уже использован.",
         registrationClosed: "Регистрация закрыта.",
         usernameTaken: "Это имя пользователя уже занято.",
@@ -478,6 +484,76 @@ export const ru = {
       libraryEmptyDescription: "Пользователь ещё не добавил ни одного тайтла.",
       libraryEmptyFiltered: "В этой вкладке пусто",
       libraryEmptyFilteredDescription: "Попробуйте другую вкладку.",
+      importBookmarks: {
+        title: "Импорт закладок Remanga",
+        description:
+          "Загрузите JSON-экспорт закладок Remanga или ExManga. Тайтлы добавятся в библиотеку, а статусы и прочитанные главы перенесутся.",
+        chooseFile: "Выбрать JSON-файл",
+        noFile: "Файл не выбран",
+        start: "Начать импорт",
+        starting: "Запуск…",
+        loading: "Проверяем импорт…",
+        runningTitle: "Импорт выполняется",
+        progress: "{{processed}} из {{total}}",
+        background:
+          "Импорт идёт в фоне — окно можно закрыть, библиотека обновится сама.",
+        completedTitle: "Импорт завершён",
+        failedTitle: "Импорт завершён с ошибками",
+        summary:
+          "Добавлено в библиотеку: {{created}}, обновлено: {{updated}}, новых тайтлов: {{imported}}.",
+        readMarked: "Отмечено глав: {{count}}",
+        failedCount: "Ошибок: {{count}}",
+        errors: "Ошибки",
+        errorsTruncated: "Показаны первые ошибки.",
+        close: "Закрыть",
+        again: "Импортировать ещё",
+      },
+    },
+    settingsPage: {
+      title: "Настройки",
+      description: "Аккаунт, импорт и экспорт данных.",
+      tabs: {
+        importExport: "Импорт/Экспорт",
+        account: "Аккаунт",
+      },
+      import: {
+        title: "Импорт закладок",
+        description:
+          "Загрузите JSON-экспорт Remanga или ExManga: тайтлы, статусы и прочитанные главы перенесутся в библиотеку.",
+        action: "Импортировать закладки",
+        running: "Импорт выполняется: {{processed}} из {{total}}.",
+      },
+      export: {
+        title: "Экспорт закладок",
+        description:
+          "Скачайте библиотеку в JSON-формате закладок Remanga.",
+        action: "Скачать JSON",
+        hint: "Экспортируются тайтлы, привязанные к Remanga. Свои закладки сохраняют исходный id статуса; закладки, созданные вручную, экспортируются под встроенным статусом.",
+      },
+      account: {
+        title: "Профиль",
+        description:
+          "Никнейм и аватар видны другим пользователям инсталляции.",
+        username: "Никнейм",
+        usernameHint: "3–32 символа: латинские буквы, цифры, «_» и «-».",
+        saveUsername: "Сохранить никнейм",
+        usernameSaved: "Никнейм изменён.",
+        avatar: "Аватар",
+        avatarHint:
+          "JPEG, PNG, WebP или GIF до 5 МБ; картинка обрезается до квадрата.",
+      },
+      password: {
+        title: "Пароль",
+        description:
+          "После смены пароля все остальные сессии будут завершены.",
+        current: "Текущий пароль",
+        new: "Новый пароль",
+        confirm: "Повторите новый пароль",
+        save: "Сменить пароль",
+        saved: "Пароль изменён. Остальные сессии завершены.",
+        mismatch: "Новые пароли не совпадают.",
+        tooShort: "Пароль должен быть не короче 10 символов.",
+      },
     },
     changelog: {
       description: "Список изменений по версиям.",

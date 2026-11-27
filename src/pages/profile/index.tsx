@@ -51,7 +51,6 @@ export function ProfilePage() {
     routeId > 0
       ? routeId
       : null;
-  const isOwn = userId !== null && current?.id === userId;
 
   // Фильтр и страница привязаны к uid: при переходе на другой профиль
   // выбор не переносится, а сбрасывается без эффекта.
@@ -134,7 +133,6 @@ export function ProfilePage() {
         readChapters={stats.read_chapters}
         titles={stats.counts.all}
         completed={stats.counts.statuses.completed}
-        isOwn={isOwn}
       />
 
       <div className="min-w-0 overflow-x-auto scrollbar-none">

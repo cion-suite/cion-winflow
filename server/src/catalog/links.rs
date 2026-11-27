@@ -65,6 +65,7 @@ pub async fn attach(
         ImportInput {
             external_id: input.external_id,
             title_id: Some(title_id),
+            auto_link: true,
         },
     )
     .await

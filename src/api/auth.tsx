@@ -35,6 +35,11 @@ type RegisterInput = Credentials & {
   invite: string;
 };
 
+export type ChangePasswordInput = {
+  current_password: string;
+  new_password: string;
+};
+
 export const ME_QUERY_KEY = ["me"] as const;
 
 function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -56,6 +61,10 @@ export const authApi = {
   login: (credentials: Credentials) => postJson<MeResponse>("/auth/login", credentials),
   register: (input: RegisterInput) => postJson<MeResponse>("/auth/register", input),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
+  updateUsername: (username: string) =>
+    request<MeResponse>("/me/username", jsonMutation({ username }, "PUT")),
+  changePassword: (input: ChangePasswordInput) =>
+    request<void>("/me/password", jsonMutation(input, "PUT")),
 };
 
 export function useMeQuery() {
@@ -96,6 +105,25 @@ export function useLogoutMutation() {
     mutationFn: authApi.logout,
     // Кэш прошлого пользователя не должен остаться на общем браузере
     onSuccess: () => queryClient.clear(),
+  });
+}
+
+export function useUpdateUsernameMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: authApi.updateUsername,
+    onSuccess: (data) => {
+      queryClient.setQueryData(ME_QUERY_KEY, data);
+      // Ник виден и в публичном профиле.
+      void queryClient.invalidateQueries({ queryKey: ["profile"] });
+    },
+  });
+}
+
+export function useChangePasswordMutation() {
+  return useMutation({
+    mutationFn: authApi.changePassword,
   });
 }
 

@@ -25,10 +25,13 @@ export const api = {
 export {
   AuthProvider,
   useAuth,
+  useChangePasswordMutation,
   useLoginMutation,
   useLogoutMutation,
   useRegisterMutation,
+  useUpdateUsernameMutation,
 } from "./auth";
+export type { ChangePasswordInput, Role, User } from "./auth";
 export {
   formValuesToTitleInput,
   titleCoverUrl,
@@ -146,14 +149,23 @@ export {
 export type { Progress, ProgressInput, ProgressResponse } from "./progress";
 export { useErrorText } from "./errors";
 export {
+  BOOKMARK_IMPORT_QUERY_KEY,
+  invalidateAfterBookmarkImport,
   profileApi,
+  useBookmarkImportMutation,
+  useBookmarkImportQuery,
   useDeleteAvatarMutation,
+  useExportBookmarksMutation,
   useProfileQuery,
   useUploadAvatarMutation,
   userAvatarUrl,
 } from "./profile";
 export type {
   AvatarResponse,
+  BookmarkImportError,
+  BookmarkImportJob,
+  BookmarkImportResponse,
+  BookmarkImportState,
   ProfileLibrary,
   ProfileQuery,
   ProfileResponse,

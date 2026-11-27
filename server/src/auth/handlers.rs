@@ -30,6 +30,17 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateUsernameRequest {
+    pub username: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AuthResponse {
     pub user: CurrentUser,
@@ -84,6 +95,41 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Result<Res
 
 pub async fn me(Extension(user): Extension<CurrentUser>) -> Json<AuthResponse> {
     Json(AuthResponse { user })
+}
+
+pub async fn update_username(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiJson(request): ApiJson<UpdateUsernameRequest>,
+) -> Result<Json<AuthResponse>, AppError> {
+    let username = service::update_username(&state, user.id, request.username).await?;
+    Ok(Json(AuthResponse {
+        user: CurrentUser { username, ..user },
+    }))
+}
+
+/// Смена пароля оставляет текущую сессию и удаляет остальные.
+pub async fn change_password(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    jar: CookieJar,
+    ApiJson(request): ApiJson<ChangePasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    let token = jar
+        .get(session::COOKIE_NAME)
+        .map(|cookie| cookie.value().to_owned())
+        .ok_or(AppError::Unauthorized)?;
+
+    service::change_password(
+        &state,
+        user.id,
+        request.current_password,
+        request.new_password,
+        &session::hash_secret(&token),
+    )
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn list_invites(

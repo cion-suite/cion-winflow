@@ -220,6 +220,93 @@ pub async fn logout(state: &AppState, token: Option<String>) -> Result<(), AppEr
     Ok(())
 }
 
+/// Смена ника: формат и уникальность те же, что при регистрации.
+/// Возвращает сохранённое имя, чтобы обработчик собрал новый `CurrentUser`.
+pub async fn update_username(
+    state: &AppState,
+    user_id: i64,
+    username: String,
+) -> Result<String, AppError> {
+    let username = username.trim().to_owned();
+    validate_username(&username)?;
+
+    let updated = sqlx::query_scalar::<_, i64>(
+        "UPDATE users SET username = ? \
+         WHERE id = ? AND disabled_at IS NULL RETURNING id",
+    )
+    .bind(&username)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await;
+
+    match updated {
+        Ok(Some(_)) => Ok(username),
+        Ok(None) => Err(AppError::not_found("user_not_found", "user not found")),
+        Err(error) if is_unique_violation(&error) => Err(AppError::conflict(
+            "username_taken",
+            "username is already taken",
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Смена пароля: текущий пароль проверяется, остальные сессии удаляются.
+/// Текущая сессия (её token_hash передаёт обработчик) остаётся рабочей.
+pub async fn change_password(
+    state: &AppState,
+    user_id: i64,
+    current_password: String,
+    new_password: String,
+    current_token_hash: &str,
+) -> Result<(), AppError> {
+    if current_password.is_empty() {
+        return Err(AppError::bad_request(
+            "validation",
+            "current password is required",
+        ));
+    }
+    password::validate(&new_password)?;
+
+    let stored_hash = sqlx::query_scalar::<_, String>(
+        "SELECT password_hash FROM users WHERE id = ? AND disabled_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("user_not_found", "user not found"))?;
+
+    let matches = password::verify(
+        current_password,
+        stored_hash,
+        state.password_semaphore.clone(),
+    )
+    .await?;
+    if !matches {
+        return Err(AppError::bad_request(
+            "invalid_password",
+            "current password is incorrect",
+        ));
+    }
+
+    let password_hash = password::hash(new_password, state.password_semaphore.clone()).await?;
+
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(&password_hash)
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?;
+    // Текущая сессия остаётся, остальные устройства разлогиниваются.
+    sqlx::query("DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?")
+        .bind(user_id)
+        .bind(current_token_hash)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+
+    Ok(())
+}
+
 pub async fn list_invites(state: &AppState) -> Result<Vec<InviteSummary>, AppError> {
     let invites = sqlx::query_as::<_, InviteSummary>(
         "SELECT id, created_by, used_by, expires_at, created_at \

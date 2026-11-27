@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ME_QUERY_KEY, type Role } from "./auth";
-import { apiUrl, request } from "./client";
+import { ME_QUERY_KEY, useAuth, type Role } from "./auth";
+import { apiUrl, request, requestBlob } from "./client";
 import type { LibraryStatus } from "@/lib/catalog";
 import type { LibraryCounts, LibraryItem } from "./library";
 
@@ -47,7 +47,38 @@ export type ProfileQuery = {
   pageSize?: number;
 };
 
+export type BookmarkImportState = "running" | "completed" | "failed";
+
+export type BookmarkImportError = {
+  name: string;
+  message: string;
+};
+
+/** Фоновое задание импорта закладок: профиль опрашивает его, пока running. */
+export type BookmarkImportJob = {
+  id: string;
+  state: BookmarkImportState;
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  /** Новые тайтлы, которых не было на сервере. */
+  titles_imported: number;
+  library_created: number;
+  library_updated: number;
+  read_marked: number;
+  errors: BookmarkImportError[];
+  errors_truncated: boolean;
+  started_at: number;
+  finished_at: number | null;
+};
+
+export type BookmarkImportResponse = {
+  job: BookmarkImportJob | null;
+};
+
 export const PROFILE_QUERY_KEY = ["profile"] as const;
+export const BOOKMARK_IMPORT_QUERY_KEY = ["bookmark-import"] as const;
 
 /** URL аватара: версия в query делает ETag и кэш браузера корректными. */
 export function userAvatarUrl(
@@ -79,6 +110,17 @@ export const profileApi = {
     return request<AvatarResponse>("/me/avatar", { method: "POST", body });
   },
   deleteAvatar: () => request<void>("/me/avatar", { method: "DELETE" }),
+  latestBookmarkImport: () =>
+    request<BookmarkImportResponse>("/me/import/bookmarks"),
+  startBookmarkImport: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{ job: BookmarkImportJob }>("/me/import/bookmarks", {
+      method: "POST",
+      body,
+    });
+  },
+  exportBookmarks: () => requestBlob("/me/export/bookmarks"),
 };
 
 export function useProfileQuery(
@@ -130,4 +172,53 @@ export function useDeleteAvatarMutation() {
     mutationFn: profileApi.deleteAvatar,
     onSuccess: () => invalidateAvatar(queryClient),
   });
+}
+
+/** Последнее задание импорта; пока оно running, опрос идёт каждые 1.5 с. */
+export function useBookmarkImportQuery() {
+  const { user } = useAuth();
+  return useQuery({
+    // uid в ключе: после смены пользователя чужой импорт не показывается
+    queryKey: [...BOOKMARK_IMPORT_QUERY_KEY, user?.id ?? 0],
+    queryFn: profileApi.latestBookmarkImport,
+    enabled: user !== null,
+    refetchInterval: (query) =>
+      query.state.data?.job?.state === "running" ? 1500 : false,
+  });
+}
+
+export function useBookmarkImportMutation() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: profileApi.startBookmarkImport,
+    onSuccess: (data) => {
+      // Сразу показываем своё задание, не дожидаясь refetch: иначе диалог
+      // на мгновение покажет прошлый результат или пустую форму.
+      queryClient.setQueryData([...BOOKMARK_IMPORT_QUERY_KEY, user?.id ?? 0], data);
+      void queryClient.invalidateQueries({
+        queryKey: BOOKMARK_IMPORT_QUERY_KEY,
+      });
+    },
+  });
+}
+
+/** Скачивание экспорта: возвращает Blob, ошибки — обычный ApiError. */
+export function useExportBookmarksMutation() {
+  return useMutation({
+    mutationFn: profileApi.exportBookmarks,
+  });
+}
+
+/** Импорт меняет сразу библиотеку, профиль и прогресс всех затронутых тайтлов. */
+export function invalidateAfterBookmarkImport(
+  queryClient: ReturnType<typeof useQueryClient>,
+): void {
+  void queryClient.invalidateQueries({ queryKey: PROFILE_QUERY_KEY });
+  void queryClient.invalidateQueries({ queryKey: ["library"] });
+  void queryClient.invalidateQueries({ queryKey: ["library-tabs"] });
+  void queryClient.invalidateQueries({ queryKey: ["title"] });
+  void queryClient.invalidateQueries({ queryKey: ["chapter-content"] });
+  void queryClient.invalidateQueries({ queryKey: ["progress"] });
 }

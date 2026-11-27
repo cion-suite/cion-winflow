@@ -93,6 +93,14 @@ pub struct SearchResponse {
 pub struct ImportInput {
     pub external_id: String,
     pub title_id: Option<i64>,
+    /// Сливать с существующим тайтлом по названию. Импорт закладок
+    /// выключает это при конфликте одинаковых названий разных произведений.
+    #[serde(default = "default_auto_link")]
+    pub auto_link: bool,
+}
+
+fn default_auto_link() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize)]
@@ -349,7 +357,7 @@ pub async fn import(
     // Добавление того же произведения из другого источника должно привязать
     // его к общей карточке, а не создать дубль: без ручной привязки это
     // единственный путь получить главы из нескольких источников.
-    let auto_title_id = if input.title_id.is_none() {
+    let auto_title_id = if input.title_id.is_none() && input.auto_link {
         find_title_by_names(&mut tx, &source_title).await?
     } else {
         None

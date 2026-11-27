@@ -341,3 +341,125 @@ async fn login_with_wrong_password_is_401() {
     assert_eq!(json["code"], "invalid_credentials");
     assert_eq!(json["message"], "invalid username or password");
 }
+
+#[tokio::test]
+async fn username_can_be_changed_and_must_stay_unique() {
+    let app = TestApp::new().await;
+    let reader = app.register_user("reader").await;
+    let admin = app.login_admin().await;
+
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::PUT,
+                "/api/me/username",
+                &json!({ "username": "renamed" }),
+            ),
+            &reader,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["user"]["username"], "renamed");
+
+    let me = app.request(with_cookie(get("/api/me"), &reader)).await;
+    assert_eq!(body_json(me).await["user"]["username"], "renamed");
+
+    let taken = app
+        .request(with_cookie(
+            json_request(
+                Method::PUT,
+                "/api/me/username",
+                &json!({ "username": "renamed" }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(taken.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(taken).await["code"], "username_taken");
+
+    let invalid = app
+        .request(with_cookie(
+            json_request(Method::PUT, "/api/me/username", &json!({ "username": "x" })),
+            &reader,
+        ))
+        .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    let unauthorized = app
+        .request(json_request(
+            Method::PUT,
+            "/api/me/username",
+            &json!({ "username": "nobody" }),
+        ))
+        .await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn password_change_keeps_current_session_and_revokes_others() {
+    let app = TestApp::new().await;
+    let reader = app.register_user("reader").await;
+
+    let second_login = app.login("reader", USER_PASSWORD).await;
+    assert_eq!(second_login.status(), StatusCode::OK);
+    let second = session_token(&second_login);
+
+    let wrong = app
+        .request(with_cookie(
+            json_request(
+                Method::PUT,
+                "/api/me/password",
+                &json!({
+                    "current_password": "definitely-wrong",
+                    "new_password": "new-password-456",
+                }),
+            ),
+            &reader,
+        ))
+        .await;
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(wrong).await["code"], "invalid_password");
+
+    let short = app
+        .request(with_cookie(
+            json_request(
+                Method::PUT,
+                "/api/me/password",
+                &json!({
+                    "current_password": USER_PASSWORD,
+                    "new_password": "short",
+                }),
+            ),
+            &reader,
+        ))
+        .await;
+    assert_eq!(short.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(short).await["code"], "validation");
+
+    let changed = app
+        .request(with_cookie(
+            json_request(
+                Method::PUT,
+                "/api/me/password",
+                &json!({
+                    "current_password": USER_PASSWORD,
+                    "new_password": "new-password-456",
+                }),
+            ),
+            &reader,
+        ))
+        .await;
+    assert_eq!(changed.status(), StatusCode::NO_CONTENT);
+
+    // Текущая сессия жива, вторая — разлогинена.
+    let current = app.request(with_cookie(get("/api/me"), &reader)).await;
+    assert_eq!(current.status(), StatusCode::OK);
+    let revoked = app.request(with_cookie(get("/api/me"), &second)).await;
+    assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
+
+    let old = app.login("reader", USER_PASSWORD).await;
+    assert_eq!(old.status(), StatusCode::UNAUTHORIZED);
+    let fresh = app.login("reader", "new-password-456").await;
+    assert_eq!(fresh.status(), StatusCode::OK);
+}

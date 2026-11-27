@@ -365,6 +365,7 @@ async fn auto_link_sources(state: &AppState, title_id: i64, origin_source_id: i6
             ImportInput {
                 external_id: external_id.as_str().to_owned(),
                 title_id: Some(title_id),
+                auto_link: true,
             },
         )
         .await
@@ -555,6 +556,7 @@ pub async fn add(
                 ImportInput {
                     external_id: external_id.as_str().to_owned(),
                     title_id: None,
+                    auto_link: true,
                 },
             )
             .await?;

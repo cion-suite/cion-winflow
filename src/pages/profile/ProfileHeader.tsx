@@ -1,21 +1,12 @@
-import { type ChangeEvent, useRef } from "react";
 import {
   BookOpenIcon,
   CalendarIcon,
-  CameraIcon,
   CheckCheckIcon,
   LibraryBigIcon,
-  XIcon,
   type LucideIcon,
 } from "lucide-react";
 
-import {
-  useDeleteAvatarMutation,
-  useErrorText,
-  useUploadAvatarMutation,
-  userAvatarUrl,
-  type ProfileUser,
-} from "@/api";
+import { userAvatarUrl, type ProfileUser } from "@/api";
 import { useLocale, useT } from "@/lib/i18n";
 import { roleLabelKey } from "@/lib/nav";
 import {
@@ -24,36 +15,35 @@ import {
   AvatarImage,
 } from "@/ui/shadcn/avatar";
 import { Badge } from "@/ui/shadcn/badge";
-import { Button } from "@/ui/shadcn/button";
 import {
   Card,
   CardContent,
 } from "@/ui/shadcn/card";
 import { Separator } from "@/ui/shadcn/separator";
-import { Spinner } from "@/ui/shadcn/spinner";
 
 type ProfileHeaderProps = {
   user: ProfileUser;
   readChapters: number;
   titles: number;
   completed: number;
-  isOwn: boolean;
 };
 
-/** Компактная шапка профиля: аватар, ник, роль, дата регистрации и счётчики. */
+/**
+ * Компактная шапка профиля: аватар, ник, роль, дата регистрации и счётчики.
+ * Редактирование аватара и импорт живут в настройках.
+ */
 export function ProfileHeader({
   user,
   readChapters,
   titles,
   completed,
-  isOwn,
 }: ProfileHeaderProps) {
   const t = useT();
 
   return (
     <Card>
       <CardContent className="flex flex-col gap-5 sm:flex-row sm:items-center sm:gap-6">
-        <ProfileAvatar user={user} isOwn={isOwn} />
+        <ProfileAvatar user={user} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h1 className="min-w-0 truncate text-xl font-semibold tracking-tight">
@@ -91,87 +81,19 @@ function ProfileMeta({ user }: { user: ProfileUser }) {
   );
 }
 
-function ProfileAvatar({ user, isOwn }: { user: ProfileUser; isOwn: boolean }) {
-  const t = useT();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const upload = useUploadAvatarMutation();
-  const remove = useDeleteAvatarMutation();
-  const errorText = useErrorText(upload.error ?? remove.error);
+function ProfileAvatar({ user }: { user: ProfileUser }) {
   const src = userAvatarUrl(
     user.id,
     user.avatar_updated_at,
     user.avatar_version,
   );
   const initial = user.username.trim().slice(0, 1).toUpperCase();
-  const pending = upload.isPending || remove.isPending;
-
-  function handleFile(event: ChangeEvent<HTMLInputElement>): void {
-    const file = event.target.files?.[0];
-    // Иначе повторный выбор того же файла не вызовет onChange
-    event.target.value = "";
-    if (file) {
-      // Ошибка предыдущего удаления не должна висеть над новой загрузкой
-      remove.reset();
-      upload.mutate(file);
-    }
-  }
 
   return (
-    <div className="flex flex-col items-center gap-1.5">
-      <div className="relative">
-        <Avatar className="size-16">
-          <AvatarImage src={src ?? undefined} alt="" />
-          <AvatarFallback>{initial}</AvatarFallback>
-        </Avatar>
-
-        {isOwn && (
-          <>
-            <input
-              ref={inputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              className="sr-only"
-              onChange={handleFile}
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              size="icon-sm"
-              className="absolute -right-1 -bottom-1 rounded-full"
-              aria-label={t("profile.changeAvatar")}
-              title={t("profile.changeAvatar")}
-              disabled={pending}
-              onClick={() => inputRef.current?.click()}
-            >
-              {upload.isPending ? <Spinner /> : <CameraIcon />}
-            </Button>
-            {src !== null && (
-              <Button
-                type="button"
-                variant="secondary"
-                size="icon-sm"
-                className="absolute -top-1 -right-1 rounded-full"
-                aria-label={t("profile.removeAvatar")}
-                title={t("profile.removeAvatar")}
-                disabled={pending}
-                onClick={() => {
-                  upload.reset();
-                  remove.mutate();
-                }}
-              >
-                {remove.isPending ? <Spinner /> : <XIcon />}
-              </Button>
-            )}
-          </>
-        )}
-      </div>
-
-      {errorText !== null && (
-        <p role="alert" className="max-w-40 text-center text-xs text-destructive">
-          {errorText}
-        </p>
-      )}
-    </div>
+    <Avatar className="size-16">
+      <AvatarImage src={src ?? undefined} alt="" />
+      <AvatarFallback>{initial}</AvatarFallback>
+    </Avatar>
   );
 }
 
