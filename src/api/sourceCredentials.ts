@@ -22,11 +22,6 @@ export type SourceCredentialsResponse = {
   credentials: SourceCredential[];
 };
 
-export type SourceCredentialInput = {
-  bearer?: string | null;
-  cookie?: string | null;
-};
-
 /** Пара для серверного входа. Пароль уходит один раз и не сохраняется. */
 export type SourceLoginInput = {
   login: string;
@@ -41,12 +36,15 @@ function credentialPath(code: string): string {
 
 export const sourceCredentialsApi = {
   list: () => request<SourceCredentialsResponse>("/me/source-credentials"),
-  save: (code: string, input: SourceCredentialInput) =>
-    request<SourceCredential>(credentialPath(code), jsonMutation(input, "PUT")),
   login: (code: string, input: SourceLoginInput) =>
     request<SourceCredential>(
       `${credentialPath(code)}/login`,
       jsonMutation(input, "POST"),
+    ),
+  verify: (code: string) =>
+    request<SourceCredential>(
+      `${credentialPath(code)}/verify`,
+      jsonMutation({}, "POST"),
     ),
   remove: (code: string) =>
     request<void>(credentialPath(code), { method: "DELETE" }),
@@ -74,21 +72,6 @@ function invalidateAfterCredentialChange(
   void queryClient.invalidateQueries({ queryKey: ["chapter-content"] });
 }
 
-export function useSaveSourceCredentialMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({
-      code,
-      input,
-    }: {
-      code: string;
-      input: SourceCredentialInput;
-    }) => sourceCredentialsApi.save(code, input),
-    onSuccess: () => invalidateAfterCredentialChange(queryClient),
-  });
-}
-
 export function useLoginSourceCredentialMutation() {
   const queryClient = useQueryClient();
 
@@ -101,6 +84,17 @@ export function useLoginSourceCredentialMutation() {
       input: SourceLoginInput;
     }) => sourceCredentialsApi.login(code, input),
     onSuccess: () => invalidateAfterCredentialChange(queryClient),
+  });
+}
+
+export function useVerifySourceCredentialMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (code: string) => sourceCredentialsApi.verify(code),
+    // Проверка меняет last_error и на 502: инвалидируем и при ошибке, иначе
+    // карточка останется зелёной после отклонённого токена.
+    onSettled: () => invalidateAfterCredentialChange(queryClient),
   });
 }
 

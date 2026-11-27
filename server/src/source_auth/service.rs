@@ -14,7 +14,7 @@ use crate::{
     auth::session::now_unix,
     error::AppError,
     source_auth::{SourceAuth, crypto::CredentialCipher},
-    sources::descriptor::Capability,
+    sources::{SourceError, descriptor::Capability},
     state::AppState,
 };
 
@@ -242,6 +242,70 @@ pub async fn login_and_save(
         last_verified_at: Some(verified_at),
         last_error: None,
     })
+}
+
+/// Проверяет сохранённую учётку лёгким запросом источника и обновляет
+/// `last_verified_at`/`last_error`. Пароль не нужен: проверяется токен,
+/// который уже лежит в БД.
+pub async fn verify(state: &AppState, user_id: i64, code: &str) -> Result<CredentialDto, AppError> {
+    let cipher = state.credential_cipher()?;
+    let (source_id, descriptor_code, descriptor_name, login_supported, adapter) = {
+        let registry = state.sources.read().await;
+        let Some(runtime) = registry.runtime(code) else {
+            return Err(AppError::not_found("source_not_found", "unknown source"));
+        };
+        if !runtime.descriptor.has(Capability::Auth) {
+            return Err(AppError::bad_request(
+                "source_credentials_invalid",
+                "this source does not support per-user credentials",
+            ));
+        }
+        let adapter = runtime.adapter()?.clone();
+        (
+            runtime.id,
+            runtime.descriptor.code,
+            runtime.descriptor.name,
+            runtime.descriptor.has(Capability::Login),
+            adapter,
+        )
+    };
+
+    let Some(auth) = for_user(&state.pool, cipher, user_id, source_id).await? else {
+        return Err(auth_not_configured());
+    };
+    // `updated_at` проверка не меняет; читаем до сети, чтобы параллельное
+    // удаление учётки не превратило успешную проверку в 500.
+    let updated_at = sqlx::query_scalar::<_, i64>(
+        "SELECT updated_at FROM user_source_credentials WHERE user_id = ? AND source_id = ?",
+    )
+    .bind(user_id)
+    .bind(source_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(auth_not_configured)?;
+
+    match adapter.verify(Some(&auth)).await {
+        Ok(()) => {
+            mark_verified(&state.pool, user_id, source_id).await?;
+            Ok(CredentialDto {
+                code: descriptor_code,
+                name: descriptor_name,
+                configured: true,
+                login_supported,
+                updated_at: Some(updated_at),
+                last_verified_at: Some(now_unix()),
+                last_error: None,
+            })
+        }
+        Err(error) => {
+            // Отклонённый токен запоминаем в учётке; временные ошибки сети
+            // не должны выглядеть как «учётка неверна».
+            if matches!(&error, SourceError::AuthRequired) {
+                mark_auth_error(&state.pool, user_id, source_id).await?;
+            }
+            Err(error.into_app(true))
+        }
+    }
 }
 
 /// Удаление идемпотентно: повторный DELETE не ошибка. Функция, как и

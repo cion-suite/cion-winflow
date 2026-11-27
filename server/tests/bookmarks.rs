@@ -6,7 +6,7 @@ use axum::http::{Method, StatusCode, header};
 use serde_json::json;
 
 use cion_reader::bookmarks::service;
-use common::{TestApp, body_json, get, json_request, multipart_file_request, with_cookie};
+use common::{TestApp, body_json, get, json_request, multipart_file_request, remanga, with_cookie};
 
 async fn configure_fixture(app: &TestApp, admin: &str) {
     let response = app
@@ -220,6 +220,83 @@ async fn bookmarks_import_marks_chapters_and_sets_progress() {
             .await
             .expect("read count");
     assert_eq!(read_count, 2);
+}
+
+#[tokio::test]
+async fn bookmarks_import_falls_back_to_another_source_when_title_is_gone() {
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    let stub = remanga::start().await;
+    remanga::configure(&app, &admin, &stub).await;
+    configure_fixture(&app, &admin).await;
+    let user_id = current_user_id(&app, &admin).await;
+
+    // Remanga отвечает 404 на устаревший dir, а поиск по названию не находит
+    // тайтл (двойник отдаёт «Public Title»). Fixture — второй источник, на
+    // котором тайтл с таким названием есть.
+    let bytes = serde_json::to_vec(&json!({
+        "remanga": [{
+            "type": 1,
+            "progress": 2,
+            "progress_total": 3,
+            "name": "Fixture Title",
+            "dir": "gone",
+        }]
+    }))
+    .expect("json");
+
+    let (_, handle) = service::start(&app.state, user_id, &bytes, "remanga")
+        .await
+        .expect("start import");
+    handle.await.expect("import task");
+
+    let latest = app.state.bookmark_imports.latest(user_id).expect("job");
+    assert_eq!(latest.state, service::ImportState::Completed);
+    assert_eq!(latest.failed, 0, "errors: {:?}", latest.errors);
+    assert_eq!(latest.succeeded, 1);
+
+    let code: String = sqlx::query_scalar(
+        "SELECT s.code FROM source_entries e JOIN sources s ON s.id = e.source_id \
+         WHERE e.title_id = (SELECT title_id FROM library WHERE user_id = ?)",
+    )
+    .bind(user_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("source entry");
+    assert_eq!(code, "fixture", "bookmark was imported from another source");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM library WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .expect("library status");
+    assert_eq!(status, "in_progress");
+
+    let read_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM chapter_reads WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&app.pool)
+            .await
+            .expect("read count");
+    assert_eq!(read_count, 2);
+
+    // Повторный импорт снова не находит dir, но привязывается к тому же
+    // тайтлу через fixture — без дублей.
+    let (_, handle) = service::start(&app.state, user_id, &bytes, "remanga")
+        .await
+        .expect("re-import");
+    handle.await.expect("re-import task");
+    let titles: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM titles")
+        .fetch_one(&app.pool)
+        .await
+        .expect("titles");
+    assert_eq!(titles, 1);
+    let entries: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM source_entries")
+        .fetch_one(&app.pool)
+        .await
+        .expect("entries");
+    assert_eq!(entries, 1);
 }
 
 #[tokio::test]

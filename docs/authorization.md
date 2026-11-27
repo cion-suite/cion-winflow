@@ -36,12 +36,18 @@
   хранится, не логируется и не возвращается API.
 - Нужны оба флага дескриптора: `Capability::Auth` и `Capability::Login`.
   `login_supported` в API — их конъюнкция; форма в UI показывается только при
-  `true`. Ручная вставка Bearer/Cookie осталась fallback.
+  `true`. Ручная вставка Bearer/Cookie остаётся серверным API (`PUT`), но из
+  UI убрана: основной путь — вход по паролю.
 - Успешный вход сразу ставит `last_verified_at`, поэтому помеченные главы
   доступны без первого «проверочного» запроса. Одновременно сбрасываются
   `titles.metadata_synced_at` и per-user кэш `title_source_checks`.
 - Лимит: IP-лимит как у входа в приложение плюс 5 попыток / 10 минут на
   пользователя (429 + `Retry-After`); удачный вход сбрасывает окно.
+- `POST /api/me/source-credentials/{code}/verify` проверяет сохранённый токен
+  лёгким авторизованным запросом Remanga `users/current`. Успех ставит
+  `last_verified_at` и чистит `last_error`; отклонённый токен — 502
+  `source_auth_invalid` и `last_error='auth_invalid'`; без учётки — 403
+  `source_auth_not_configured`. Маршрут под IP rate limit.
 - 2FA в этой фазе не поддерживается: вход такому пользователю возвращает
   409 `source_login_2fa_required` (методы — в `message`).
 
@@ -67,9 +73,12 @@
 
 ### 1.4. UI и тесты
 
-- В `/settings` → «Источники»: для `login_supported` — форма логин/пароль
-  (`type="password"`, «Войти»), ниже — ручные Bearer/Cookie
-  («Сохранить»/«Очистить»). После мутаций инвалидируются
+- В `/settings` → «Источники»: одна строка на источник — иконка, название,
+  цветной статус (зелёный пульс — проверено недавно, жёлтый — не проверено
+  или проверено давно, красный — `auth_invalid`, серый — не подключено).
+  Справа: иконка «Аккаунт» открывает поповер с формой логин/пароль
+  (`type="password"`, «Войти»), кнопка «Проверить» и «Отключить». Ручные поля
+  Bearer/Cookie из UI убраны. После мутаций инвалидируются
   `source-credentials`, `title`, `library`, `chapter-content`.
 - Ошибки переведены: `source_login_failed`, `source_login_2fa_required`,
   `credentials_unavailable`, `source_credentials_invalid`.
@@ -231,7 +240,8 @@ curl -sS -D - -o /dev/null 'https://api.remanga.org/api/v2/titles/?count=1' | he
 1.4 **Соцвход на remanga.org + перенос токена.** То же, без Remanga-пароля.
 1.5 **Расширение-компаньон.** *Телефон:* нет (Kiwi мёртв, Orion beta, Firefox
    Android MV2). Опциональный десктоп (фаза 10).
-1.6 **Ручная вставка Bearer/Cookie.** Уже есть, fallback.
+1.6 **Ручная вставка Bearer/Cookie.** Серверный `PUT` есть; UI убран в фазе 5а,
+   остаётся запасным API-путём.
 1.7 **Код привязки app-auth.** Недокументирован, низкая уверенность.
 
 ### 4.2. Egress
@@ -339,7 +349,7 @@ curl -sS -D - -o /dev/null 'https://api.remanga.org/api/v2/titles/?count=1' | he
 2. Handoff по одноразовому коду.
 3. MV3 для Chromium, MV2/event page для Firefox Android.
 
-**Готово, когда:** вход по кнопке на десктопе; ручной fallback работает.
+**Готово, когда:** вход по кнопке на десктопе.
 
 ### 11 — OAuth
 

@@ -253,3 +253,62 @@ async fn sync_auth_errors_do_not_touch_global_state_or_ttl() {
         "successful sync moves the TTL"
     );
 }
+
+#[tokio::test]
+async fn manual_verification_updates_credential_status() {
+    let fixture = remanga::auth_fixture().await;
+    let app = &fixture.app;
+    let verify = |cookie: &str| {
+        with_cookie(
+            json_request(
+                Method::POST,
+                "/api/me/source-credentials/remanga/verify",
+                &json!({}),
+            ),
+            cookie,
+        )
+    };
+
+    // Без сохранённой учётки проверять нечего.
+    let response = app.request(verify(&fixture.alice)).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(response).await["code"],
+        "source_auth_not_configured"
+    );
+
+    // Рабочий токен: 200 и last_verified_at.
+    assert_eq!(
+        remanga::save_credential(app, &fixture.alice, "good-token").await,
+        StatusCode::OK
+    );
+    let response = app.request(verify(&fixture.alice)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["configured"], true);
+    assert!(body["last_verified_at"].as_i64().is_some());
+    assert!(body["last_error"].is_null());
+
+    // Отклонённый токен: 502 и auth_invalid в списке.
+    assert_eq!(
+        remanga::save_credential(app, &fixture.alice, "wrong-token").await,
+        StatusCode::OK
+    );
+    let response = app.request(verify(&fixture.alice)).await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(body_json(response).await["code"], "source_auth_invalid");
+
+    let list = body_json(
+        app.request(with_cookie(
+            get("/api/me/source-credentials"),
+            &fixture.alice,
+        ))
+        .await,
+    )
+    .await;
+    let credential = list["credentials"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["code"] == "remanga"))
+        .expect("remanga credential");
+    assert_eq!(credential["last_error"], "auth_invalid");
+}

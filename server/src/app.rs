@@ -103,6 +103,14 @@ pub fn router(state: AppState) -> Router {
         10,
         2,
     );
+    // Ручная проверка учётки ходит в сеть источника; частые клики не должны
+    // становиться способом флудить его.
+    let source_verify = with_rate_limit(
+        post(source_auth::handlers::verify),
+        state.config.trusted_proxies.clone(),
+        10,
+        2,
+    );
 
     let api = Router::new()
         .route("/health", get(health))
@@ -115,6 +123,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me/source-credentials", get(source_auth::handlers::list))
         .route("/me/source-credentials/{code}", source_credentials)
         .route("/me/source-credentials/{code}/login", source_login)
+        .route("/me/source-credentials/{code}/verify", source_verify)
         .route("/me/export/bookmarks", get(bookmarks::handlers::export))
         .route(
             "/me/avatar",

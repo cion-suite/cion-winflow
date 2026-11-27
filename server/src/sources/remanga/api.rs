@@ -145,6 +145,32 @@ impl Remanga {
         }
     }
 
+    /// Лёгкая проверка сохранённой учётки: `users/current` требует Bearer и
+    /// не тянет тайтл с главами.
+    pub async fn verify(&self, auth: Option<&SourceAuth>) -> Result<(), SourceError> {
+        let Some(auth) = auth else {
+            return Err(SourceError::AuthRequired);
+        };
+        let url = endpoint_url(&self.ctx, "/api/v2/users/current/")?;
+        let base = [("Accept", "application/json")];
+        let auth_headers = self.auth_headers(Some(auth), &url);
+        let headers = header_pairs(&base, &auth_headers);
+        let raw = get_text(&self.ctx, url, &headers)
+            .await
+            .map_err(|error| match error {
+                // Скрытый/невалидный токен Remanga отдаёт 401 или 404.
+                SourceError::NotFound => SourceError::AuthRequired,
+                other => other,
+            })?;
+        // 200 с HTML от WAF не должен выглядеть как рабочая учётка.
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .map(|_| ())
+            .map_err(|_| SourceError::Parse {
+                stage: "verify",
+                detail: "users/current is not JSON".to_owned(),
+            })
+    }
+
     pub async fn search(
         &self,
         request: SearchRequest,

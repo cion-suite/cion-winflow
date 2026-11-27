@@ -476,53 +476,43 @@ export const en = {
         sources: "Sources",
         account: "Account",
       },
-      import: {
-        title: "Import bookmarks",
+      importExport: {
+        title: "Remanga",
         description:
-          "Upload a Remanga or ExManga JSON export: titles, statuses and read chapters will be transferred to your library.",
+          "Import bookmarks from JSON and export the library in the same format.",
+      },
+      import: {
         action: "Import bookmarks",
         running: "Import in progress: {{processed}} of {{total}}.",
         reimportHint:
           "Progress beyond the currently available chapters is stored only for titles imported after this update. Re-import your bookmarks to restore it for older titles.",
       },
       export: {
-        title: "Export bookmarks",
-        description: "Download your library as a Remanga bookmarks JSON.",
         action: "Download JSON",
-        hint: "Titles linked to Remanga are exported. Custom tabs keep their original status id; manually created tabs are exported under their built-in status.",
+        hint: "Titles linked to Remanga are exported.",
       },
       sources: {
         title: "Sources",
         description:
-          "Save your own source account for titles that require sign-in. Accounts are personal: other users cannot see them. The saved account is used for your source requests.",
-        cardDescription:
-          "A personal Remanga account for requests that require sign-in.",
-        signInTitle: "Sign in to Remanga",
-        signInDescription:
-          "Enter your Remanga login or email and password. The password is used once and is not stored.",
+          "Personal source accounts. The password is used once and is not stored.",
+        signInTitle: "Sign in to {{source}}",
+        signInDescription: "Enter your login and password. The password is not stored.",
         login: "Login or email",
         password: "Password",
         loginPlaceholder: "Login or email",
         passwordPlaceholder: "Remanga password",
         signIn: "Sign in",
-        manualTitle: "Paste a token manually",
-        connected: "Connected",
-        notConnected: "Not connected",
-        bearer: "Bearer token",
-        cookie: "Cookie",
-        bearerPlaceholder: "Paste the token",
-        cookiePlaceholder: "Paste the cookie",
-        save: "Save",
-        clear: "Clear",
-        test: "Check",
-        testHint:
-          "Checking will appear in a later version; for now the account is verified by the first real request.",
-        replaceHint:
-          "An account is saved. Enter new values to replace it; the secret is never shown.",
-        manualHint:
-          "Manual paste is a fallback for when password sign-in does not work.",
-        lastError: "Last error: {{code}}",
-        authInvalid: "The source rejected this account.",
+        account: "Account",
+        verify: "Check",
+        verifyHint: "Check the saved account with the source",
+        disconnect: "Disconnect",
+        status: {
+          verified: "Checked {{when}}",
+          notChecked: "Not checked",
+          notConnected: "Not connected",
+          rejected: "Account rejected",
+        },
+        lastError: "Error: {{code}}",
       },
       account: {
         title: "Profile",

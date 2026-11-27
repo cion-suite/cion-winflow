@@ -6,4 +6,5 @@
 
 pub mod service;
 
+pub(crate) use service::find_external_id;
 pub use service::{DiscoveryError, DiscoveryOutcome, DiscoveryReport, discover_for_title};

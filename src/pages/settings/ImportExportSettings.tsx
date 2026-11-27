@@ -6,6 +6,7 @@ import {
   useExportBookmarksMutation,
 } from "@/api";
 import { useT } from "@/lib/i18n";
+import { SourceIcon } from "@/ui/SourceIcon";
 import { Button } from "@/ui/shadcn/button";
 import {
   Card,
@@ -20,6 +21,7 @@ type ImportExportSettingsProps = {
   onOpenImport: () => void;
 };
 
+/** Закладки Remanga: импорт из JSON и экспорт библиотеки в том же формате. */
 export function ImportExportSettings({
   onOpenImport,
 }: ImportExportSettingsProps) {
@@ -38,46 +40,26 @@ export function ImportExportSettings({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("settingsPage.import.title")}</CardTitle>
-          <CardDescription>
-            {t("settingsPage.import.description")}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col items-start gap-3">
-          <Button type="button" variant="outline" onClick={onOpenImport}>
-            <UploadIcon aria-hidden />
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted p-1.5">
+            <SourceIcon code="remanga" className="size-6" />
+          </div>
+          <div className="flex min-w-0 flex-col gap-1">
+            <CardTitle>{t("settingsPage.importExport.title")}</CardTitle>
+            <CardDescription>
+              {t("settingsPage.importExport.description")}
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" onClick={onOpenImport}>
+            <DownloadIcon data-icon="inline-start" />
             {t("settingsPage.import.action")}
           </Button>
-          {running && job && (
-            <p className="text-xs text-muted-foreground">
-              {t("settingsPage.import.running", {
-                processed: job.processed,
-                total: job.total,
-              })}
-            </p>
-          )}
-          {errorText && (
-            <p role="alert" className="text-sm text-destructive">
-              {errorText}
-            </p>
-          )}
-          <p className="text-xs text-muted-foreground">
-            {t("settingsPage.import.reimportHint")}
-          </p>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("settingsPage.export.title")}</CardTitle>
-          <CardDescription>
-            {t("settingsPage.export.description")}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col items-start gap-3">
           <Button
             type="button"
             variant="outline"
@@ -87,21 +69,37 @@ export function ImportExportSettings({
             {exportMutation.isPending ? (
               <Spinner />
             ) : (
-              <DownloadIcon aria-hidden />
+              <UploadIcon data-icon="inline-start" />
             )}
             {t("settingsPage.export.action")}
           </Button>
-          {exportError && (
-            <p role="alert" className="text-sm text-destructive">
-              {exportError}
-            </p>
-          )}
+        </div>
+
+        {running && job && (
           <p className="text-xs text-muted-foreground">
-            {t("settingsPage.export.hint")}
+            {t("settingsPage.import.running", {
+              processed: job.processed,
+              total: job.total,
+            })}
           </p>
-        </CardContent>
-      </Card>
-    </div>
+        )}
+        {errorText && (
+          <p role="alert" className="text-sm text-destructive">
+            {errorText}
+          </p>
+        )}
+        {exportError && (
+          <p role="alert" className="text-sm text-destructive">
+            {exportError}
+          </p>
+        )}
+
+        <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <p>{t("settingsPage.import.reimportHint")}</p>
+          <p>{t("settingsPage.export.hint")}</p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

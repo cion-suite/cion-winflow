@@ -474,6 +474,53 @@ async fn search(
         .await
 }
 
+/// Точное совпадение по названию на одном источнике без готовой карточки
+/// тайтла. Так импорт закладок ищет произведение, исчезнувшее с исходного
+/// источника: основное или альтернативное название результата должно
+/// совпасть с `name`. До трёх страниц — как у поиска по имени Remanga.
+pub(crate) async fn find_external_id(
+    adapter: &SourceKind,
+    name: &str,
+    auth: Option<&SourceAuth>,
+) -> Result<Option<ExternalId>, SourceError> {
+    let query = name.trim();
+    if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
+        return Ok(None);
+    }
+    let key = normalize_name(query);
+    if key.is_empty() {
+        return Ok(None);
+    }
+    let wanted: HashSet<String> = std::iter::once(key).collect();
+
+    let mut cursor = None;
+    for _ in 0..3 {
+        let page = adapter
+            .search(
+                SearchRequest {
+                    query: query.to_owned(),
+                    cursor: cursor.take(),
+                    filters: Value::Null,
+                },
+                auth,
+            )
+            .await?;
+        if let Some(item) = page
+            .items
+            .into_iter()
+            .find(|item| item_matches_names(item, &wanted))
+        {
+            return Ok(Some(item.external_id));
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    Ok(None)
+}
+
 /// Основное или альтернативное имя кандидата совпадает с набором названий
 /// искомого тайтла.
 fn item_matches_names(item: &crate::sources::SourceSearchItem, wanted: &HashSet<String>) -> bool {

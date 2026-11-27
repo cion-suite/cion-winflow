@@ -111,6 +111,7 @@ pub async fn start() -> RemangaStub {
 
     let api = Router::new()
         .route("/api/users/login/", post(login))
+        .route("/api/v2/users/current/", get(current_user))
         .route("/api/v2/search/", get(search))
         .route("/api/v2/titles/chapters/", get(chapters))
         .route("/api/v2/titles/chapters/{id}/", get(content))
@@ -223,6 +224,16 @@ fn invalid_login() -> (StatusCode, Json<Value>) {
     )
 }
 
+/// Проверка учётки: current user отвечает 200 только с правильным Bearer.
+async fn current_user(State(shared): State<Shared>, headers: HeaderMap) -> Response {
+    capture(&shared.requests, "/api/v2/users/current/", &headers);
+    if is_authed(&headers) {
+        Json(json!({ "username": LOGIN_USER, "id": 1 })).into_response()
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
 async fn search(State(shared): State<Shared>, headers: HeaderMap) -> Response {
     capture(&shared.requests, "/api/v2/search/", &headers);
     Json(json!({
@@ -255,6 +266,9 @@ async fn title(
 
     let status = match dir.as_str() {
         "blocked" => Some(StatusCode::FORBIDDEN),
+        // Произведение удалено с источника: импорт закладки должен искать
+        // его на других подключённых источниках.
+        "gone" => Some(StatusCode::NOT_FOUND),
         "hidden" if !authed => Some(StatusCode::NOT_FOUND),
         "locked" if !authed => Some(StatusCode::UNAUTHORIZED),
         _ if require_auth && !authed => Some(StatusCode::UNAUTHORIZED),

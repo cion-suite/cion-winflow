@@ -39,6 +39,16 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Проверка сохранённой учётки без пароля: источник подтверждает токен,
+/// результат обновляет статус в карточке «Источники».
+pub async fn verify(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(code): ApiPath<String>,
+) -> Result<Json<CredentialDto>, AppError> {
+    Ok(Json(service::verify(&state, user.id, &code).await?))
+}
+
 /// Вход по логину/паролю. Счётчик на пользователя проверяется до сети:
 /// пять неудачных попыток за десять минут, затем 429 с `Retry-After`.
 pub async fn login(

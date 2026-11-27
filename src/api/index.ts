@@ -167,12 +167,11 @@ export {
   sourceCredentialsApi,
   useDeleteSourceCredentialMutation,
   useLoginSourceCredentialMutation,
-  useSaveSourceCredentialMutation,
   useSourceCredentialsQuery,
+  useVerifySourceCredentialMutation,
 } from "./sourceCredentials";
 export type {
   SourceCredential,
-  SourceCredentialInput,
   SourceCredentialsResponse,
   SourceLoginInput,
 } from "./sourceCredentials";

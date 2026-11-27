@@ -179,7 +179,7 @@ async fn imported_high_water_shows_effective_progress_and_clamps_export() {
 }
 
 #[tokio::test]
-async fn denominator_uses_preferred_source_not_fullest_source() {
+async fn denominator_is_union_of_available_chapters_across_sources() {
     let app = TestApp::new().await;
     app.create_admin().await;
     let admin = app.login_admin().await;
@@ -202,7 +202,26 @@ async fn denominator_uses_preferred_source_not_fullest_source() {
         .expect("recompute stats");
     run_import(&app, user_id, 930).await;
 
-    // Второй источник того же тайтла с заметно большим числом глав.
+    // Второй источник должен быть включён: знаменатель карточки считает
+    // только главы включённых источников, как и список на странице тайтла.
+    let response = app
+        .request(with_cookie(
+            json_request(
+                Method::PUT,
+                "/api/sources/rumix",
+                &json!({ "base_url": "http://127.0.0.1:9", "enabled": true }),
+            ),
+            &admin,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK, "configure rumix");
+
+    // Второй источник того же тайтла: 4 новых главы, одна общая по ключу,
+    // две связанные alias-ом (пара entry и глобальная), одна свежая закрытая
+    // и одна устаревше-закрытая. Знаменатель — объединение канонических
+    // ключей: общие и alias-главы не удваиваются, свежий locked скрыт, а
+    // устаревший считается unknown — так же, как на странице тайтла
+    // (TTL из `selection::view`).
     let fixture_source_id: i64 =
         sqlx::query_scalar("SELECT id FROM sources WHERE code = 'fixture'")
             .fetch_one(&app.pool)
@@ -212,17 +231,67 @@ async fn denominator_uses_preferred_source_not_fullest_source() {
         .fetch_one(&app.pool)
         .await
         .expect("rumix source");
-    sqlx::query(
+    let other_entry_id: i64 = sqlx::query_scalar(
         "INSERT INTO source_entries (title_id, source_id, external_id, is_primary, \
                                      chapter_count, available_count) \
-         VALUES (?, ?, 'rumix-title', 0, 100, 100)",
+         VALUES (?, ?, 'rumix-title', 0, 8, 6) RETURNING id",
     )
     .bind(title_id)
     .bind(other_source_id)
-    .execute(&app.pool)
+    .fetch_one(&app.pool)
     .await
     .expect("second entry");
 
+    for number in 19..=22 {
+        insert_chapter(&app.pool, other_entry_id, number, "available")
+            .await
+            .expect("insert other chapter");
+    }
+    insert_chapter(&app.pool, other_entry_id, 1, "available")
+        .await
+        .expect("duplicate by key");
+    insert_chapter(&app.pool, other_entry_id, 900, "available")
+        .await
+        .expect("alias chapter");
+    insert_chapter(&app.pool, other_entry_id, 23, "locked")
+        .await
+        .expect("fresh locked chapter");
+    sqlx::query(
+        "UPDATE chapters SET availability_checked_at = unixepoch() \
+         WHERE source_entry_id = ? AND chapter_key = 'c23'",
+    )
+    .bind(other_entry_id)
+    .execute(&app.pool)
+    .await
+    .expect("mark fresh locked");
+    insert_chapter(&app.pool, other_entry_id, 24, "locked")
+        .await
+        .expect("stale locked chapter");
+    sqlx::query(
+        "INSERT INTO chapter_aliases \
+             (title_id, alias_key, canonical_key, source_entry_id, origin, created_at) \
+         VALUES (?, 'c900', 'c5', ?, 'manual', 0)",
+    )
+    .bind(title_id)
+    .bind(other_entry_id)
+    .execute(&app.pool)
+    .await
+    .expect("alias");
+    // Глобальная ручная пара (без source_entry) тоже сводится к canonical.
+    insert_chapter(&app.pool, other_entry_id, 901, "available")
+        .await
+        .expect("global alias chapter");
+    sqlx::query(
+        "INSERT INTO chapter_aliases \
+             (title_id, alias_key, canonical_key, source_entry_id, origin, created_at) \
+         VALUES (?, 'c901', 'c6', NULL, 'manual', 0)",
+    )
+    .bind(title_id)
+    .execute(&app.pool)
+    .await
+    .expect("global alias");
+
+    // Preferred не влияет на знаменатель: карточка показывает объединение.
     sqlx::query("UPDATE titles SET preferred_source_id = ? WHERE id = ?")
         .bind(fixture_source_id)
         .bind(title_id)
@@ -231,8 +300,8 @@ async fn denominator_uses_preferred_source_not_fullest_source() {
         .expect("prefer fixture");
     assert_eq!(
         library_item(&app, &admin).await["available_count"],
-        17,
-        "preferred source wins over the fuller one"
+        22,
+        "17 fixture chapters + 4 unique + 1 stale locked (unknown) from the second source"
     );
 
     sqlx::query("UPDATE titles SET preferred_source_id = ? WHERE id = ?")
@@ -243,26 +312,21 @@ async fn denominator_uses_preferred_source_not_fullest_source() {
         .expect("prefer rumix");
     assert_eq!(
         library_item(&app, &admin).await["available_count"],
-        100,
-        "preferred source denominator is used"
+        22,
+        "denominator does not depend on the preferred source"
     );
 
-    // У предпочтительного источника нет доступных глав — берём максимум.
-    sqlx::query("UPDATE source_entries SET available_count = 0 WHERE id = ?")
-        .bind(entry_id)
+    // Выключенный источник не может отдать главу, поэтому его главы не
+    // входят в знаменатель.
+    sqlx::query("UPDATE sources SET enabled = 0 WHERE id = ?")
+        .bind(other_source_id)
         .execute(&app.pool)
         .await
-        .expect("zero fixture available");
-    sqlx::query("UPDATE titles SET preferred_source_id = ? WHERE id = ?")
-        .bind(fixture_source_id)
-        .bind(title_id)
-        .execute(&app.pool)
-        .await
-        .expect("prefer fixture again");
+        .expect("disable rumix");
     assert_eq!(
         library_item(&app, &admin).await["available_count"],
-        100,
-        "zero preferred available_count falls back to MAX"
+        17,
+        "disabled source chapters are not counted"
     );
 }
 

@@ -131,6 +131,17 @@ impl SourceKind {
         }
     }
 
+    /// Проверка сохранённой учётки лёгким авторизованным запросом.
+    /// Источники без такой проверки возвращают `UnsupportedCapability`.
+    pub async fn verify(&self, auth: Option<&SourceAuth>) -> Result<(), SourceError> {
+        match self {
+            Self::Remanga(source) => source.verify(auth).await,
+            Self::Rumix(_) | Self::Mangamir(_) => Err(SourceError::UnsupportedCapability),
+            #[cfg(debug_assertions)]
+            Self::Fixture(_) => Err(SourceError::UnsupportedCapability),
+        }
+    }
+
     pub async fn text(
         &self,
         chapter: &SourceChapter,

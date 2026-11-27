@@ -15,7 +15,6 @@ use std::{
 };
 
 use serde::Serialize;
-use serde_json::Value;
 use sqlx::SqlitePool;
 use tokio::{sync::Semaphore, task::JoinHandle};
 
@@ -30,7 +29,8 @@ use crate::{
     library::service::MAX_TABS,
     source_admin::service::{self as source_admin, ImportInput, ImportResponse},
     source_auth::{SourceAuth, service as source_auth_service},
-    sources::{ExternalId, SearchRequest, SourceKind, remanga, text::normalize_name},
+    source_discovery,
+    sources::{Capability, SourceKind, remanga},
     state::AppState,
 };
 
@@ -41,6 +41,9 @@ pub const MAX_FILE_BYTES: usize = 3 * 1024 * 1024;
 /// Три одновременных импорта: источник не должен получать лавину запросов,
 /// но и ждать по одному тайтлу на 800 закладок слишком долго.
 const IMPORT_CONCURRENCY: usize = 3;
+/// Бюджет поиска на других источниках для одной пропавшей закладки: даже
+/// при двух медленных источниках он завершится и не заблокирует слот.
+const FALLBACK_TIMEOUT_SECS: u64 = 45;
 /// Ошибки храним в задании только до этого числа: файл может быть большим.
 const MAX_ERRORS: usize = 200;
 const MAX_ERROR_CHARS: usize = 300;
@@ -545,37 +548,198 @@ async fn import_title(
         return Ok((title_id, false));
     }
 
-    match import_via(state, plan, &item.dir).await {
+    match import_via(state, &plan.source_code, &item.dir, plan.auth.as_ref()).await {
         Ok(response) => Ok((response.title_id, response.title_created)),
-        Err(first) if is_missing_at_source(&first) => {
-            let Some(external_id) =
-                find_by_name(&plan.adapter, &item.name, plan.auth.as_ref()).await
-            else {
-                return Err(first);
-            };
-            match import_via(state, plan, external_id.as_str()).await {
-                Ok(response) => Ok((response.title_id, response.title_created)),
-                Err(second) => Err(AppError::not_found(
-                    "source_not_found",
-                    format!(
-                        "not found by dir or name: {}",
-                        second
-                            .to_string()
-                            .chars()
-                            .take(MAX_ERROR_CHARS)
-                            .collect::<String>()
+        Err(first) if is_absent_at_source(&first) => {
+            // Сначала тот же источник: у Remanga `dir` мог устареть, а
+            // название — остаться.
+            if let Some(external_id) =
+                source_discovery::find_external_id(&plan.adapter, &item.name, plan.auth.as_ref())
+                    .await
+                    .ok()
+                    .flatten()
+            {
+                match import_via(
+                    state,
+                    &plan.source_code,
+                    external_id.as_str(),
+                    plan.auth.as_ref(),
+                )
+                .await
+                {
+                    Ok(response) => return Ok((response.title_id, response.title_created)),
+                    Err(error) => tracing::warn!(
+                        title = %item.name,
+                        source = %plan.source_code,
+                        %error,
+                        "bookmark title not imported by name"
                     ),
-                )),
+                }
             }
+
+            // Произведение исчезло с исходного источника, но может быть на
+            // другом включённом: закладка всё равно должна попасть в
+            // библиотеку со своим статусом и прогрессом. Общий таймаут не
+            // даёт зависшему источнику держать один из трёх слотов импорта.
+            match tokio::time::timeout(
+                Duration::from_secs(FALLBACK_TIMEOUT_SECS),
+                import_from_other_sources(state, plan, item),
+            )
+            .await
+            {
+                Ok(Ok(Some((title_id, created)))) => return Ok((title_id, created)),
+                Ok(Ok(None)) => {}
+                Ok(Err(error)) => return Err(error),
+                Err(_) => tracing::warn!(
+                    title = %item.name,
+                    "bookmark fallback timed out"
+                ),
+            }
+
+            // Ничего не нашли: возвращаем исходную ошибку, чтобы UI сохранил
+            // её код (например, «возможно, нужен аккаунт» вместо 404).
+            Err(first)
         }
         Err(error) => Err(error),
     }
 }
 
-async fn import_via(
+/// Пробует импортировать закладку из другого включённого источника. Ошибки
+/// поиска и импорта не отменяют остальные источники; принимается только
+/// точное совпадение названия, чтобы не привязать чужое произведение.
+/// `Ok(None)` — источникам нечего предложить; `Err` — содержательная ошибка
+/// (rate limit, сеть, auth), которую нельзя выдавать за «глава исчезла».
+async fn import_from_other_sources(
     state: &AppState,
     plan: &ImportPlan,
+    item: &BookmarkItem,
+) -> Result<Option<(i64, bool)>, AppError> {
+    let mut first_error = None;
+
+    for candidate in fallback_sources(state, plan.source_id).await {
+        let auth =
+            match source_auth_service::resolve(state, plan.user_id, candidate.source_id).await {
+                Ok(auth) => auth,
+                Err(error) => {
+                    tracing::warn!(
+                        title = %item.name,
+                        source = %candidate.code,
+                        %error,
+                        "cannot resolve fallback source credentials"
+                    );
+                    first_error.get_or_insert(error);
+                    continue;
+                }
+            };
+
+        let external_id =
+            match source_discovery::find_external_id(&candidate.adapter, &item.name, auth.as_ref())
+                .await
+            {
+                Ok(Some(external_id)) => external_id,
+                Ok(None) => continue,
+                Err(error) => {
+                    let mapped = error.into_app(auth.is_some());
+                    tracing::warn!(
+                        title = %item.name,
+                        source = %candidate.code,
+                        %mapped,
+                        "fallback source search failed"
+                    );
+                    first_error.get_or_insert(mapped);
+                    continue;
+                }
+            };
+
+        match import_via(state, &candidate.code, external_id.as_str(), auth.as_ref()).await {
+            Ok(response) => {
+                tracing::info!(
+                    title = %item.name,
+                    source = %candidate.code,
+                    title_id = response.title_id,
+                    "imported bookmark from another source"
+                );
+                return Ok(Some((response.title_id, response.title_created)));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    title = %item.name,
+                    source = %candidate.code,
+                    %error,
+                    "fallback source import failed"
+                );
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
+}
+
+/// Включённый источник, на котором можно поискать исчезнувший тайтл.
+struct FallbackSource {
+    code: String,
+    source_id: i64,
+    adapter: SourceKind,
+}
+
+/// Остальные включённые источники с поиском и главами в порядке приоритета
+/// их языка. Реестр читается без network-await; приоритеты — уже после.
+async fn fallback_sources(state: &AppState, exclude_source_id: i64) -> Vec<FallbackSource> {
+    let mut candidates: Vec<(FallbackSource, &'static str)> = {
+        let registry = state.sources.read().await;
+        registry
+            .entries()
+            .filter(|runtime| {
+                runtime.enabled
+                    && runtime.id != exclude_source_id
+                    && runtime.descriptor.has(Capability::Search)
+                    && runtime.descriptor.has(Capability::Chapters)
+            })
+            .filter_map(|runtime| {
+                runtime.adapter().ok().map(|adapter| {
+                    (
+                        FallbackSource {
+                            code: runtime.code.clone(),
+                            source_id: runtime.id,
+                            adapter: adapter.clone(),
+                        },
+                        runtime.descriptor.lang,
+                    )
+                })
+            })
+            .collect()
+    };
+
+    let mut ranks: HashMap<&'static str, HashMap<i64, i64>> = HashMap::new();
+    for (_, lang) in &candidates {
+        if !ranks.contains_key(lang) {
+            ranks.insert(
+                *lang,
+                selection::load_priorities(&state.pool, Some(lang))
+                    .await
+                    .unwrap_or_default(),
+            );
+        }
+    }
+    candidates.sort_by_key(|(source, lang)| {
+        let rank = ranks.get(*lang).map_or(i64::MAX, |ranked| {
+            selection::rank_of(ranked, source.source_id)
+        });
+        (rank, source.code.clone())
+    });
+
+    candidates.into_iter().map(|(source, _)| source).collect()
+}
+
+async fn import_via(
+    state: &AppState,
+    code: &str,
     external_id: &str,
+    auth: Option<&SourceAuth>,
 ) -> Result<ImportResponse, AppError> {
     // SQLx открывает транзакцию через отложенный BEGIN: между чтением
     // source_entries и записью параллельный импорт может успеть закоммитить,
@@ -583,7 +747,7 @@ async fn import_via(
     // Повторяем операцию целиком: она идемпотентна.
     let mut attempt = 0_u32;
     loop {
-        match import_via_once(state, plan, external_id).await {
+        match import_via_once(state, code, external_id, auth).await {
             Err(error) if is_busy(&error) && attempt < 2 => {
                 attempt += 1;
                 tokio::time::sleep(Duration::from_millis(150 * u64::from(attempt))).await;
@@ -595,8 +759,9 @@ async fn import_via(
 
 async fn import_via_once(
     state: &AppState,
-    plan: &ImportPlan,
+    code: &str,
     external_id: &str,
+    auth: Option<&SourceAuth>,
 ) -> Result<ImportResponse, AppError> {
     let input = |auto_link| ImportInput {
         external_id: external_id.to_owned(),
@@ -604,20 +769,18 @@ async fn import_via_once(
         auto_link,
     };
 
-    match source_admin::import(state, &plan.source_code, input(true), plan.auth.as_ref()).await {
+    match source_admin::import(state, code, input(true), auth).await {
         // Одинаковое название у разных произведений: автослияние нашло
         // тайтл, к которому уже привязан другой entry этого источника.
         // Создаём отдельный тайтл, не сливая произведения.
         Err(AppError::Conflict {
             code: "source_already_attached",
             ..
-        }) => {
-            source_admin::import(state, &plan.source_code, input(false), plan.auth.as_ref()).await
-        }
+        }) => source_admin::import(state, code, input(false), auth).await,
         // Та же ситуация, но второй импорт успел вставить entry первым:
         // SQLite сообщает о нарушении уникальности вместо 409.
         Err(error) if is_unique_violation(&error) => {
-            source_admin::import(state, &plan.source_code, input(false), plan.auth.as_ref()).await
+            source_admin::import(state, code, input(false), auth).await
         }
         // Один пакетный импорт легко упирается в лимит источника. Ждём
         // столько, сколько просит источник, и повторяем один раз.
@@ -628,7 +791,7 @@ async fn import_via_once(
         }) => {
             let wait = retry_after_secs.unwrap_or(5).min(120);
             tokio::time::sleep(Duration::from_secs(wait)).await;
-            source_admin::import(state, &plan.source_code, input(true), plan.auth.as_ref()).await
+            source_admin::import(state, code, input(true), auth).await
         }
         other => other,
     }
@@ -654,50 +817,9 @@ fn is_busy(error: &AppError) -> bool {
     busy_code || message.contains("locked") || message.contains("busy")
 }
 
-async fn find_by_name(
-    adapter: &SourceKind,
-    name: &str,
-    auth: Option<&SourceAuth>,
-) -> Option<ExternalId> {
-    let query = name.trim();
-    if query.is_empty() || query.chars().count() > 200 {
-        return None;
-    }
-    let wanted = normalize_name(query);
-
-    // Иногда точное название не попадает на первую страницу выдачи.
-    // Три страницы — компромисс между покрытием и лишними запросами.
-    let mut cursor = None;
-    for _ in 0..3 {
-        let page = adapter
-            .search(
-                SearchRequest {
-                    query: query.to_owned(),
-                    cursor: cursor.take(),
-                    filters: Value::Null,
-                },
-                auth,
-            )
-            .await
-            .ok()?;
-        if let Some(item) = page.items.into_iter().find(|item| {
-            normalize_name(&item.name) == wanted
-                || item
-                    .alt_names
-                    .iter()
-                    .any(|alt| normalize_name(alt) == wanted)
-        }) {
-            return Some(item.external_id);
-        }
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            break;
-        }
-    }
-    None
-}
-
-fn is_missing_at_source(error: &AppError) -> bool {
+/// Произведения нет на исходном источнике (или оно скрыто без учётки):
+/// тогда имеет смысл искать его на других включённых источниках.
+fn is_absent_at_source(error: &AppError) -> bool {
     matches!(
         error,
         AppError::NotFound {
@@ -705,6 +827,9 @@ fn is_missing_at_source(error: &AppError) -> bool {
             ..
         } | AppError::BadRequest {
             code: "source_invalid_external_id",
+            ..
+        } | AppError::Forbidden {
+            code: "source_auth_maybe_required",
             ..
         }
     )

@@ -2,7 +2,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::{
-    auth::session::now_unix, catalog::service::TitleSummaryDto, error::AppError, pagination,
+    auth::session::now_unix,
+    catalog::{
+        selection::{LOCKED_TTL_SECS, MISSING_TTL_SECS},
+        service::TitleSummaryDto,
+    },
+    error::AppError,
+    pagination,
     state::AppState,
 };
 
@@ -87,7 +93,9 @@ pub struct LibraryItemDto {
     pub read_count: i64,
     /// Импортированная отметка high-water; 0, если импорта не было.
     pub imported_read_count: i64,
-    /// Доступные главы предпочтительного источника: знаменатель карточки.
+    /// Доступные главы включённых источников: знаменатель карточки. Это
+    /// канонические ключи, у которых есть рабочий вариант, — ровно те главы,
+    /// что видны на странице тайтла.
     pub available_count: i64,
     /// Число глав самого полного источника: сортировка и экспорт.
     pub chapter_count: i64,
@@ -261,13 +269,29 @@ pub async fn list_library(
                       WHERE r.user_id = l.user_id AND r.title_id = l.title_id), \
                      COALESCE(l.imported_read_count, 0))) AS read_count, \
                 COALESCE(l.imported_read_count, 0) AS imported_read_count, \
-                (SELECT COALESCE( \
-                     NULLIF((SELECT e.available_count FROM source_entries e \
-                             WHERE e.title_id = l.title_id \
-                               AND e.source_id = t.preferred_source_id), 0), \
-                     (SELECT MAX(e.available_count) FROM source_entries e \
-                      WHERE e.title_id = l.title_id), \
-                     0)) AS available_count, \
+                (SELECT COUNT(DISTINCT COALESCE( \
+                     (SELECT a.canonical_key FROM chapter_aliases a \
+                      WHERE a.title_id = l.title_id \
+                        AND a.source_entry_id = ch.source_entry_id \
+                        AND a.alias_key = ch.chapter_key), \
+                     (SELECT a.canonical_key FROM chapter_aliases a \
+                      WHERE a.title_id = l.title_id \
+                        AND a.source_entry_id IS NULL \
+                        AND a.alias_key = ch.chapter_key), \
+                     ch.chapter_key)) \
+                 FROM chapters ch \
+                 JOIN source_entries e ON e.id = ch.source_entry_id \
+                 JOIN sources s ON s.id = e.source_id \
+                 WHERE e.title_id = l.title_id \
+                   AND s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL \
+                   AND ch.removed_at IS NULL \
+                   AND ( \
+                     ch.availability IN ('available', 'unknown') \
+                     OR (ch.availability = 'locked' AND (ch.availability_checked_at IS NULL \
+                         OR unixepoch() - ch.availability_checked_at >= {LOCKED_TTL_SECS})) \
+                     OR (ch.availability = 'missing' AND (ch.availability_checked_at IS NULL \
+                         OR unixepoch() - ch.availability_checked_at >= {MISSING_TTL_SECS})) \
+                   )) AS available_count, \
                 (SELECT COALESCE(MAX(e.chapter_count), 0) FROM source_entries e \
                  WHERE e.title_id = l.title_id) AS chapter_count, \
                 (SELECT MAX(ch.published_at) FROM chapters ch \
