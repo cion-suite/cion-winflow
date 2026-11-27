@@ -15,7 +15,7 @@ use crate::{
     auth::{self, limiter::ClientIpKeyExtractor},
     bookmarks, catalog, discover, error,
     error::AppError,
-    images, library, profile, progress, source_admin,
+    images, library, profile, progress, source_admin, source_auth,
     state::AppState,
     static_files::serve_static,
 };
@@ -87,6 +87,14 @@ pub fn router(state: AppState) -> Router {
         5,
         10,
     );
+    // Учётки источников — редкие осознанные действия; лимит не даёт
+    // перебирать коды источников и заливать БД шифротекстами.
+    let source_credentials = with_rate_limit(
+        put(source_auth::handlers::upsert).delete(source_auth::handlers::delete),
+        state.config.trusted_proxies.clone(),
+        20,
+        2,
+    );
 
     let api = Router::new()
         .route("/health", get(health))
@@ -96,6 +104,8 @@ pub fn router(state: AppState) -> Router {
         .route("/me", get(auth::handlers::me))
         .route("/me/username", put(auth::handlers::update_username))
         .route("/me/password", change_password)
+        .route("/me/source-credentials", get(source_auth::handlers::list))
+        .route("/me/source-credentials/{code}", source_credentials)
         .route("/me/export/bookmarks", get(bookmarks::handlers::export))
         .route(
             "/me/avatar",

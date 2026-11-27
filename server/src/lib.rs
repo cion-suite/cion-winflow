@@ -13,6 +13,7 @@ pub mod pagination;
 pub mod profile;
 pub mod progress;
 pub mod source_admin;
+pub mod source_auth;
 pub mod sources;
 pub mod state;
 pub mod static_files;

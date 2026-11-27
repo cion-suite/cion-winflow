@@ -55,6 +55,8 @@ const ERROR_KEYS: Partial<Record<string, string>> = {
   source_bad_request: "errors.sourceBadRequest",
   source_invalid_external_id: "errors.sourceInvalidExternalId",
   source_config_invalid: "errors.sourceConfigInvalid",
+  credentials_unavailable: "errors.credentialsUnavailable",
+  source_credentials_invalid: "errors.sourceCredentialsInvalid",
   not_found: "errors.notFound",
   network_error: "errors.network",
   internal_error: "errors.unknown",

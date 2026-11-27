@@ -1,0 +1,4 @@
+# Миграции SQLx хешируются побайтно (sha384) и checksum хранится в _sqlx_migrations.
+# Без фиксированного EOL checkout на Windows (CRLF) и Linux (LF) даёт разные
+# checksum для одной и той же миграции, и сервер падает с VersionMismatch.
+server/migrations/*.sql text eol=lf

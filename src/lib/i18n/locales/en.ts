@@ -68,6 +68,10 @@ export const en = {
       sourceBadRequest: "The source rejected the request.",
       sourceInvalidExternalId: "The source identifier is invalid.",
       sourceConfigInvalid: "Check the source configuration.",
+      credentialsUnavailable:
+        "Source accounts are unavailable: the server has no encryption key configured.",
+      sourceCredentialsInvalid:
+        "Check the account data: fill in a token or a cookie.",
       notFound: "Not found.",
       network: "Cannot reach the server.",
       unknown: "Something went wrong.",
@@ -452,9 +456,10 @@ export const en = {
     },
     settingsPage: {
       title: "Settings",
-      description: "Account, import and export.",
+      description: "Account, sources, import and export.",
       tabs: {
         importExport: "Import/Export",
+        sources: "Sources",
         account: "Account",
       },
       import: {
@@ -469,6 +474,30 @@ export const en = {
         description: "Download your library as a Remanga bookmarks JSON.",
         action: "Download JSON",
         hint: "Titles linked to Remanga are exported. Custom tabs keep their original status id; manually created tabs are exported under their built-in status.",
+      },
+      sources: {
+        title: "Sources",
+        description:
+          "Save your own source account for titles that require sign-in. Accounts are personal: other users cannot see them. The stored account will be used by source requests in a later update.",
+        cardDescription:
+          "A personal Remanga account for requests that require sign-in.",
+        connected: "Connected",
+        notConnected: "Not connected",
+        bearer: "Bearer token",
+        cookie: "Cookie",
+        bearerPlaceholder: "Paste the token",
+        cookiePlaceholder: "Paste the cookie",
+        save: "Save",
+        clear: "Clear",
+        test: "Check",
+        testHint:
+          "Checking will appear in a later version; for now the account is verified by the first real request.",
+        replaceHint:
+          "An account is saved. Enter new values to replace it; the secret is never shown.",
+        manualHint:
+          "Manual paste is temporary. Signing in with a button will come later.",
+        lastError: "Last error: {{code}}",
+        authInvalid: "The source rejected this account.",
       },
       account: {
         title: "Profile",

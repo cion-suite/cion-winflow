@@ -1,5 +1,7 @@
 use std::{env, net::IpAddr, net::SocketAddr, path::PathBuf};
 
+use crate::source_auth::crypto::SourceCredentialsKey;
+
 const DEV_ORIGINS: &[&str] = &[
     "http://localhost:1420",
     "http://127.0.0.1:1420",
@@ -24,6 +26,9 @@ pub struct Config {
     pub allow_loopback_images: bool,
     /// Одноразовый bootstrap администратора при пустой таблице users.
     pub admin_bootstrap: Option<AdminBootstrap>,
+    /// Проверенный 32-байтный ключ AEAD для per-user учёток источников.
+    /// `None` — функция выключена, маршруты отвечают 503.
+    pub source_credentials_key: Option<SourceCredentialsKey>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +68,8 @@ pub enum ConfigError {
     AdminBootstrapIncomplete,
     #[error("origin `{0}` must be an absolute http(s) origin without a path")]
     AllowedOrigin(String),
+    #[error("SOURCE_CREDENTIALS_KEY must be 32 bytes encoded as base64 (openssl rand -base64 32)")]
+    SourceCredentialsKey,
 }
 
 impl Config {
@@ -104,6 +111,14 @@ impl Config {
             _ => return Err(ConfigError::AdminBootstrapIncomplete),
         };
 
+        let source_credentials_key = match env::var("SOURCE_CREDENTIALS_KEY") {
+            Ok(value) if !value.trim().is_empty() => Some(
+                SourceCredentialsKey::from_base64(value.trim())
+                    .map_err(|_| ConfigError::SourceCredentialsKey)?,
+            ),
+            _ => None,
+        };
+
         Ok(Self {
             bind_addr,
             static_dir,
@@ -115,6 +130,7 @@ impl Config {
             trusted_proxies,
             allow_loopback_images,
             admin_bootstrap,
+            source_credentials_key,
         })
     }
 }
@@ -135,6 +151,7 @@ impl Default for Config {
             trusted_proxies: Vec::new(),
             allow_loopback_images: false,
             admin_bootstrap: None,
+            source_credentials_key: None,
         }
     }
 }

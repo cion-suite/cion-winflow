@@ -7,6 +7,7 @@ import { discoverApi } from "./discover";
 import { libraryApi } from "./library";
 import { profileApi } from "./profile";
 import { progressApi } from "./progress";
+import { sourceCredentialsApi } from "./sourceCredentials";
 
 // По мере появления областей API их функции собираются здесь.
 export const api = {
@@ -19,6 +20,7 @@ export const api = {
   library: libraryApi,
   profile: profileApi,
   progress: progressApi,
+  sourceCredentials: sourceCredentialsApi,
 };
 
 // Компонентам и экранам api доступен только через эту точку входа
@@ -160,6 +162,18 @@ export {
   useUploadAvatarMutation,
   userAvatarUrl,
 } from "./profile";
+export {
+  SOURCE_CREDENTIALS_QUERY_KEY,
+  sourceCredentialsApi,
+  useDeleteSourceCredentialMutation,
+  useSaveSourceCredentialMutation,
+  useSourceCredentialsQuery,
+} from "./sourceCredentials";
+export type {
+  SourceCredential,
+  SourceCredentialInput,
+  SourceCredentialsResponse,
+} from "./sourceCredentials";
 export type {
   AvatarResponse,
   BookmarkImportError,

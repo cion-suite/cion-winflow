@@ -12,6 +12,8 @@ use crate::bookmarks::ImportJobs;
 use crate::config::Config;
 use crate::error::AppError;
 use crate::images::ImageCache;
+use crate::source_auth::CredentialCipher;
+use crate::source_auth::crypto::credentials_unavailable;
 use crate::sources::{CoverSize, http, registry::SourceRegistry};
 
 const USER_AGENT: &str = concat!(
@@ -78,6 +80,9 @@ pub struct AppState {
     avatar_locks: Arc<SyncMutex<HashMap<i64, AvatarLock>>>,
     /// Фоновые импорты закладок: состояние живёт в памяти процесса.
     pub bookmark_imports: Arc<ImportJobs>,
+    /// AEAD-ключ per-user учёток источников. `None` — функция выключена:
+    /// маршруты отвечают 503 `credentials_unavailable`.
+    pub source_credentials: Option<Arc<CredentialCipher>>,
 }
 
 impl AppState {
@@ -92,6 +97,11 @@ impl AppState {
         )?);
         let registry = SourceRegistry::load(&pool, metadata_client.clone()).await?;
         let image_cache = Arc::new(ImageCache::new(&config.data_dir));
+        // Ключ уже проверен и разобран в Config::from_env.
+        let source_credentials = config
+            .source_credentials_key
+            .as_ref()
+            .map(|key| Arc::new(key.cipher()));
 
         Ok(Self {
             config,
@@ -107,7 +117,16 @@ impl AppState {
             cover_locks: Arc::new(SyncMutex::new(HashMap::new())),
             avatar_locks: Arc::new(SyncMutex::new(HashMap::new())),
             bookmark_imports: Arc::new(ImportJobs::new()),
+            source_credentials,
         })
+    }
+
+    /// Шифр учёток или 503: вызывающий не должен сам решать, включена ли
+    /// функция, — иначе HTTP-код может разойтись между маршрутами.
+    pub fn credential_cipher(&self) -> Result<&CredentialCipher, AppError> {
+        self.source_credentials
+            .as_deref()
+            .ok_or_else(credentials_unavailable)
     }
 
     /// Блокировка на пару (тайтл, размер обложки). Держится только вокруг

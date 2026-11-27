@@ -13,6 +13,7 @@ import {
 import { AccountSettings } from "./AccountSettings";
 import { BookmarksImportDialog } from "./BookmarksImportDialog";
 import { ImportExportSettings } from "./ImportExportSettings";
+import { SourceCredentialsSettings } from "./SourceCredentialsSettings";
 
 export function SettingsPage() {
   const t = useT();
@@ -40,6 +41,9 @@ export function SettingsPage() {
           <TabsTrigger value="import-export" className="flex-none px-3">
             {t("settingsPage.tabs.importExport")}
           </TabsTrigger>
+          <TabsTrigger value="sources" className="flex-none px-3">
+            {t("settingsPage.tabs.sources")}
+          </TabsTrigger>
           <TabsTrigger value="account" className="flex-none px-3">
             {t("settingsPage.tabs.account")}
           </TabsTrigger>
@@ -47,6 +51,9 @@ export function SettingsPage() {
 
         <TabsContent value="import-export">
           <ImportExportSettings onOpenImport={() => setImportOpen(true)} />
+        </TabsContent>
+        <TabsContent value="sources">
+          <SourceCredentialsSettings />
         </TabsContent>
         <TabsContent value="account">
           <AccountSettings user={user} />

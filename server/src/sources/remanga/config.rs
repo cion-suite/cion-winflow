@@ -19,6 +19,8 @@ pub const DESCRIPTOR: SourceDescriptor = SourceDescriptor {
         Capability::Images,
         Capability::Volumes,
         Capability::AltNames,
+        // 18+ и закрытые тайтлы видны только после входа.
+        Capability::Auth,
     ],
     config: &[
         ConfigField {
