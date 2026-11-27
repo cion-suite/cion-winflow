@@ -144,6 +144,22 @@ export type TitleSyncEntry = {
   error_code: string | null;
 };
 
+export type TitleSyncDiscoveryError = {
+  /** Код источника, у которого произошла ошибка. */
+  code: string;
+  /** Машинный код ошибки: UI переводит его. */
+  error_code: string;
+  message: string;
+};
+
+export type TitleSyncDiscovery = {
+  /** Сколько источников реально поискали. */
+  checked: number;
+  /** Сколько пропустили по свежему кэшу или бюджету. */
+  skipped: number;
+  errors: TitleSyncDiscoveryError[];
+};
+
 export type TitleSyncResponse = {
   title_id: number;
   /** false — данные ещё свежие, сервер не ходил в источники. */
@@ -151,6 +167,9 @@ export type TitleSyncResponse = {
   preferred_source_id: number | null;
   metadata_updated: boolean;
   entries: TitleSyncEntry[];
+  /** Источники, привязанные автоматическим поиском в этом вызове. */
+  sources_linked: string[];
+  discovery: TitleSyncDiscovery;
 };
 
 export type CoverResponse = {
@@ -249,7 +268,9 @@ export function useSyncTitleMutation(id: number) {
   return useMutation({
     mutationFn: () => catalogApi.sync(id),
     onSuccess: (data) => {
-      if (!data.refreshed) return;
+      // Новый привязанный источник меняет страницу даже при refreshed=false:
+      // главы привязанных источников ещё свежие, но привязка уже случилась.
+      if (!data.refreshed && data.sources_linked.length === 0) return;
       void queryClient.invalidateQueries({ queryKey: titleQueryKey(id) });
       void queryClient.invalidateQueries({ queryKey: ["alias-ranges", id] });
       void queryClient.invalidateQueries({ queryKey: ["library"] });

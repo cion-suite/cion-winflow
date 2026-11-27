@@ -254,6 +254,8 @@ export const en = {
       sourceDisabled: "Disabled",
       connectAccount: "Connect account",
       sourceError: "Sync error: {{message}}",
+      discoveryAuthHint:
+        "Some sources need an account to check this title.",
       addToLibrary: "Add to library",
       edit: "Edit",
       editTitle: "Edit title",

@@ -10,6 +10,7 @@ use crate::{
     catalog::selection,
     error::{AppError, FieldError},
     source_auth::{SourceAuth, service as source_auth_service},
+    source_discovery,
     sources::{
         ConfigField, FieldType, SourceDescriptor, SourceError, SourceTitle, TitleKind,
         config::{mask_config, merge_config, validate_config, validate_outbound_url},
@@ -930,6 +931,10 @@ pub struct SyncResponse {
     pub preferred_source_id: Option<i64>,
     pub metadata_updated: bool,
     pub entries: Vec<RefreshEntryDto>,
+    /// Источники, привязанные автоматическим поиском в этом вызове.
+    pub sources_linked: Vec<String>,
+    /// Итог поиска по ещё не привязанным источникам.
+    pub discovery: source_discovery::DiscoveryReport,
 }
 
 /// Снимок метаданных, который последним применился из источников.
@@ -998,18 +1003,46 @@ pub async fn sync_title(
     .ok_or_else(|| AppError::not_found("title_not_found", "title not found"))?;
 
     let now = now_unix();
-    if synced_at.is_some_and(|last| now.saturating_sub(last) < SYNC_TTL_SECS) {
+
+    // Поиск недостающих источников идёт независимо от TTL глав: у него
+    // собственный per-user кэш (`title_source_checks`). Ошибка discovery не
+    // должна ломать обычное обновление глав.
+    let discovery = match run_discovery(state, title_id, user_id).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::warn!(title_id, %error, "source discovery failed");
+            source_discovery::DiscoveryOutcome::default()
+        }
+    };
+    let source_discovery::DiscoveryOutcome {
+        linked: sources_linked,
+        report: discovery_report,
+        timed_out,
+        auth_error: discovery_auth_error,
+    } = discovery;
+
+    // Найденный источник обязан попасть в выдачу сразу, даже если главы
+    // привязанных источников ещё «свежие» по TTL.
+    if sources_linked.is_empty()
+        && !timed_out
+        && synced_at.is_some_and(|last| now.saturating_sub(last) < SYNC_TTL_SECS)
+    {
         return Ok(SyncResponse {
             title_id,
             refreshed: false,
             preferred_source_id,
             metadata_updated: false,
             entries: Vec::new(),
+            sources_linked,
+            discovery: discovery_report,
         });
     }
 
-    let (entries, mut metadata, auth_errors) =
+    let (entries, mut metadata, mut auth_errors) =
         refresh_entries(state, title_id, false, user_id).await?;
+    // Per-user auth-ошибка discovery тоже не даёт «остудить» sync на 10 минут:
+    // после подключения аккаунта пользователь повторит сразу.
+    auth_errors = auth_errors || discovery_auth_error;
     let mut preferred_source_id = selection::recompute_preferred(&state.pool, title_id).await?;
 
     // Порядок метаданных: preferred → rank → is_primary → привязка.
@@ -1059,7 +1092,26 @@ pub async fn sync_title(
         preferred_source_id,
         metadata_updated,
         entries,
+        sources_linked,
+        discovery: discovery_report,
     })
+}
+
+/// Discovery под общей блокировкой на тайтл: `discover::add` и открытие
+/// страницы не ищут одновременно. Открытие страницы ждёт, потому что должно
+/// увидеть привязку, сделанную параллельным добавлением.
+async fn run_discovery(
+    state: &AppState,
+    title_id: i64,
+    user_id: i64,
+) -> Result<source_discovery::DiscoveryOutcome, AppError> {
+    let lock = state.title_lock(title_id);
+    let result = {
+        let _guard = lock.lock().await;
+        source_discovery::discover_for_title(state, title_id, user_id).await
+    };
+    state.release_title_lock(title_id);
+    result
 }
 
 /// Общая часть refresh/sync: главы всех entry и метаданные успешных

@@ -30,6 +30,7 @@ import {
   type TitleChapter,
   type TitleSource,
 } from "@/api";
+import { requiresSourceAccount } from "@/lib/apiErrors";
 import {
   customStatusValue,
   customTabIdFromValue,
@@ -470,6 +471,12 @@ export function TitlePage() {
   // На «Настройках» правая колонка остаётся пустой, но занимает место:
   // так ширина панели связок совпадает с главами и «О тайтле».
   const settingsOpen = tab === "settings" && isAdmin;
+  // Discovery в фоне нашёл источник, который без аккаунта не отдаёт тайтл:
+  // подсказываем подключить его, не выводя сырой текст ошибки.
+  const discoveryAuthHint =
+    sync.data?.discovery.errors.some((error) =>
+      requiresSourceAccount(error.error_code),
+    ) ?? false;
 
   const availableChapters = useMemo(
     () => (query.data?.chapters ?? []).filter(isAvailableChapter),
@@ -841,6 +848,15 @@ export function TitlePage() {
               />
             </div>
           </div>
+
+          {discoveryAuthHint && (
+            <p className="text-sm text-muted-foreground">
+              {t("title.discoveryAuthHint")}{" "}
+              <Link to="/settings" className="underline underline-offset-4">
+                {t("title.connectAccount")}
+              </Link>
+            </p>
+          )}
 
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList

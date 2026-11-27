@@ -254,6 +254,8 @@ export const ru = {
       sourceDisabled: "Отключён",
       connectAccount: "Подключить аккаунт",
       sourceError: "Ошибка синхронизации: {{message}}",
+      discoveryAuthHint:
+        "Часть источников требует аккаунт, чтобы проверить этот тайтл.",
       addToLibrary: "В библиотеку",
       edit: "Редактировать",
       editTitle: "Редактировать тайтл",

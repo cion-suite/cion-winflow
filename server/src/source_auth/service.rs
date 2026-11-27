@@ -162,6 +162,9 @@ pub async fn upsert(
     .execute(&mut *tx)
     .await?;
     reset_title_sync_timestamps(&mut tx, source_id).await?;
+    // Результат поиска без аккаунта больше не актуален: после подключения
+    // discovery должен проверить источник заново, не дожидаясь TTL.
+    clear_discovery_checks(&mut tx, user_id, source_id).await?;
     tx.commit().await?;
 
     tracing::info!(user_id, source_id, "source credential saved");
@@ -195,6 +198,7 @@ pub async fn delete(state: &AppState, user_id: i64, code: &str) -> Result<(), Ap
         .execute(&mut *tx)
         .await?;
     reset_title_sync_timestamps(&mut tx, source_id).await?;
+    clear_discovery_checks(&mut tx, user_id, source_id).await?;
     tx.commit().await?;
 
     tracing::info!(user_id, source_id, "source credential deleted");
@@ -370,5 +374,20 @@ async fn reset_title_sync_timestamps(
     .bind(source_id)
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+/// Смена учётки делает прошлый результат discovery недействительным: без
+/// аккаунта источник мог ответить `auth_required` или скрыть тайтл.
+async fn clear_discovery_checks(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    source_id: i64,
+) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM title_source_checks WHERE user_id = ? AND source_id = ?")
+        .bind(user_id)
+        .bind(source_id)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }

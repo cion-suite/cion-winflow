@@ -28,6 +28,9 @@ type CoverLockKey = (i64, CoverSize);
 type CoverLock = Arc<tokio::sync::Mutex<()>>;
 /// Блокировка файла и версии аватара одного пользователя.
 type AvatarLock = Arc<tokio::sync::Mutex<()>>;
+/// Блокировка поиска источников одного тайтла: `discover::add` и открытие
+/// страницы не должны импортировать один и тот же источник дважды.
+type TitleLock = Arc<tokio::sync::Mutex<()>>;
 
 /// Общая механика per-entity блокировок: карта не должна расти после
 /// освобождения, поэтому запись удаляется, когда на неё больше никто не ждёт.
@@ -78,6 +81,8 @@ pub struct AppState {
     /// Сериализует запись файла и версии аватара: загрузка и удаление
     /// в разных вкладках не должны оставить версию без файла и наоборот.
     avatar_locks: Arc<SyncMutex<HashMap<i64, AvatarLock>>>,
+    /// Сериализует поиск тайтла на ещё не привязанных источниках.
+    title_locks: Arc<SyncMutex<HashMap<i64, TitleLock>>>,
     /// Фоновые импорты закладок: состояние живёт в памяти процесса.
     pub bookmark_imports: Arc<ImportJobs>,
     /// AEAD-ключ per-user учёток источников. `None` — функция выключена:
@@ -116,6 +121,7 @@ impl AppState {
             image_download_semaphore: Arc::new(Semaphore::new(16)),
             cover_locks: Arc::new(SyncMutex::new(HashMap::new())),
             avatar_locks: Arc::new(SyncMutex::new(HashMap::new())),
+            title_locks: Arc::new(SyncMutex::new(HashMap::new())),
             bookmark_imports: Arc::new(ImportJobs::new()),
             source_credentials,
         })
@@ -151,6 +157,19 @@ impl AppState {
     /// пользователей. Вызывать после `drop(guard)`.
     pub fn release_avatar_lock(&self, user_id: i64) {
         release_entity_lock(&self.avatar_locks, user_id);
+    }
+
+    /// Блокировка поиска источников тайтла. `discover::add` берёт её через
+    /// `try_lock` и пропускает поиск, если открытие страницы уже ищет;
+    /// открытие страницы ждёт (`lock().await`).
+    pub fn title_lock(&self, title_id: i64) -> TitleLock {
+        entity_lock(&self.title_locks, title_id)
+    }
+
+    /// Убирает освободившуюся блокировку: карта не должна расти с числом
+    /// тайтлов. Вызывать, пока локальный Arc ещё жив.
+    pub fn release_title_lock(&self, title_id: i64) {
+        release_entity_lock(&self.title_locks, title_id);
     }
 
     /// Пересобирает реестр из БД. Сетевых запросов нет; ошибка БД — 500.

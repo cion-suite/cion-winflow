@@ -193,7 +193,11 @@ async fn bookmarks_import_marks_chapters_and_sets_progress() {
     let items = value["remanga"].as_array().expect("export items");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["type"], 1);
-    assert_eq!(items[0]["progress"], 2);
+    // В файле 10 глав, high-water клампится к chapter_count (3): закрытая c3
+    // тоже входит в общий счётчик глав источника. Фактически отмечено 2
+    // главы (c1/c2), но экспорт отдаёт эффективный прогресс, а не число
+    // строк chapter_reads.
+    assert_eq!(items[0]["progress"], 3);
     assert_eq!(items[0]["progress_total"], 3);
     assert_eq!(items[0]["name"], "Fixture Title");
     assert_eq!(items[0]["dir"], "fixture-title");
