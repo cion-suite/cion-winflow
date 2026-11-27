@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -94,6 +95,8 @@ export type TitleSource = {
   source_entry_id: number;
   code: string;
   name: string;
+  /** Язык источника из дескриптора: по нему связки делятся на колонки. */
+  lang: string;
   enabled: boolean;
   is_primary: boolean;
   /** Место в приоритете языка тайтла: 0 — самый важный, null — не задан. */
@@ -119,6 +122,8 @@ export type TitleResponse = {
   sources: TitleSource[];
   aliases: ChapterAlias[];
   read_keys: string[];
+  /** Язык, которым сервер отфильтровал главы; null — фильтра нет. */
+  view_lang: string | null;
 };
 
 export type TitlePayload = {
@@ -188,7 +193,11 @@ export function titleCoverUrl(
 }
 
 export const catalogApi = {
-  title: (id: number) => request<TitleResponse>(`/titles/${id}`),
+  /** `lang` — язык просмотра: главы и выбранные варианты только из него. */
+  title: (id: number, lang: string | null = null) =>
+    request<TitleResponse>(
+      `/titles/${id}${lang === null ? "" : `?lang=${encodeURIComponent(lang)}`}`,
+    ),
   create: (input: TitleInput) => request<TitlePayload>("/titles", jsonMutation(input)),
   update: (id: number, input: TitleInput) =>
     request<TitlePayload>(`/titles/${id}`, jsonMutation(input, "PUT")),
@@ -211,14 +220,16 @@ export const catalogApi = {
     request<TitleSyncResponse>(`/titles/${id}/sync`, jsonMutation({}, "POST")),
 };
 
-export function useTitleQuery(id: number | null) {
+export function useTitleQuery(id: number | null, lang: string | null = null) {
   return useQuery({
-    queryKey: titleQueryKey(id),
+    queryKey: [...titleQueryKey(id), lang],
     queryFn: () => {
       if (id === null) throw new Error("title id is required");
-      return catalogApi.title(id);
+      return catalogApi.title(id, lang);
     },
     enabled: id !== null,
+    // Смена языка не должна прятать страницу за скелетоном.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -234,6 +245,7 @@ export function useSyncTitleMutation(id: number) {
     onSuccess: (data) => {
       if (!data.refreshed) return;
       void queryClient.invalidateQueries({ queryKey: titleQueryKey(id) });
+      void queryClient.invalidateQueries({ queryKey: ["alias-ranges", id] });
       void queryClient.invalidateQueries({ queryKey: ["library"] });
       void queryClient.invalidateQueries({ queryKey: ["chapter-content", id] });
       void queryClient.invalidateQueries({ queryKey: progressQueryKey(id) });

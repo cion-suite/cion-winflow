@@ -1,3 +1,4 @@
+pub mod alias_ranges;
 pub mod chapters;
 pub mod content;
 pub mod cover;

@@ -55,9 +55,12 @@ export function chapterContentQueryKey(
 }
 
 export const chaptersApi = {
-  content: (titleId: number, chapterKey: string) =>
+  /** `lang` ограничивает выбор варианта выбранным переводом. */
+  content: (titleId: number, chapterKey: string, lang: string | null = null) =>
     request<ChapterContentResponse>(
-      `/titles/${titleId}/chapters/${encodeURIComponent(chapterKey)}/content`,
+      `/titles/${titleId}/chapters/${encodeURIComponent(chapterKey)}/content${
+        lang === null ? "" : `?lang=${encodeURIComponent(lang)}`
+      }`,
     ),
   /** Ручная отметка глав: журнал chapter_reads, прогресс чтения не меняется. */
   setRead: (titleId: number, input: ChapterReadsInput) =>
@@ -94,9 +97,12 @@ export function useSetChapterReadMutation(titleId: number) {
       return response;
     },
     onSuccess: (data) => {
-      // Ответ — полный список ключей: страница тайтла обновляется без refetch
-      queryClient.setQueryData<TitleResponse>(titleQueryKey(titleId), (current) =>
-        current ? { ...current, read_keys: data.read_keys } : current,
+      // Ответ — полный список ключей: страница тайтла обновляется без refetch.
+      // Ключ включает язык просмотра, поэтому обновляем все варианты.
+      queryClient.setQueriesData<TitleResponse>(
+        { queryKey: titleQueryKey(titleId) },
+        (current) =>
+          current ? { ...current, read_keys: data.read_keys } : current,
       );
       // read_count карточки библиотеки считается по chapter_reads
       void queryClient.invalidateQueries({ queryKey: ["library"] });
@@ -107,14 +113,15 @@ export function useSetChapterReadMutation(titleId: number) {
 export function useChapterContentQuery(
   titleId: number | null,
   chapterKey: string | null,
+  lang: string | null = null,
 ) {
   return useQuery({
-    queryKey: chapterContentQueryKey(titleId, chapterKey),
+    queryKey: [...chapterContentQueryKey(titleId, chapterKey), lang],
     queryFn: () => {
       if (titleId === null || chapterKey === null) {
         throw new Error("title id and chapter key are required");
       }
-      return chaptersApi.content(titleId, chapterKey);
+      return chaptersApi.content(titleId, chapterKey, lang);
     },
     enabled: titleId !== null && chapterKey !== null,
     // Список страниц меняется редко: повторный показ не должен ходить в сеть

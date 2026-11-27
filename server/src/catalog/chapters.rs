@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 use crate::auth::session::now_unix;
 use crate::error::AppError;
 
-use super::selection::{self, ChapterCandidate, TitleInfo};
+use super::selection::{self, AvailabilityView, ChapterCandidate, TitleInfo};
 
 #[derive(Debug, Serialize)]
 pub struct TitleChapterVariantDto {
@@ -57,6 +57,8 @@ pub struct TitleSourceDto {
     pub source_entry_id: i64,
     pub code: String,
     pub name: String,
+    /// Язык источника из дескриптора: по нему UI раскладывает связки по колонкам.
+    pub lang: String,
     pub enabled: bool,
     pub is_primary: bool,
     /// Место в приоритете языка тайтла: 0 — самый важный, `null` — не задан.
@@ -73,6 +75,9 @@ pub struct TitleSourceDto {
 pub struct TitleChapters {
     pub chapters: Vec<TitleChapterDto>,
     pub sources: Vec<TitleSourceDto>,
+    /// Язык, которым реально отфильтрованы главы (после проверки источников).
+    /// `null` — фильтра нет: страница показывает общий список.
+    pub view_lang: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -91,15 +96,62 @@ struct EntryRow {
     last_error: Option<String>,
 }
 
+/// `source_langs` — язык из дескриптора по коду источника: реестр знает его,
+/// а таблица `sources` язык не хранит. `view_lang` — выбранный пользователем
+/// язык просмотра: главы без варианта этого языка не показываются.
 pub async fn title_chapters(
     pool: &SqlitePool,
     title: &TitleInfo,
+    source_langs: &HashMap<String, &'static str>,
+    view_lang: Option<&str>,
 ) -> Result<TitleChapters, AppError> {
     let now = now_unix();
-    let ranks = selection::load_priorities(pool, title.lang.as_deref()).await?;
 
-    let aliases: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
-        "SELECT alias_key, canonical_key FROM chapter_aliases WHERE title_id = ?",
+    let entries = sqlx::query_as::<_, EntryRow>(
+        "SELECT s.id AS source_id, s.name AS source_name, s.code AS source_code, \
+                (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled, e.id AS source_entry_id, e.is_primary, \
+                e.chapter_count, e.available_count, e.locked_count, e.missing_count, \
+                e.stats_updated_at, e.last_error \
+         FROM source_entries e JOIN sources s ON s.id = e.source_id \
+         WHERE e.title_id = ? \
+         ORDER BY e.is_primary DESC, s.name, e.id",
+    )
+    .bind(title.id)
+    .fetch_all(pool)
+    .await?;
+
+    // Устаревший URL или localStorage не должен опустошать страницу:
+    // язык просмотра действует, только если такой источник включён.
+    // Выключенный источник не может отдать главу, поэтому показывать его
+    // перевод без переключателя было бы тупиком.
+    let view_lang = view_lang.filter(|lang| {
+        entries.iter().any(|entry| {
+            in_view_lang(
+                &entry.source_code,
+                entry.source_enabled,
+                Some(*lang),
+                source_langs,
+            )
+        })
+    });
+
+    let ranks = selection::load_priorities(pool, view_lang.or(title.lang.as_deref())).await?;
+
+    // Диапазонные пары привязаны к source_entry и не должны перетирать
+    // такой же ключ другого источника. Глобальные пары — ручные/legacy.
+    let entry_aliases: HashMap<(i64, String), String> = sqlx::query_as::<_, (i64, String, String)>(
+        "SELECT source_entry_id, alias_key, canonical_key FROM chapter_aliases \
+         WHERE title_id = ? AND source_entry_id IS NOT NULL",
+    )
+    .bind(title.id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(entry_id, alias_key, canonical_key)| ((entry_id, alias_key), canonical_key))
+    .collect();
+    let global_aliases: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
+        "SELECT alias_key, canonical_key FROM chapter_aliases \
+         WHERE title_id = ? AND source_entry_id IS NULL",
     )
     .bind(title.id)
     .fetch_all(pool)
@@ -125,8 +177,9 @@ pub async fn title_chapters(
 
     let mut groups: HashMap<String, Vec<ChapterCandidate>> = HashMap::new();
     for row in rows {
-        let canonical = aliases
-            .get(&row.chapter_key)
+        let canonical = entry_aliases
+            .get(&(row.source_entry_id, row.chapter_key.clone()))
+            .or_else(|| global_aliases.get(&row.chapter_key))
             .cloned()
             .unwrap_or_else(|| row.chapter_key.clone());
         groups.entry(canonical).or_default().push(row);
@@ -134,20 +187,34 @@ pub async fn title_chapters(
 
     let mut chapters = Vec::with_capacity(groups.len());
     for (key, variants) in groups {
-        let variants = selection::order(variants, title.preferred_source_id, &ranks, now);
+        let ordered = selection::order(variants, title.preferred_source_id, &ranks, now);
+        // В языке просмотра глава без варианта этого языка не показывается.
+        // Остальные языки остаются в `variants` — они нужны редактору связок.
+        let visible: Vec<&ChapterCandidate> = ordered
+            .iter()
+            .filter(|candidate| {
+                in_view_lang(
+                    &candidate.source_code,
+                    candidate.source_enabled,
+                    view_lang,
+                    source_langs,
+                )
+            })
+            .collect();
         // Свежий locked/missing preferred-источник не должен становиться
         // «выбранным» для отображения, если есть доступный вариант.
-        let Some(selected) = selection::first_usable(&variants, now) else {
+        let Some(selected) = first_usable(&visible, now) else {
             continue;
         };
 
-        let availability = group_availability(&variants, now);
-        let effective: Vec<&ChapterCandidate> = variants
+        let availability = group_availability(&visible, now);
+        let effective: Vec<&ChapterCandidate> = visible
             .iter()
+            .copied()
             .filter(|variant| variant.source_enabled)
             .collect();
         let is_locked = if effective.is_empty() {
-            variants.iter().all(|variant| variant.is_locked)
+            visible.iter().all(|variant| variant.is_locked)
         } else {
             effective.iter().all(|variant| variant.is_locked)
         };
@@ -156,25 +223,34 @@ pub async fn title_chapters(
         // alias могли связать главу с неверным томом (например, источник
         // забыл сменить том) с главой, где нумерация правильная. Читается
         // при этом всё равно первый доступный вариант в порядке приоритета.
-        let numbering = variants
+        let numbering = ordered
             .iter()
             .find(|variant| variant.chapter_key == key)
             .unwrap_or(selected);
+        let number_text = numbering.number_text.clone();
+        let number_milli = numbering.number_milli;
+        let volume = numbering.volume;
+        let chapter_kind = numbering.chapter_kind.clone();
+        let name = selected.name.clone();
+        let content_kind = selected.content_kind.clone();
+        let page_count = selected.page_count;
+        let published_at = selected.published_at;
+        let selected_chapter_id = selected.chapter_id;
 
         chapters.push(TitleChapterDto {
             chapter_key: key,
-            number_text: numbering.number_text.clone(),
-            number_milli: numbering.number_milli,
-            volume: numbering.volume,
-            chapter_kind: numbering.chapter_kind.clone(),
-            name: selected.name.clone(),
-            content_kind: selected.content_kind.clone(),
-            page_count: selected.page_count,
+            number_text,
+            number_milli,
+            volume,
+            chapter_kind,
+            name,
+            content_kind,
+            page_count,
             availability,
             is_locked,
-            published_at: selected.published_at,
-            selected_chapter_id: selected.chapter_id,
-            variants: variants
+            published_at,
+            selected_chapter_id,
+            variants: ordered
                 .into_iter()
                 .map(|variant| TitleChapterVariantDto {
                     chapter_id: variant.chapter_id,
@@ -209,45 +285,83 @@ pub async fn title_chapters(
         )
     });
 
-    let entries = sqlx::query_as::<_, EntryRow>(
-        "SELECT s.id AS source_id, s.name AS source_name, s.code AS source_code, \
-                (s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL) AS source_enabled, e.id AS source_entry_id, e.is_primary, \
-                e.chapter_count, e.available_count, e.locked_count, e.missing_count, \
-                e.stats_updated_at, e.last_error \
-         FROM source_entries e JOIN sources s ON s.id = e.source_id \
-         WHERE e.title_id = ? \
-         ORDER BY e.is_primary DESC, s.name, e.id",
-    )
-    .bind(title.id)
-    .fetch_all(pool)
-    .await?;
-
     let sources = entries
         .into_iter()
-        .map(|entry| TitleSourceDto {
-            source_id: entry.source_id,
-            source_entry_id: entry.source_entry_id,
-            code: entry.source_code,
-            name: entry.source_name,
-            enabled: entry.source_enabled,
-            is_primary: entry.is_primary,
-            priority_rank: ranks.get(&entry.source_id).copied(),
-            chapter_count: entry.chapter_count,
-            available_count: entry.available_count,
-            locked_count: entry.locked_count,
-            missing_count: entry.missing_count,
-            stats_updated_at: entry.stats_updated_at,
-            last_error: entry.last_error,
+        .map(|entry| {
+            let lang = source_langs
+                .get(entry.source_code.as_str())
+                .copied()
+                .unwrap_or_default()
+                .to_owned();
+            TitleSourceDto {
+                source_id: entry.source_id,
+                source_entry_id: entry.source_entry_id,
+                code: entry.source_code,
+                name: entry.source_name,
+                lang,
+                enabled: entry.source_enabled,
+                is_primary: entry.is_primary,
+                priority_rank: ranks.get(&entry.source_id).copied(),
+                chapter_count: entry.chapter_count,
+                available_count: entry.available_count,
+                locked_count: entry.locked_count,
+                missing_count: entry.missing_count,
+                stats_updated_at: entry.stats_updated_at,
+                last_error: entry.last_error,
+            }
         })
         .collect();
 
-    Ok(TitleChapters { chapters, sources })
+    Ok(TitleChapters {
+        chapters,
+        sources,
+        view_lang: view_lang.map(str::to_owned),
+    })
 }
 
-fn group_availability(variants: &[ChapterCandidate], now: i64) -> String {
+/// То же, что `selection::first_usable`, но по ссылкам на подмножество
+/// (язык просмотра): клонировать кандидатов ради выбора не нужно.
+fn first_usable<'a>(variants: &[&'a ChapterCandidate], now: i64) -> Option<&'a ChapterCandidate> {
+    variants
+        .iter()
+        .copied()
+        .find(|candidate| {
+            candidate.source_enabled
+                && selection::view(candidate, now) != AvailabilityView::Unavailable
+        })
+        .or_else(|| {
+            variants
+                .iter()
+                .copied()
+                .find(|candidate| candidate.source_enabled)
+        })
+        .or_else(|| variants.first().copied())
+}
+
+/// Вариант попадает в язык просмотра: источник включён и его язык совпадает.
+/// Без языка просмотра фильтра нет — страница ведёт себя как до фичи.
+fn in_view_lang(
+    source_code: &str,
+    source_enabled: bool,
+    view_lang: Option<&str>,
+    source_langs: &HashMap<String, &'static str>,
+) -> bool {
+    match view_lang {
+        None => true,
+        Some(lang) => {
+            source_enabled
+                && source_langs
+                    .get(source_code)
+                    .is_some_and(|value| *value == lang)
+        }
+    }
+}
+
+fn group_availability(variants: &[&ChapterCandidate], now: i64) -> String {
     // Выключенный источник не должен делать главу «доступной» в UI
     let effective: Vec<&ChapterCandidate> = variants
         .iter()
+        .copied()
         .filter(|variant| variant.source_enabled)
         .collect();
 
@@ -265,6 +379,7 @@ fn group_availability(variants: &[ChapterCandidate], now: i64) -> String {
     }
     if effective
         .iter()
+        .copied()
         .any(|variant| selection::view(variant, now) == selection::AvailabilityView::Unknown)
     {
         return "unknown".to_owned();
@@ -282,4 +397,33 @@ fn group_availability(variants: &[ChapterCandidate], now: i64) -> String {
         return "missing".to_owned();
     }
     "unknown".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::in_view_lang;
+
+    fn langs() -> HashMap<String, &'static str> {
+        HashMap::from([
+            ("ru_source".to_owned(), "ru"),
+            ("en_source".to_owned(), "en"),
+        ])
+    }
+
+    #[test]
+    fn without_view_language_any_variant_is_visible() {
+        assert!(in_view_lang("en_source", false, None, &langs()));
+        assert!(in_view_lang("unknown", false, None, &langs()));
+    }
+
+    #[test]
+    fn view_language_needs_enabled_source_of_that_language() {
+        let langs = langs();
+        assert!(in_view_lang("en_source", true, Some("en"), &langs));
+        assert!(!in_view_lang("en_source", false, Some("en"), &langs));
+        assert!(!in_view_lang("ru_source", true, Some("en"), &langs));
+        assert!(!in_view_lang("unknown", true, Some("en"), &langs));
+    }
 }

@@ -124,6 +124,19 @@ pub fn router(state: AppState) -> Router {
             delete(catalog::handlers::delete_alias),
         )
         .route(
+            "/titles/{title_id}/alias-ranges",
+            get(catalog::handlers::list_alias_ranges).post(catalog::handlers::create_alias_range),
+        )
+        .route(
+            "/titles/{title_id}/alias-ranges/apply",
+            post(catalog::handlers::apply_alias_ranges),
+        )
+        .route(
+            "/titles/{title_id}/alias-ranges/{range_id}",
+            put(catalog::handlers::update_alias_range)
+                .delete(catalog::handlers::delete_alias_range),
+        )
+        .route(
             "/admin/source-priorities",
             get(source_admin::handlers::list_priorities)
                 .put(source_admin::handlers::replace_priorities),

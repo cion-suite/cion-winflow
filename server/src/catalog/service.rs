@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
@@ -106,6 +108,8 @@ pub struct TitleResponse {
     pub aliases: Vec<AliasDto>,
     /// Прочитанные главы текущего пользователя по каноническому ключу.
     pub read_keys: Vec<String>,
+    /// Язык, которым реально отфильтрованы главы; `null` — фильтра нет.
+    pub view_lang: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -255,11 +259,20 @@ pub async fn list_catalog(
     })
 }
 
+/// Язык просмотра из query: пробелы по краям не значимы, пустой — не задан.
+pub fn normalize_lang(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase)
+}
+
 pub async fn get_title(
-    pool: &SqlitePool,
+    state: &AppState,
     user_id: i64,
     title_id: i64,
+    view_lang: Option<&str>,
 ) -> Result<TitleResponse, AppError> {
+    let pool = &state.pool;
     let title = find_title(pool, title_id).await?;
     let library = find_library_state(pool, user_id, title_id).await?;
     let info = selection::TitleInfo {
@@ -267,7 +280,17 @@ pub async fn get_title(
         lang: title.lang.clone(),
         preferred_source_id: title.preferred_source_id,
     };
-    let chapters = chapters::title_chapters(pool, &info).await?;
+    // Язык нужен DTO источников, но guard реестра не должен жить до
+    // следующего `.await` к БД.
+    let source_langs: HashMap<String, &'static str> = {
+        let registry = state.sources.read().await;
+        registry
+            .descriptors()
+            .iter()
+            .map(|descriptor| (descriptor.code.to_owned(), descriptor.lang))
+            .collect()
+    };
+    let chapters = chapters::title_chapters(pool, &info, &source_langs, view_lang).await?;
     let aliases = links::load_aliases(pool, title_id).await?;
     let read_keys = sqlx::query_scalar::<_, String>(
         "SELECT chapter_key FROM chapter_reads WHERE user_id = ? AND title_id = ?",
@@ -284,6 +307,7 @@ pub async fn get_title(
         sources: chapters.sources,
         aliases,
         read_keys,
+        view_lang: chapters.view_lang,
     })
 }
 

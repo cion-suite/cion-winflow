@@ -196,6 +196,7 @@ export function useToggleSourceMutation() {
       void queryClient.invalidateQueries({ queryKey: SOURCE_PRIORITIES_QUERY_KEY });
       // Выключение меняет preferred source и выбранный вариант главы.
       void queryClient.invalidateQueries({ queryKey: ["title"] });
+      void queryClient.invalidateQueries({ queryKey: ["alias-ranges"] });
       void queryClient.invalidateQueries({ queryKey: ["chapter-content"] });
       void queryClient.invalidateQueries({ queryKey: ["progress"] });
     },
@@ -225,6 +226,7 @@ export function useSaveSourcePrioritiesMutation() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: SOURCE_PRIORITIES_QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: ["title"] });
+      void queryClient.invalidateQueries({ queryKey: ["alias-ranges"] });
       void queryClient.invalidateQueries({ queryKey: ["chapter-content"] });
       void queryClient.invalidateQueries({ queryKey: ["progress"] });
     },
@@ -234,6 +236,7 @@ export function useSaveSourcePrioritiesMutation() {
 function invalidateTitle(queryClient: ReturnType<typeof useQueryClient>, titleId: number): void {
   void queryClient.invalidateQueries({ queryKey: titleQueryKey(titleId) });
   // Связи и доступность меняют выбранный вариант и canonical-ключ прогресса.
+  void queryClient.invalidateQueries({ queryKey: ["alias-ranges", titleId] });
   void queryClient.invalidateQueries({ queryKey: ["chapter-content", titleId] });
   void queryClient.invalidateQueries({ queryKey: progressQueryKey(titleId) });
   // Attach/refresh/import могут добрать обложки: has_cover и updated_at

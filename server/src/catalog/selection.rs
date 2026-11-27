@@ -78,16 +78,20 @@ pub async fn resolve_key(
     title_id: i64,
     key: &str,
 ) -> Result<Option<String>, AppError> {
-    let alias = sqlx::query_scalar::<_, String>(
-        "SELECT canonical_key FROM chapter_aliases WHERE title_id = ? AND alias_key = ?",
+    // Один alias_key может быть привязан к разным canonical в разных
+    // источниках. Если решение единственное — используем его; если нет,
+    // ключ трактуем как канонический (читалка ходит по canonical-ключам).
+    let canonicals = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT canonical_key FROM chapter_aliases \
+         WHERE title_id = ? AND alias_key = ?",
     )
     .bind(title_id)
     .bind(key)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await?;
 
-    if let Some(canonical) = alias {
-        return Ok(Some(canonical));
+    if canonicals.len() == 1 {
+        return Ok(canonicals.into_iter().next());
     }
 
     let exists = sqlx::query_scalar::<_, i64>(
@@ -121,9 +125,11 @@ pub async fn candidates(
          JOIN source_entries e ON e.id = ch.source_entry_id \
          JOIN sources s ON s.id = e.source_id \
          WHERE e.title_id = ? AND ch.removed_at IS NULL \
-           AND (ch.chapter_key = ? OR ch.chapter_key IN ( \
-                 SELECT alias_key FROM chapter_aliases \
-                 WHERE title_id = ? AND canonical_key = ? \
+           AND (ch.chapter_key = ? OR EXISTS ( \
+                 SELECT 1 FROM chapter_aliases a \
+                 WHERE a.title_id = ? AND a.canonical_key = ? \
+                   AND a.alias_key = ch.chapter_key \
+                   AND (a.source_entry_id IS NULL OR a.source_entry_id = ch.source_entry_id) \
            ))",
     )
     .bind(title_id)

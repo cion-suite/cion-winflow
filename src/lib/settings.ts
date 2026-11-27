@@ -13,12 +13,14 @@ import {
  * известен i18n сразу.
  */
 
-export type SettingKey = "locale" | "readerWidth";
+export type SettingKey = "locale" | "readerWidth" | "titleLangs";
 
 type SettingsMap = {
   locale: SupportedLocale;
   /** Ширина колонки изображений в читалке. */
   readerWidth: ReaderWidth;
+  /** Язык просмотра по id тайтла: выбор переживает переходы и перезагрузку. */
+  titleLangs: Record<string, string>;
 };
 
 const BROWSER_KEY = "cion-reader:settings";
@@ -32,6 +34,7 @@ function initialLocale(): SupportedLocale {
 const DEFAULTS: SettingsMap = {
   locale: initialLocale(),
   readerWidth: DEFAULT_READER_WIDTH,
+  titleLangs: {},
 };
 
 const values: SettingsMap = { ...DEFAULTS };
@@ -41,6 +44,10 @@ const isValid = {
   locale: (value: unknown): value is SupportedLocale =>
     typeof value === "string" && SUPPORTED_LOCALES.some((code) => code === value),
   readerWidth: isReaderWidth,
+  titleLangs: (value: unknown): value is Record<string, string> =>
+    typeof value === "object" &&
+    value !== null &&
+    Object.values(value).every((lang) => typeof lang === "string"),
 };
 
 function readBrowserSettings(): unknown {
@@ -83,6 +90,9 @@ export function initSettings(): void {
   const record = saved as Record<string, unknown>;
   if (isValid.locale(record.locale)) values.locale = record.locale;
   if (isValid.readerWidth(record.readerWidth)) values.readerWidth = record.readerWidth;
+  if (isValid.titleLangs(record.titleLangs)) {
+    values.titleLangs = { ...record.titleLangs };
+  }
 }
 
 export const settings = {

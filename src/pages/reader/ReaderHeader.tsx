@@ -16,6 +16,8 @@ import { ReaderUserMenu } from "./ReaderUserMenu";
 
 type ReaderHeaderProps = {
   titleId: number;
+  /** Язык просмотра: переходы должны оставаться в том же переводе. */
+  lang: string | null;
   titleName: string;
   chapterLabel: string;
   previousChapterKey: string | null;
@@ -36,6 +38,7 @@ type ReaderHeaderProps = {
  */
 export function ReaderHeader({
   titleId,
+  lang,
   titleName,
   chapterLabel,
   previousChapterKey,
@@ -61,7 +64,7 @@ export function ReaderHeader({
       <div className="grid h-14 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-2 sm:px-4">
         <div className="flex min-w-0 items-center">
           <Link
-            to={titlePath(titleId)}
+            to={titlePath(titleId, lang)}
             aria-label={t("reader.backToTitle")}
             className={cn(
               buttonVariants({ variant: "ghost", size: "sm" }),
@@ -78,7 +81,7 @@ export function ReaderHeader({
         <div className="flex items-center gap-0.5 rounded-full border bg-background/70 p-0.5">
           {previousChapterKey ? (
             <Link
-              to={readerPath(titleId, previousChapterKey)}
+              to={readerPath(titleId, previousChapterKey, lang)}
               aria-label={t("reader.prevChapter")}
               className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
             >
@@ -100,7 +103,7 @@ export function ReaderHeader({
           </span>
           {nextChapterKey ? (
             <Link
-              to={readerPath(titleId, nextChapterKey)}
+              to={readerPath(titleId, nextChapterKey, lang)}
               aria-label={t("reader.nextChapter")}
               className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
             >

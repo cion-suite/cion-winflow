@@ -1,14 +1,16 @@
 //! Каноническая выдача главы: выбор варианта, fallback по источникам и
 //! кэширование списка страниц в БД. Сеть дёргается только при открытии.
 
+use std::collections::HashMap;
+
 use axum::{Json, extract::State};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::{
     auth::session::now_unix,
     error::AppError,
-    extract::ApiPath,
+    extract::{ApiPath, ApiQuery},
     sources::{ChapterKind, ContentKind, ExternalId, SourceChapter, SourceContent, SourcePage},
     state::AppState,
 };
@@ -58,11 +60,21 @@ pub struct ContentResponse {
     pub fallback: Option<FallbackDto>,
 }
 
+/// Язык просмотра: читать вариант из выбранного перевода.
+#[derive(Debug, Deserialize)]
+pub struct ContentQuery {
+    pub lang: Option<String>,
+}
+
 pub async fn canonical_content(
     State(state): State<AppState>,
     ApiPath((title_id, chapter_key)): ApiPath<(i64, String)>,
+    ApiQuery(query): ApiQuery<ContentQuery>,
 ) -> Result<Json<ContentResponse>, AppError> {
-    Ok(Json(canonical(&state, title_id, &chapter_key).await?))
+    let view_lang = super::service::normalize_lang(query.lang.as_deref());
+    Ok(Json(
+        canonical(&state, title_id, &chapter_key, view_lang.as_deref()).await?,
+    ))
 }
 
 pub async fn direct_content(
@@ -72,10 +84,36 @@ pub async fn direct_content(
     Ok(Json(direct(&state, chapter_id).await?))
 }
 
+/// Код источника → язык дескриптора для **включённых** источников тайтла.
+/// Выключенный источник не может отдать главу, поэтому его язык не делаем
+/// действующим: иначе старый `?lang=` останется в тупике на 503.
+async fn title_source_langs(
+    state: &AppState,
+    title_id: i64,
+) -> Result<HashMap<String, String>, AppError> {
+    let codes = sqlx::query_scalar::<_, String>(
+        "SELECT s.code FROM source_entries e JOIN sources s ON s.id = e.source_id \
+         WHERE e.title_id = ? \
+           AND s.enabled = 1 AND s.base_url IS NOT NULL AND s.config_error IS NULL",
+    )
+    .bind(title_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let registry = state.sources.read().await;
+    Ok(codes
+        .into_iter()
+        .filter_map(|code| {
+            let lang = registry.descriptor(&code)?.lang.to_owned();
+            Some((code, lang))
+        })
+        .collect())
+}
+
 pub async fn canonical(
     state: &AppState,
     title_id: i64,
     requested_key: &str,
+    view_lang: Option<&str>,
 ) -> Result<ContentResponse, AppError> {
     let title = selection::load_title_info(&state.pool, title_id).await?;
 
@@ -83,9 +121,33 @@ pub async fn canonical(
         .await?
         .ok_or_else(|| AppError::not_found("chapter_not_found", "chapter not found"))?;
 
+    // Карта нужна только при явном языке: без него лишний SELECT на пути
+    // открытия главы ни к чему.
+    let source_langs = match view_lang {
+        Some(_) => title_source_langs(state, title_id).await?,
+        None => HashMap::new(),
+    };
+    // Устаревший URL/localStorage не должен ломать чтение: если включённого
+    // источника такого языка у тайтла нет, работаем как без языка.
+    let view_lang =
+        view_lang.filter(|lang| source_langs.values().any(|value| value.as_str() == *lang));
+
     let now = now_unix();
-    let ranks = selection::load_priorities(&state.pool, title.lang.as_deref()).await?;
-    let candidates = selection::candidates(&state.pool, title_id, &canonical_key).await?;
+    let ranks =
+        selection::load_priorities(&state.pool, view_lang.or(title.lang.as_deref())).await?;
+    let candidates = selection::candidates(&state.pool, title_id, &canonical_key)
+        .await?
+        .into_iter()
+        // Строго в выбранном языке: если варианта нет, не подмешиваем
+        // другой перевод — иначе читатель не заметит подмену.
+        .filter(|candidate| {
+            view_lang.is_none_or(|lang| {
+                source_langs
+                    .get(&candidate.source_code)
+                    .is_some_and(|value| value.as_str() == lang)
+            })
+        })
+        .collect::<Vec<_>>();
 
     if candidates.is_empty() {
         return Err(AppError::not_found(

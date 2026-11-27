@@ -70,6 +70,7 @@ cion-reader/
       catalog/                 тайтлы, источники тайтла, главы, поиск
         selection.rs           preferred source, fallback по главам, доступность
         links.rs               attach/detach источника, primary, chapter_aliases
+        alias_ranges.rs        связки-диапазоны, материализация пар, прогресс
       library/                 библиотека и прогресс
       sources/                 контракт источников
         mod.rs                 SourceKind (enum dispatch), реестр, AdapterCtx
@@ -143,8 +144,16 @@ chapters(id, source_entry_id, external_id, chapter_key, number_text, number_mill
          ordinal_site, volume, chapter_kind, content_kind NULL, name, group_name, language,
          is_locked, availability, availability_checked_at, page_count,
          external_url, embed_url, published_at, last_seen_at, removed_at, raw_json)
-chapter_aliases(id, title_id, canonical_key, alias_key, created_at,
-                UNIQUE(title_id, alias_key))
+chapter_aliases(id, title_id, source_entry_id NULL, canonical_key, alias_key, origin, created_at,
+                UNIQUE(title_id, alias_key) WHERE source_entry_id IS NULL,
+                UNIQUE(title_id, source_entry_id, alias_key) WHERE source_entry_id IS NOT NULL)
+chapter_alias_ranges(id, title_id, source_entry_id, anchor_chapter_id,
+                     anchor_chapter_key, anchor_volume, anchor_number_text,
+                     anchor_number_milli, anchor_ordinal_site,
+                     canonical_key, canonical_chapter_id,
+                     canonical_volume, canonical_number_text, canonical_number_milli,
+                     chapter_kind, mapping_mode, status, created_at,
+                     UNIQUE(title_id, source_entry_id, chapter_kind, anchor_chapter_id))
 source_priorities(id, lang, source_id, rank, created_at,
                   UNIQUE(lang, source_id), UNIQUE(lang, rank))
 pages(id, chapter_id, idx, image_ref, image_url, width, height)
@@ -166,7 +175,7 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 
 Ключевые решения:
 
-- **Канонический прогресс.** `progress` и `chapter_reads` живут в SQLite, а не в localStorage, и хранятся по `title_id` + каноническому `chapter_key`, а не по `chapter_id` конкретного источника: при переключении источника та же глава имеет другой `chapter_id`, и прогресс терялся бы. `PUT /api/progress/{title_id}` принимает `chapter_key`, проверяет, что ключ принадлежит тайтлу (глава или alias), и в той же транзакции берёт `content_kind` выбранного варианта. Для изображений позиция — `page`, для видео — `seconds`, для текста — `scroll` (0..1); несовпадение поля с `content_kind` — 400, а если `content_kind` ещё NULL — 409 `content_kind_unknown` (клиент сначала открывает главу через `/content`). Alias резолвится в canonical тем же правилом. Автоматически ключи не склеиваются: если у источников нумерация разошлась, администратор связывает их через `POST /api/titles/{title_id}/chapter-aliases`; до связывания у каждого ключа свой прогресс.
+- **Канонический прогресс.** `progress` и `chapter_reads` живут в SQLite, а не в localStorage, и хранятся по `title_id` + каноническому `chapter_key`, а не по `chapter_id` конкретного источника: при переключении источника та же глава имеет другой `chapter_id`, и прогресс терялся бы. `PUT /api/progress/{title_id}` принимает `chapter_key`, проверяет, что ключ принадлежит тайтлу (глава или alias), и в той же транзакции берёт `content_kind` выбранного варианта. Для изображений позиция — `page`, для видео — `seconds`, для текста — `scroll` (0..1); несовпадение поля с `content_kind` — 400, а если `content_kind` ещё NULL — 409 `content_kind_unknown` (клиент сначала открывает главу через `/content`). Alias резолвится в canonical тем же правилом. Автоматически ключи не склеиваются: если у источников нумерация разошлась, администратор создаёт связку-диапазон (`chapter_alias_ranges`), из которой пересобираются точные пары; до связывания у каждого ключа свой прогресс.
 - **Прочитанное.** `PUT /api/progress/{title_id}` в той же транзакции пишет `chapter_reads` по каноническому ключу; карточка библиотеки показывает `read_count` и `chapter_count` (максимум по `source_entries`), страница тайтла — отметку у главы. Журнал не чистится при удалении из библиотеки: возврат тайтла сохраняет историю.
 - **Библиотека и свои закладки.** Статусы — `in_progress|planned|favorite|completed|dropped|on_hold|not_interested`; «Любимое» — такой же статус, отдельного флага нет (миграция 0006). Своя закладка — ещё один статус, один на тайтл: `library.custom_tab_id` перекрывает встроенный `status`, а удаление закладки возвращает сохранённый встроенный (миграция 0007, `library_tab_items` удалена). Своих закладок не больше трёх (`library_tabs`), имя уникально у пользователя.
 - **Приоритеты источников.** `source_priorities(lang, source_id, rank)`: меньший `rank` — выше приоритет, `lang = '*'` — запасной набор. Источник не привязан к типу тайтла, поэтому набор один на язык: `ru` = Remanga → RuMix → Mangamir, `en` — свой. **Приоритет — главный критерий**: главы, которые есть на более приоритетном источнике, берутся с него, а менее приоритетный заполняет только пропуски. Mangamir подключён; MangaLib остаётся кандидатом на будущее.
@@ -192,7 +201,7 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 - **Отключённый источник.** Записи `source_entries` и главы остаются в БД, тайтл и библиотека читаются. Чтение контента из отключённого источника — `source_disabled` (503), а не 500. Селектор пропускает выключенные источники и пересчитывает `preferred_source`; `is_primary` автоматически не переписывается.
 - **Сессии.** `last_seen_at` обновлять не чаще раза в 5–15 минут (условный `UPDATE ... WHERE last_seen_at < now - 300`), иначе каждый запрос пишет в единственную SQLite-базу.
 
-Индексы и ограничения: `UNIQUE(source_id, external_id)`, `UNIQUE(source_entry_id, external_id)`, `UNIQUE(title_id, source_id)` (миграция 0003), `UNIQUE(chapter_id, idx)`, частичный `UNIQUE(title_id) WHERE is_primary = 1`, `UNIQUE(title_id, alias_key)`, `UNIQUE(lang, source_id)`, `UNIQUE(lang, rank)`, `pages(chapter_id)`, `source_entries(title_id)`, `chapters(source_entry_id, chapter_key)`, `chapters(source_entry_id, volume, number_milli, ordinal_site)`, `chapters(source_entry_id, availability)`, `chapter_aliases(title_id, canonical_key)`, `chapter_texts` по PK, `source_priorities(lang, rank)`, `progress(user_id, updated_at)`, `jobs(status, run_after)`, `titles(name_lower)`, `titles(kind)`.
+Индексы и ограничения: `UNIQUE(source_id, external_id)`, `UNIQUE(source_entry_id, external_id)`, `UNIQUE(title_id, source_id)` (миграция 0003), `UNIQUE(chapter_id, idx)`, частичный `UNIQUE(title_id) WHERE is_primary = 1`, частичные `UNIQUE(title_id, alias_key) WHERE source_entry_id IS NULL` и `UNIQUE(title_id, source_entry_id, alias_key) WHERE source_entry_id IS NOT NULL`, `UNIQUE(title_id, source_entry_id, chapter_kind, anchor_chapter_id)` у `chapter_alias_ranges`, `UNIQUE(lang, source_id)`, `UNIQUE(lang, rank)`, `pages(chapter_id)`, `source_entries(title_id)`, `chapters(source_entry_id, chapter_key)`, `chapters(source_entry_id, volume, number_milli, ordinal_site)`, `chapters(source_entry_id, availability)`, `chapter_aliases(title_id, canonical_key)`, `chapter_texts` по PK, `source_priorities(lang, rank)`, `progress(user_id, updated_at)`, `jobs(status, run_after)`, `titles(name_lower)`, `titles(kind)`.
 
 Поиск: на первом этапе — `LIKE` по `name_lower` с экранированием `%` и `_`. `name_lower` — Unicode-lowercase копия `name`, которую заполняет приложение: SQLite `lower()` понимает только ASCII, и поиск по кириллице иначе не работал бы. FTS5 подключать позже, когда `alt_names` будут храниться склеенным текстом (JSON-массив FTS5 индексирует плохо), а пользовательский ввод будет экранироваться от синтаксиса `MATCH`.
 
@@ -249,7 +258,10 @@ jobs(id, kind, payload_json, status, attempts, run_after, last_error, created_at
 | `GET /api/titles/{title_id}/chapter-aliases` | список alias → canonical (admin) |
 | `POST /api/titles/{title_id}/chapter-aliases` | связать `alias_key` с `canonical_key`; цепочки и несуществующие ключи — 4xx (admin) |
 | `POST /api/titles/{title_id}/chapter-aliases/bulk` | пачка связей до 500 одной транзакцией; переносит прогресс и отметки на canonical; перепривязка готового alias — 409 (admin) |
-| `DELETE /api/titles/{title_id}/chapter-aliases/{alias_key}` | убрать связь ключей (admin) |
+| `DELETE /api/titles/{title_id}/chapter-aliases/{alias_key}` | убрать ручную связь ключей (admin) |
+| `GET/POST /api/titles/{title_id}/alias-ranges` | список связок-диапазонов и создание `{ source_entry_id, anchor_chapter_id, canonical_chapter_id }` (admin) |
+| `PUT/DELETE /api/titles/{title_id}/alias-ranges/{range_id}` | изменить или удалить связку; пересборка производных пар и прогресса (admin) |
+| `POST /api/titles/{title_id}/alias-ranges/apply` | применить пачку предложенных связок одной транзакцией (admin) |
 | `GET /api/admin/source-priorities?lang=` | список приоритетов источников для языка (admin) |
 | `PUT /api/admin/source-priorities` | заменить список `{ lang, source_codes: [...] }`; меньший индекс — выше приоритет (admin) |
 | `POST /api/admin/refresh/{title_id}` | обновить главы и статистику источников, пересчитать `preferred_source`, добрать отсутствующие обложки (admin) |
@@ -402,7 +414,7 @@ pub struct SearchPage {
 - `ordinal_site` — порядок в выдаче источника; сервер выставляет его по индексу элемента в `Vec<SourceChapter>`. Это последний ключ сортировки и запасной вариант, но не часть `chapter_key`: он меняется при перестановке глав.
 - `chapter_key`: с томом — `v{vol}:c{number_text}`, без тома — `c{number_text}`; для любого `chapter_kind != normal` — `{vol_seg}{kind}:c{number_text}`; без номера — `{vol_seg}{kind}:x:h{sha256(external_id)[..16]}`, где `{vol_seg}` — `v{vol}:` или пустая строка. Хеш стабилен между переимпортами и не зависит от отображаемого имени; безномерные главы не склеиваются между источниками и между группами с разными `external_id` — это осознанное ограничение.
 - `chapter_key` фиксируется при первом импорте: refresh обновляет всё, кроме ключа, даже если источник поправил номер или том. Расхождение пишется в `last_error`; пересчёт ключа — только миграцией, иначе прогресс теряется молча.
-- База 0/1, тома и дробные номера — особенность источника. Адаптер нормализует базу только если знает её из конфига; иначе сохраняет как есть. Автоматически склеивать «0» и «1» не пытаемся: ошибка хуже ручного связывания через `chapter_aliases` (alias → canonical для прогресса и группировки). `canonical_key` должен указывать на существующую главу тайтла; цепочки alias и `alias_key = canonical_key` отклоняются — иначе резолв зациклится.
+- База 0/1, тома и дробные номера — особенность источника. Адаптер нормализует базу только если знает её из конфига; иначе сохраняет как есть. Автоматически склеивать «0» и «1» не пытаемся: ошибка хуже ручной связки. Администратор создаёт **связку-диапазон** (`chapter_alias_ranges`) от якоря и выше, а точные пары `chapter_aliases` пересобираются из неё. Автоматический режим только предлагает диапазоны с устойчивым сдвигом тома; решение и каноническая сторона остаются за администратором. `canonical_key` ручной пары должен указывать на существующую главу тайтла; цепочки alias и `alias_key = canonical_key` отклоняются — иначе резолв зациклится.
 - Несколько групп перевода — отдельные строки с одинаковым `chapter_key`; уникальность по `external_id`. API отдаёт варианты, прогресс общий. Вариант для открытия выбирает селектор из 7.10: preferred source → доступность → приоритет → `is_primary` → `ordinal_site`; клиент может переключить вручную, если ему нужен другой вариант.
 - Залоченные главы импортируются с `is_locked = 1`; `content()` для них возвращает `source_locked` (403), страницы не запрашиваются.
 
@@ -516,9 +528,9 @@ impl SourceKind {
 
 **Если глава «сломалась» на страницах.** Бывает, что `content()` вернул список страниц, а картинки отдают `401/403/410` (глава стала платной, подпись протухла). Прокси после перезапроса списка помечает главу `locked`, обновляет статистику и отдаёт `source_locked`; клиент повторяет canonical `/content`, и селектор выбирает следующий источник. Это единственный случай, когда fallback запускается ошибкой страницы, а не ответом `content()`.
 
-**Прогресс и ссылки.** Читалка ходит по `title_id` + `chapter_key`; прогресс и `chapter_reads` — в SQLite по тому же ключу. Смена preferred source и fallback не меняют прогресс. При расхождении нумерации ключи связываются вручную через `chapter_aliases`.
+**Прогресс и ссылки.** Читалка ходит по `title_id` + `chapter_key`; прогресс и `chapter_reads` — в SQLite по тому же ключу. Смена preferred source и fallback не меняют прогресс. При расхождении нумерации администратор создаёт связку-диапазон; производные пары резолвят alias → canonical, прогресс переносится на canonical одним проходом.
 
-**Ограничение.** Автоматически склеиваются только одинаковые `chapter_key`; безномерные главы и разная база 0/1 требуют alias. Это осознанно: эвристика ошибётся незаметно, а alias виден администратору.
+**Ограничение.** Автоматически склеиваются только одинаковые `chapter_key`. Расхождение по тому/номеру исправляет связка-диапазон; безномерные главы, диапазоны вроде «10-11» и неоднозначные совпадения остаются ручными точными парами. Автоматический режим лишь предлагает связку и не применяет её без подтверждения: эвристика не должна менять прогресс незаметно.
 
 ### 7.11. Тесты и приёмка источника
 
@@ -537,7 +549,7 @@ impl SourceKind {
 - обход DMR/descrambling картинок, JS-челленджей и авторизации с капчей; такие источники отклоняются на `probe`;
 - архивы (CBZ/PDF) как формат главы: `content_kind` их не поддерживает, такие источники в первых фазах не подключаются;
 - ручной ввод `external_id` и источники без поиска: для импорта нужен поиск, иначе адаптер не подключается;
-- автоматическое склеивание глав и тайтлов по эвристикам; несопоставленные ключи глав связываются вручную через `chapter_aliases`, тайтлы — через админский API;
+- автоматическое применение эвристик без администратора; поиск расхождений только предлагает связки, а тайтлы по-прежнему связываются через админский API;
 - книги и текст — только после появления реального источника, в фазе 7.
 
 ## 8. Изображения и файлы
@@ -728,7 +740,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 
 ### Фаза 3 — каталог и библиотека без источников (выполнено)
 
-- [x] таблицы `sources`, `source_priorities`, `titles`, `source_entries`, `chapters`, `chapter_aliases`, `pages`, `chapter_texts`, `library`, `progress`, `chapter_reads` — сразу в итоговой форме из §5, чтобы фазы 4–6 не делали `ALTER`; `jobs` добавляется в фазе 7;
+- [x] таблицы `sources`, `source_priorities`, `titles`, `source_entries`, `chapters`, `chapter_aliases`, `chapter_alias_ranges`, `pages`, `chapter_texts`, `library`, `progress`, `chapter_reads` — сразу в итоговой форме из §5, чтобы фазы 4–6 не делали `ALTER`; `jobs` добавляется в фазе 7;
 - [x] `titles.origin_source_id`/`preferred_source_id`, статистика `source_entries`, `chapters.availability`/`page_count` создаются сразу — фаза 5 только заполняет их;
 - [x] `titles.kind` с CHECK; создание и правка тайтла принимают `kind`, смена `kind` при наличии привязанных источников — 409;
 - [x] админские эндпоинты создания/правки тайтла и загрузки обложки;
@@ -767,10 +779,10 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - [x] `source_entries`: связывание с каноническим тайтлом через `POST /api/titles/{id}/sources`, отвязка, `is_primary` (частичный уникальный индекс) как тай-брейкер; статистика полноты и доступности;
 - [x] `source_priorities` и админ-экран приоритетов по языку: для русского набора Remanga → RuMix, для другого языка — свой список;
 - [x] `titles.preferred_source_id`: максимальный `chapter_count`, ничья — приоритет, затем `is_primary`, затем `id`; источник с `available_count = 0` не выбирается, пока есть доступные; пересчёт при импорте, refresh, включении/выключении, смене приоритетов и отвязке; источники без `base_url`/с `config_error` не выбираются;
-- [x] `chapter_aliases`: если ключи одной главы у источников не совпали, админ связывает их; прогресс, группировка **и fallback** резолвят alias → canonical; цепочки запрещены, висячие alias чистятся при отвязке; автоматических эвристик нет;
+- [x] `chapter_aliases`: если ключи одной главы у источников не совпали, админ связывает их; прогресс, группировка **и fallback** резолвят alias → canonical; цепочки запрещены, висячие alias чистятся при отвязке; автоматика только предлагает связки-диапазоны, применяет их администратор (решение 0012);
 - [x] fallback по главе: preferred → доступные варианты по приоритету; `Locked`/`NotFound` помечают `availability` и `checked_at`, временные ошибки не меняют доступность; TTL `locked`/`missing`; для отображения выбирается доступный вариант, а не свежий locked preferred;
 - [x] объединённый список глав: группировка по каноническому ключу, выбранный вариант и варианты групп; `GET /api/titles/{title_id}/chapters/{chapter_key}/content` делает выбор и fallback; страница тайтла читает только БД;
-- [x] админ-экран `/admin` (источники, приоритеты) и панели на странице тайтла: поиск и привязка источника, отвязка, primary, refresh, добавление/удаление aliases, варианты глав.
+- [x] админ-экран `/admin` (источники, приоритеты) и панели на странице тайтла: поиск и привязка источника, отвязка, primary, refresh, связки-диапазоны, варианты глав.
 
 Дополнительно: `GET /api/titles/{id}` отдаёт `aliases` и `raw chapter_key` варианта; `POST /api/admin/refresh/{title_id}` обновляет главы всех источников с per-entry статусом; `SourceError::Redirect` различает платную главу RuMix и запланированную; `PUT /api/sources/{code}` без `base_url` сохраняет прежний origin; `config_error` персистится при сборке реестра; один `source_entry` на пару `(title_id, source_id)` (миграция 0003); effective enabled учитывает `base_url`/`config_error` в статистике и выбранном варианте; `is_locked` синхронизируется при mark/refresh. Тесты: `tests/multi_source.rs` (приоритеты и `*`, preferred, fallback, alias, группы, attach/detach/primary/refresh, duplicate, выключение) и `tests/live_rumix.rs` (`#[ignore]`, в том числе полный путь через роутер).
 
@@ -783,7 +795,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - [x] вкладки библиотеки: статусы `in_progress|planned|favorite|completed|dropped|on_hold|not_interested` («Любимое» — статус, миграция 0006), до трёх своих закладок-статусов, сортировка `updated|added|title|score` и счётчики;
 - [x] `library_tabs` (миграция 0004) и `custom_tab_id` в `library` (миграция 0007); CRUD закладок, одна своя закладка на тайтл;
 - [x] `GET /api/discover/search` по всем включённым источникам с per-source `errors` и `POST /api/discover/add` (любая сессия, отдельный rate limit): импорт выполняется один раз, затем добавляется запись библиотеки; обложки выдачи доступны с сессией;
-- [x] страница тайтла: вкладки «Главы» (первая), «О тайтле» и «Настройки» (только админ); недоступные главы скрыты; поиск, сортировка по тому/номеру, дата и источник; глаз — кнопка отметки прочитанного, с выбором «только эта» или «эта и все предыдущие»; кнопка «Читать»/«Продолжить»/«Прочитано» зависит от прогресса; статус (включая «Любимое» и свои закладки) и оценка; в «Настройках» — порядок источников, alias по каноническим главам, auto-match по номеру и ручная связка; том/номер группы берутся у canonical-главы;
+- [x] страница тайтла: вкладки «Главы» (первая), «О тайтле» и «Настройки» (только админ); недоступные главы скрыты; поиск, сортировка по тому/номеру, дата и источник; глаз — кнопка отметки прочитанного, с выбором «только эта» или «эта и все предыдущие»; кнопка «Читать»/«Продолжить»/«Прочитано» зависит от прогресса; статус (включая «Любимое» и свои закладки) и оценка; в «Настройках» — связки-диапазоны, редактор с выбором канонической стороны, поиск расхождений и ручное создание связки; том/номер группы берутся у canonical-главы;
 - [x] `PUT /api/progress` пишет `chapter_reads`; `GET /api/titles/{id}` отдаёт `read_keys`, `published_at`, `source_enabled`; карточка библиотеки показывает `read_count/chapter_count`;
 - [x] тесты `library_tabs.rs` и `discover.rs`; `lint`, `build`, `test`, `fmt`, `clippy` зелёные.
 
@@ -829,7 +841,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 | Источники блокируют VPS или Cloudflare | адаптеры с нужными заголовками, кэш, фоновые задачи, выбор локации сервера; не обещать обход JS-челленджей, выбирать источники с API/статическим HTML |
 | Парсеры ломаются после редизайна | тесты на фикстурах, изоляция адаптеров, быстрый фикс одного модуля |
 | Абстракция подстроена под первый источник | дескриптор и capability с первого дня, второй адаптер в фазе 5 намеренно другой формы, `contract_suite` на каждом адаптере |
-| Нумерация глав не сравнима между источниками | `number_text` сохраняется как есть, `number_milli` только для сортировки, ключ без номера — стабильный хеш; несопоставленные ключи связываются вручную через `chapter_aliases`, иначе прогресс у каждого свой |
+| Нумерация глав не сравнима между источниками | `number_text` сохраняется как есть, `number_milli` только для сортировки, ключ без номера — стабильный хеш; несопоставленные ключи исправляет связка-диапазон (`chapter_alias_ranges`), иначе прогресс у каждого свой |
 | Источник требует DMR/descrambling или JS-челлендж | `probe` до написания адаптера; такие источники отклоняются, а не обходятся |
 | Источник выключен или удалён, а записи в библиотеке остались | `source_disabled` (503) вместо 500; селектор пропускает выключенные и делает fallback, `preferred_source` пересчитывается |
 | Preferred source выбран по числу глав, но часть из них locked | fallback по каждой главе; `available_count`/`locked_count` видны в метаданных; при необходимости администратор меняет приоритеты или выключает источник |
@@ -857,7 +869,7 @@ CI (GitHub Actions): `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm build`
 - все `/api`, кроме health и auth, требуют сессию; тест «без cookie → 401» и проверка `Origin` зелёные;
 - один источник пройден от поиска до чтения главы;
 - библиотека — корневой экран без сайдбара и каталога; тайтл добавляется ленивым импортом из поиска по источникам; в библиотеке работают статусы (включая «Любимое» и свои закладки) и отметка прочитанного;
-- второй источник другой формы (иная нумерация или API вместо HTML) связывается с тем же тайтлом без правок контракта, БД и API; прогресс переживает переключение при совпадении ключей или после ручного `chapter_aliases`;
+- второй источник другой формы (иная нумерация или API вместо HTML) связывается с тем же тайтлом без правок контракта, БД и API; прогресс переживает переключение при совпадении ключей или после связки-диапазона;
 - селектор источников проверен: равное число глав → приоритетный источник, больше глав → более полный, locked-глава → fallback с пометкой доступности; страница тайтла не делает запросов к источникам;
 - ридер и плеер сохраняют прогресс;
 - тесты адаптеров, авторизации и библиотеки; `fmt` и `clippy` чистые;

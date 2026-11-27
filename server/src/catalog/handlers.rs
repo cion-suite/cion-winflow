@@ -4,11 +4,12 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::session::CurrentUser,
     catalog::{
+        alias_ranges::{self, AliasRangeDto, AliasRangeListResponse, RangeBatchInput, RangeInput},
         links::{
             self, AliasBatchInput, AliasDto, AliasInput, AliasListResponse, AttachInput,
             PrimaryInput,
@@ -26,6 +27,12 @@ pub struct TitlePayload {
     pub title: TitleDto,
 }
 
+/// Язык просмотра: какие переводы показывать на странице тайтла.
+#[derive(Debug, Deserialize)]
+pub struct TitleQuery {
+    pub lang: Option<String>,
+}
+
 pub async fn list_catalog(
     State(state): State<AppState>,
     ApiQuery(params): ApiQuery<CatalogParams>,
@@ -38,8 +45,10 @@ pub async fn get_title(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     ApiPath(title_id): ApiPath<i64>,
+    ApiQuery(query): ApiQuery<TitleQuery>,
 ) -> Result<Json<TitleResponse>, AppError> {
-    let response = service::get_title(&state.pool, user.id, title_id).await?;
+    let view_lang = service::normalize_lang(query.lang.as_deref());
+    let response = service::get_title(&state, user.id, title_id, view_lang.as_deref()).await?;
     Ok(Json(response))
 }
 
@@ -134,4 +143,59 @@ pub async fn delete_alias(
     user.require_admin()?;
     links::delete_alias(&state, title_id, &alias_key).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_alias_ranges(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(title_id): ApiPath<i64>,
+) -> Result<Json<AliasRangeListResponse>, AppError> {
+    user.require_admin()?;
+    Ok(Json(alias_ranges::list_ranges(&state, title_id).await?))
+}
+
+pub async fn create_alias_range(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(title_id): ApiPath<i64>,
+    ApiJson(input): ApiJson<RangeInput>,
+) -> Result<Json<AliasRangeDto>, AppError> {
+    user.require_admin()?;
+    Ok(Json(
+        alias_ranges::create_range(&state, title_id, input).await?,
+    ))
+}
+
+pub async fn update_alias_range(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath((title_id, range_id)): ApiPath<(i64, i64)>,
+    ApiJson(input): ApiJson<RangeInput>,
+) -> Result<Json<AliasRangeDto>, AppError> {
+    user.require_admin()?;
+    Ok(Json(
+        alias_ranges::update_range(&state, title_id, range_id, input).await?,
+    ))
+}
+
+pub async fn delete_alias_range(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath((title_id, range_id)): ApiPath<(i64, i64)>,
+) -> Result<StatusCode, AppError> {
+    user.require_admin()?;
+    alias_ranges::delete_range(&state, title_id, range_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn apply_alias_ranges(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ApiPath(title_id): ApiPath<i64>,
+    ApiJson(input): ApiJson<RangeBatchInput>,
+) -> Result<Json<AliasRangeListResponse>, AppError> {
+    user.require_admin()?;
+    Ok(Json(
+        alias_ranges::apply_ranges(&state, title_id, input).await?,
+    ))
 }

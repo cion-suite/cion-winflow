@@ -111,6 +111,9 @@ pub async fn detach(state: &AppState, title_id: i64, entry_id: i64) -> Result<()
     tx.commit().await?;
 
     selection::recompute_preferred(&state.pool, title_id).await?;
+    // Связки диапазонов привязаны к source_entry: после отвязки
+    // производные пары нужно пересобрать из оставшихся источников.
+    crate::catalog::alias_ranges::materialize_title(&state.pool, title_id).await?;
     Ok(())
 }
 
@@ -160,9 +163,11 @@ pub async fn list_aliases(pool: &SqlitePool, title_id: i64) -> Result<AliasListR
 
 /// Список alias без проверки существования тайтла: вызывающий уже его знает.
 pub async fn load_aliases(pool: &SqlitePool, title_id: i64) -> Result<Vec<AliasDto>, AppError> {
+    // Производные пары диапазонов наружу не отдаются: UI показывает
+    // сами связки, а не десятки материализованных пар.
     let aliases = sqlx::query_as::<_, (String, String)>(
         "SELECT alias_key, canonical_key FROM chapter_aliases \
-         WHERE title_id = ? ORDER BY alias_key",
+         WHERE title_id = ? AND source_entry_id IS NULL ORDER BY alias_key",
     )
     .bind(title_id)
     .fetch_all(pool)
@@ -273,7 +278,8 @@ async fn apply_aliases(
     // на старом ключе, который больше не является ключом этой главы.
     // Требуем явное удаление: так состояние чтения не теряется незаметно.
     let existing: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
-        "SELECT alias_key, canonical_key FROM chapter_aliases WHERE title_id = ?",
+        "SELECT alias_key, canonical_key FROM chapter_aliases \
+         WHERE title_id = ? AND source_entry_id IS NULL",
     )
     .bind(title_id)
     .fetch_all(pool)
@@ -295,9 +301,11 @@ async fn apply_aliases(
     let now = now_unix();
     for (alias_key, canonical_key) in &pairs {
         sqlx::query(
-            "INSERT INTO chapter_aliases (title_id, canonical_key, alias_key, created_at) \
-             VALUES (?, ?, ?, ?) \
-             ON CONFLICT (title_id, alias_key) DO UPDATE SET canonical_key = excluded.canonical_key",
+            "INSERT INTO chapter_aliases \
+                 (title_id, source_entry_id, canonical_key, alias_key, origin, created_at) \
+             VALUES (?, NULL, ?, ?, 'manual', ?) \
+             ON CONFLICT (title_id, alias_key) WHERE source_entry_id IS NULL \
+             DO UPDATE SET canonical_key = excluded.canonical_key, origin = 'manual'",
         )
         .bind(title_id)
         .bind(canonical_key)
@@ -398,11 +406,16 @@ pub async fn delete_alias(
     ensure_title(&state.pool, title_id).await?;
     let alias_key = normalize_key(alias_key, "alias_key")?;
 
-    let result = sqlx::query("DELETE FROM chapter_aliases WHERE title_id = ? AND alias_key = ?")
-        .bind(title_id)
-        .bind(&alias_key)
-        .execute(&state.pool)
-        .await?;
+    // Удаляем только ручную пару: производные пары принадлежат связкам
+    // и удаляются вместе с ними.
+    let result = sqlx::query(
+        "DELETE FROM chapter_aliases \
+         WHERE title_id = ? AND alias_key = ? AND source_entry_id IS NULL",
+    )
+    .bind(title_id)
+    .bind(&alias_key)
+    .execute(&state.pool)
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::not_found(
@@ -413,7 +426,7 @@ pub async fn delete_alias(
     Ok(())
 }
 
-async fn ensure_title(pool: &SqlitePool, title_id: i64) -> Result<(), AppError> {
+pub(crate) async fn ensure_title(pool: &SqlitePool, title_id: i64) -> Result<(), AppError> {
     let exists = sqlx::query_scalar::<_, i64>("SELECT 1 FROM titles WHERE id = ?")
         .bind(title_id)
         .fetch_optional(pool)

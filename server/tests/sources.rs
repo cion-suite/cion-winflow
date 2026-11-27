@@ -328,6 +328,53 @@ async fn search_import_and_title_reads_only_database() {
 }
 
 #[tokio::test]
+async fn view_language_filters_known_language_and_ignores_absent_one() {
+    let _guard = lock().await;
+    let (base_url, _server) = start_image_server().await;
+    let app = TestApp::new().await;
+    app.create_admin().await;
+    let admin = app.login_admin().await;
+    configure_fixture(&app, &admin, &base_url).await;
+    let imported = import_fixture(&app, &admin).await;
+    let title_id = imported["title_id"].as_i64().expect("title id");
+
+    let plain = get_json(&app, &format!("/api/titles/{title_id}"), &admin).await;
+    let ru = get_json(&app, &format!("/api/titles/{title_id}?lang=ru"), &admin).await;
+    let en = get_json(&app, &format!("/api/titles/{title_id}?lang=en"), &admin).await;
+
+    let plain_count = plain["chapters"].as_array().expect("chapters").len();
+    assert!(plain_count > 0);
+    assert!(plain["view_lang"].is_null());
+    assert_eq!(ru["view_lang"], "ru");
+    assert_eq!(
+        ru["chapters"].as_array().expect("ru chapters").len(),
+        plain_count
+    );
+    // Языка en у тайтла нет: параметр игнорируется, а не опустошает список.
+    assert!(en["view_lang"].is_null());
+    assert_eq!(
+        en["chapters"].as_array().expect("en chapters").len(),
+        plain_count
+    );
+    assert_eq!(en["sources"][0]["lang"], "ru");
+
+    let ru_content = get_json(
+        &app,
+        &format!("/api/titles/{title_id}/chapters/c1/content?lang=ru"),
+        &admin,
+    )
+    .await;
+    assert_eq!(ru_content["chapter_key"], "c1");
+    let en_content = get_json(
+        &app,
+        &format!("/api/titles/{title_id}/chapters/c1/content?lang=en"),
+        &admin,
+    )
+    .await;
+    assert_eq!(en_content["chapter_key"], "c1");
+}
+
+#[tokio::test]
 async fn content_fallback_progress_and_typed_errors() {
     let _guard = lock().await;
     let (base_url, _server) = start_image_server().await;
@@ -631,6 +678,7 @@ async fn discover_add_links_same_name_to_existing_title() {
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0]["code"], "fixture");
     assert_eq!(sources[0]["chapter_count"], 3);
+    assert_eq!(sources[0]["lang"], "ru");
 }
 
 #[tokio::test]

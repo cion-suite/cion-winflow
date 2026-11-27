@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 import {
@@ -63,14 +63,23 @@ function pageAt(offsets: number[], scrollTop: number): number {
  */
 export function ReaderPage() {
   const { titleId: rawTitleId, chapterKey = null } = useParams();
+  const [searchParams] = useSearchParams();
+  const titleLangs = useSetting("titleLangs");
   const parsed = Number(rawTitleId);
   const titleId = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  // Язык приходит из ссылки на главу, а если её открыли напрямую — из
+  // последнего выбора на странице тайтла в этом браузере.
+  const rawLang =
+    searchParams.get("lang") ??
+    (titleId === null ? null : (titleLangs[String(titleId)] ?? null));
+  const lang = rawLang?.trim().toLowerCase() || null;
 
   return (
     <ReaderView
-      key={`${titleId ?? "invalid"}:${chapterKey ?? ""}`}
+      key={`${titleId ?? "invalid"}:${chapterKey ?? ""}:${lang ?? ""}`}
       titleId={titleId}
       chapterKey={chapterKey}
+      lang={lang}
     />
   );
 }
@@ -78,15 +87,17 @@ export function ReaderPage() {
 function ReaderView({
   titleId,
   chapterKey,
+  lang,
 }: {
   titleId: number | null;
   chapterKey: string | null;
+  lang: string | null;
 }) {
   const t = useT();
   const widthSetting = useSetting("readerWidth");
 
-  const titleQuery = useTitleQuery(titleId);
-  const contentQuery = useChapterContentQuery(titleId, chapterKey);
+  const titleQuery = useTitleQuery(titleId, lang);
+  const contentQuery = useChapterContentQuery(titleId, chapterKey, lang);
   const progressQuery = useProgressQuery(titleId);
   const save = useSaveProgressMutation(titleId ?? 0);
   const upsert = useUpsertLibraryMutation(titleId ?? 0);
@@ -497,6 +508,7 @@ function ReaderView({
     <div className="fixed inset-0 z-40 overflow-hidden bg-background text-foreground">
       <ReaderHeader
         titleId={titleId}
+        lang={lang}
         titleName={titleQuery.data?.title.name ?? ""}
         chapterLabel={chapterLabel}
         previousChapterKey={previousChapter?.chapter_key ?? null}
@@ -537,7 +549,7 @@ function ReaderView({
                 {t("retry")}
               </Button>
               <Link
-                to={titlePath(titleId)}
+                to={titlePath(titleId, lang)}
                 className={buttonVariants({ variant: "ghost" })}
               >
                 {t("reader.backToTitle")}
@@ -550,7 +562,7 @@ function ReaderView({
           <div className="mx-auto flex max-w-md flex-col items-start gap-3 p-6 pt-20">
             <p className="text-sm text-muted-foreground">{t("reader.unsupported")}</p>
             <Link
-              to={titlePath(titleId)}
+              to={titlePath(titleId, lang)}
               className={buttonVariants({ variant: "outline" })}
             >
               {t("reader.backToTitle")}
@@ -605,7 +617,7 @@ function ReaderView({
             <div className="flex items-center justify-between gap-2 px-4 pt-4">
               {previousChapter ? (
                 <Link
-                  to={readerPath(titleId, previousChapter.chapter_key)}
+                  to={readerPath(titleId, previousChapter.chapter_key, lang)}
                   className={buttonVariants({ variant: "outline" })}
                 >
                   <ChevronLeftIcon aria-hidden />
@@ -616,7 +628,7 @@ function ReaderView({
               )}
               {nextChapter ? (
                 <Link
-                  to={readerPath(titleId, nextChapter.chapter_key)}
+                  to={readerPath(titleId, nextChapter.chapter_key, lang)}
                   className={buttonVariants({ variant: "outline" })}
                 >
                   {t("reader.nextChapter")}

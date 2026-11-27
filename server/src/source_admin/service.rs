@@ -482,6 +482,11 @@ pub async fn import(
 
     let stats = selection::recompute_stats(&state.pool, entry_id).await?;
     selection::recompute_preferred(&state.pool, title_id).await?;
+    // Новые главы могли попасть в существующую связку — пересобираем пары.
+    if let Err(error) = crate::catalog::alias_ranges::materialize_title(&state.pool, title_id).await
+    {
+        tracing::warn!(title_id, %error, "cannot materialize alias ranges after import");
+    }
 
     Ok(ImportResponse {
         title_id,
@@ -1110,6 +1115,13 @@ async fn refresh_entries(
                 results.push(failed(entry_id, code, message));
             }
         }
+    }
+
+    // Один пересчёт на тайтл после обхода всех источников: иначе порядок
+    // entry решал бы, какая сторона связки уже импортирована.
+    if let Err(error) = crate::catalog::alias_ranges::materialize_title(&state.pool, title_id).await
+    {
+        tracing::warn!(title_id, %error, "cannot materialize alias ranges after refresh");
     }
 
     Ok((results, metadata))

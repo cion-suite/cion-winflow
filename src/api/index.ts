@@ -1,4 +1,5 @@
 import { adminApi } from "./admin";
+import { aliasRangesApi } from "./aliasRanges";
 import { authApi } from "./auth";
 import { catalogApi } from "./catalog";
 import { chaptersApi } from "./chapters";
@@ -9,6 +10,7 @@ import { progressApi } from "./progress";
 // По мере появления областей API их функции собираются здесь.
 export const api = {
   admin: adminApi,
+  aliasRanges: aliasRangesApi,
   auth: authApi,
   catalog: catalogApi,
   chapters: chaptersApi,
@@ -56,6 +58,25 @@ export type {
   TitleSyncResponse,
   UploadCoverInput,
 } from "./catalog";
+export {
+  aliasRangesApi,
+  useAliasRangesQuery,
+  useApplyAliasRangesMutation,
+  useCreateAliasRangeMutation,
+  useDeleteAliasRangeMutation,
+  useUpdateAliasRangeMutation,
+} from "./aliasRanges";
+export type {
+  AliasManualLink,
+  AliasRange,
+  AliasRangeAnchor,
+  AliasRangeBatchInput,
+  AliasRangeCoverage,
+  AliasRangeInput,
+  AliasRangeListResponse,
+  AliasRangeMappingMode,
+  AliasRangeStatus,
+} from "./aliasRanges";
 export {
   useAddAliasesMutation,
   useAddAliasMutation,

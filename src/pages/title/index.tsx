@@ -10,7 +10,7 @@ import {
   PlusIcon,
   SearchIcon,
 } from "lucide-react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 
 import {
   formValuesToTitleInput,
@@ -40,6 +40,8 @@ import {
 import { isAvailableChapter, sortChapters } from "@/lib/chapters";
 import { useLocale, useT } from "@/lib/i18n";
 import { readerPath } from "@/lib/routes";
+import { settings, useSetting } from "@/lib/settings";
+import { languageLabel, resolveTitleLang, sourceLanguages } from "@/lib/titleLang";
 import { cn } from "@/lib/utils";
 import { CoverImage } from "@/ui/CoverImage";
 import { SourceIcon } from "@/ui/SourceIcon";
@@ -233,9 +235,6 @@ function TitleSources({
                   })}
                 </ItemDescription>
               </ItemContent>
-              {source.source_id === preferredSourceId && (
-                <Badge>{t("title.preferredSource")}</Badge>
-              )}
               {!source.enabled && (
                 <Badge variant="outline">{t("title.sourceDisabled")}</Badge>
               )}
@@ -250,6 +249,7 @@ function TitleSources({
 function ChapterRow({
   titleId,
   chapter,
+  lang,
   read,
   needsChoice,
   pending,
@@ -259,6 +259,8 @@ function ChapterRow({
 }: {
   titleId: number;
   chapter: TitleChapter;
+  /** Язык просмотра: читалка должна открыть тот же перевод. */
+  lang: string | null;
   read: boolean;
   /** Есть непрочитанные предыдущие главы: глаз предлагает «эта и все предыдущие». */
   needsChoice: boolean;
@@ -330,7 +332,7 @@ function ChapterRow({
       )}
 
       <Link
-        to={readerPath(titleId, chapter.chapter_key)}
+        to={readerPath(titleId, chapter.chapter_key, lang)}
         className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-0.5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {chapter.volume !== null && (
@@ -366,7 +368,14 @@ export function TitlePage() {
   const parsed = Number(id);
   const titleId = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 
-  const query = useTitleQuery(titleId);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const titleLangs = useSetting("titleLangs");
+  const remembered = titleId === null ? null : (titleLangs[String(titleId)] ?? null);
+  // Язык из URL важнее сохранённого; регистр не значим.
+  const requestedLang =
+    (searchParams.get("lang") ?? remembered)?.trim().toLowerCase() || null;
+
+  const query = useTitleQuery(titleId, requestedLang);
   const progressQuery = useProgressQuery(titleId);
   const tabsQuery = useLibraryTabsQuery();
   const update = useUpdateTitleMutation(titleId ?? 0);
@@ -384,6 +393,60 @@ export function TitlePage() {
     sync.mutate();
   }, [titleId, sync]);
 
+  const languages = useMemo(
+    () => sourceLanguages(query.data?.sources),
+    [query.data?.sources],
+  );
+  const effectiveLang = useMemo(
+    () =>
+      resolveTitleLang({
+        sources: query.data?.sources,
+        requested: requestedLang,
+        remembered,
+        titleLang: query.data?.title.lang,
+      }),
+    [query.data?.sources, query.data?.title, remembered, requestedLang],
+  );
+
+  // Язык из URL или памяти должен существовать: пропал (источник выключили,
+  // удалили) — убираем его, иначе сервер продолжит фильтровать главы, а
+  // переключателя для возврата не будет.
+  useEffect(() => {
+    if (titleId === null || query.data === undefined) return;
+
+    if (requestedLang !== null && !languages.includes(requestedLang)) {
+      const params = new URLSearchParams(searchParams);
+      params.delete("lang");
+      setSearchParams(params, { replace: true });
+      const nextLangs = { ...titleLangs };
+      delete nextLangs[String(titleId)];
+      void settings.set("titleLangs", nextLangs);
+      return;
+    }
+
+    if (effectiveLang === null) return;
+    if (remembered !== effectiveLang) {
+      void settings.set("titleLangs", {
+        ...titleLangs,
+        [String(titleId)]: effectiveLang,
+      });
+    }
+    if (requestedLang === effectiveLang) return;
+    const params = new URLSearchParams(searchParams);
+    params.set("lang", effectiveLang);
+    setSearchParams(params, { replace: true });
+  }, [
+    effectiveLang,
+    languages,
+    query.data,
+    remembered,
+    requestedLang,
+    searchParams,
+    setSearchParams,
+    titleId,
+    titleLangs,
+  ]);
+
   const [tab, setTab] = useState("chapters");
   const [editing, setEditing] = useState(false);
   const [coversOpen, setCoversOpen] = useState(false);
@@ -396,8 +459,8 @@ export function TitlePage() {
   const mutationError = useErrorText(upsert.error ?? remove.error);
   const mutationPending = upsert.isPending || remove.isPending;
   const isAdmin = user?.role === "admin";
-  // В «Настройках» порядок источников уже показан слева, а alias-строкам
-  // нужна ширина: правую колонку с рейтингом и источниками убираем.
+  // На «Настройках» правая колонка остаётся пустой, но занимает место:
+  // так ширина панели связок совпадает с главами и «О тайтле».
   const settingsOpen = tab === "settings" && isAdmin;
 
   const availableChapters = useMemo(
@@ -522,7 +585,15 @@ export function TitlePage() {
     );
   }
 
-  const { title, library, sources, aliases } = query.data;
+  const { title, library, sources } = query.data;
+  // Язык, которым сервер реально отфильтровал эти данные: во время смены
+  // языка оно ещё старое, и ссылки не должны обещать новый перевод.
+  const dataLang = query.data.view_lang ?? null;
+  // Карточка «Источники» показывает только выбранный перевод.
+  const viewSources =
+    dataLang === null
+      ? sources
+      : sources.filter((source) => source.lang === dataLang);
   const statusItems = [
     ...LIBRARY_STATUSES.map((status) => ({
       value: status as string,
@@ -569,6 +640,17 @@ export function TitlePage() {
     );
   }
 
+  function selectLang(next: string): void {
+    if (titleId === null || next === requestedLang) return;
+    void settings.set("titleLangs", {
+      ...titleLangs,
+      [String(titleId)]: next,
+    });
+    const params = new URLSearchParams(searchParams);
+    params.set("lang", next);
+    setSearchParams(params, { replace: true });
+  }
+
   function handleScore(score: number | null): void {
     upsert.mutate({ ...currentInput(), score });
   }
@@ -604,12 +686,7 @@ export function TitlePage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
-      <div
-        className={cn(
-          "grid gap-8 md:grid-cols-[260px_minmax(0,1fr)]",
-          !settingsOpen && "lg:grid-cols-[260px_minmax(0,1fr)_240px]",
-        )}
-      >
+      <div className="grid gap-8 md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)_240px]">
         <aside className="flex flex-col gap-3 md:sticky md:top-6 md:self-start">
           <CoverImage
             src={title.has_cover ? titleCoverUrl(title, "high") : null}
@@ -620,7 +697,7 @@ export function TitlePage() {
 
           {readTarget && !finished ? (
             <Link
-              to={readerPath(titleId, readTarget)}
+              to={readerPath(titleId, readTarget, dataLang)}
               className={cn(buttonVariants(), "w-full")}
             >
               <BookOpenIcon data-icon="inline-start" />
@@ -730,9 +807,21 @@ export function TitlePage() {
             <div className="flex min-w-0 flex-col gap-1">
               <p className="text-sm text-muted-foreground">{meta}</p>
               <h1 className="text-2xl font-semibold tracking-tight">{title.name}</h1>
-              <p className="text-sm text-muted-foreground">
-                {t("title.chapterCount", { count: availableChapters.length })}
-              </p>
+              {languages.length > 1 && effectiveLang !== null && (
+                <Tabs value={effectiveLang} onValueChange={selectLang}>
+                  <TabsList variant="default" className="mt-1 h-7">
+                    {languages.map((lang) => (
+                      <TabsTrigger
+                        key={lang}
+                        value={lang}
+                        className="flex-none px-2.5 text-xs"
+                      >
+                        {languageLabel(lang, t)}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              )}
             </div>
 
             <div className="shrink-0 lg:hidden">
@@ -820,6 +909,7 @@ export function TitlePage() {
                         key={chapter.chapter_key}
                         titleId={titleId}
                         chapter={chapter}
+                        lang={dataLang}
                         read={readKeys.has(chapter.chapter_key)}
                         needsChoice={
                           !readKeys.has(chapter.chapter_key) &&
@@ -915,16 +1005,16 @@ export function TitlePage() {
                   titleId={titleId}
                   sources={sources}
                   chapters={query.data.chapters}
-                  aliases={aliases}
                   preferredSourceId={title.preferred_source_id}
+                  lang={dataLang}
                 />
               </TabsContent>
             )}
           </Tabs>
         </div>
 
-        {!settingsOpen && (
-          <aside className="md:col-span-2 lg:col-span-1 lg:sticky lg:top-6 lg:self-start">
+        <aside className="md:col-span-2 lg:col-span-1 lg:sticky lg:top-6 lg:self-start">
+          {!settingsOpen && (
             <div className="flex flex-col gap-6">
               <div className="hidden lg:flex lg:justify-end">
                 <RatingBlock
@@ -935,12 +1025,12 @@ export function TitlePage() {
                 />
               </div>
               <TitleSources
-                sources={sources}
+                sources={viewSources}
                 preferredSourceId={title.preferred_source_id}
               />
             </div>
-          </aside>
-        )}
+          )}
+        </aside>
       </div>
 
       {isAdmin && (
