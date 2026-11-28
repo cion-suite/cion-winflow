@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "statusCode": 200,
+  "data": [
+    {
+      "id": 4153,
+      "dir": "fixture-dir",
+      "name": "Фикстура",
+      "meta": {
+        "en": "Fixture Alt",
+        "img": "/media/titles/fixture/cover.jpg",
+        "type": "Маньхуа",
+        "votes": "1.5 M",
+        "genres": "Экшен, Фэнтези",
+        "rating": 9.4,
+        "categories": "Веб, В цвете"
+      },
+      "ignore": false,
+      "license": true
+    }
+  ]
+}

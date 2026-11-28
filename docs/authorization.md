@@ -73,13 +73,17 @@
 
 ### 1.4. UI и тесты
 
-- В `/settings` → «Источники»: одна строка на источник — иконка, название,
+- В `/settings` → «Авторизации»: одна строка на источник — иконка, название,
   цветной статус (зелёный пульс — проверено недавно, жёлтый — не проверено
   или проверено давно, красный — `auth_invalid`, серый — не подключено).
   Справа: иконка «Аккаунт» открывает поповер с формой логин/пароль
   (`type="password"`, «Войти»), кнопка «Проверить» и «Отключить». Ручные поля
   Bearer/Cookie из UI убраны. После мутаций инвалидируются
   `source-credentials`, `title`, `library`, `chapter-content`.
+- Строка ExManga: вход по email/паролю (`POST /api/auth/login` → JWT),
+  проверка — `GET /api/auth`; контент и картинки — только с этой учёткой.
+  ExManga не заменяет Remanga: адаптер не делает запросов к её серверу
+  (см. решение [0023](decisions/0023-exmanga-source.md)).
 - Ошибки переведены: `source_login_failed`, `source_login_2fa_required`,
   `credentials_unavailable`, `source_credentials_invalid`.
 - Тесты: `server/tests/source_credentials.rs` (шифротекст, изоляция, ключ),
@@ -384,6 +388,9 @@ curl -sS -D - -o /dev/null 'https://api.remanga.org/api/v2/titles/?count=1' | he
 - ReManga iOS: `github.com/XITRIX/ReManga-iOS`
 - remanga.py: `github.com/vraestoren/remanga.py`
 - API reference: `github.com/TheDivineLabs/remanga-api`
+- ExManga: `exmanga.org/api` — `/api/auth/login` (email/пароль → JWT),
+  `/api/manga`, `/api/manga/history`, `/api/chapter`; проверено по
+  расширению `exmanga_4.3.0` и живому API.
 - Живые эндпоинты: `api.remanga.org/api/users/login/`,
   `/api/v2/users/login/`, `/api/v2/users/token/{upgrade,refresh}/`,
   `/api/v2/users/sessions/`, `/oauth/authorize`

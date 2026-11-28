@@ -13,6 +13,7 @@ use crate::sources::{
     config::validate_outbound_url,
     descriptor::SourceDescriptor,
     error::SourceError,
+    exmanga::{self, ExmangaConfig},
     http::AdapterCtx,
     mangamir::{self, MangamirConfig},
     remanga::{self, RemangaConfig},
@@ -183,7 +184,7 @@ async fn seed_descriptors(pool: &SqlitePool) -> Result<(), AppError> {
     }
 
     // Приоритет по умолчанию — порядок дескрипторов: Remanga → RuMix →
-    // Mangamir. Существующий список администратора не перетираем.
+    // Mangamir → ExManga. Существующий список администратора не перетираем.
     for (lang, codes) in langs {
         let ranked: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM source_priorities WHERE lang = ?")
@@ -274,6 +275,12 @@ fn build_adapter(
                 .map(SourceKind::Remanga)
                 .map_err(|error| error.to_string())
         }
+        exmanga::CODE => {
+            let config = ExmangaConfig::from_value(config)?;
+            exmanga::Exmanga::new(ctx, config)
+                .map(SourceKind::Exmanga)
+                .map_err(|error| error.to_string())
+        }
         rumix::CODE => {
             let config = RumixConfig::from_value(config)?;
             rumix::Rumix::new(ctx, config)
@@ -299,6 +306,7 @@ pub fn descriptors() -> Vec<&'static SourceDescriptor> {
         &remanga::DESCRIPTOR,
         &rumix::DESCRIPTOR,
         &mangamir::DESCRIPTOR,
+        &exmanga::DESCRIPTOR,
     ];
     #[cfg(debug_assertions)]
     list.push(&crate::sources::fixture::DESCRIPTOR);

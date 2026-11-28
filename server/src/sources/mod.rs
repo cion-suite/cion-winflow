@@ -6,6 +6,7 @@ pub mod config;
 pub mod descriptor;
 pub mod dto;
 pub mod error;
+pub mod exmanga;
 pub mod http;
 pub mod keys;
 pub mod mangamir;
@@ -32,6 +33,7 @@ use reqwest::Url;
 use secrecy::SecretString;
 
 use crate::source_auth::SourceAuth;
+use crate::sources::exmanga::Exmanga;
 #[cfg(debug_assertions)]
 use crate::sources::fixture::Fixture;
 use crate::sources::mangamir::Mangamir;
@@ -43,6 +45,7 @@ use crate::sources::rumix::Rumix;
 #[derive(Clone)]
 pub enum SourceKind {
     Remanga(Remanga),
+    Exmanga(Exmanga),
     Rumix(Rumix),
     Mangamir(Mangamir),
     #[cfg(debug_assertions)]
@@ -53,6 +56,7 @@ impl SourceKind {
     pub fn descriptor(&self) -> &'static SourceDescriptor {
         match self {
             Self::Remanga(_) => &remanga::DESCRIPTOR,
+            Self::Exmanga(_) => &exmanga::DESCRIPTOR,
             Self::Rumix(_) => &rumix::DESCRIPTOR,
             Self::Mangamir(_) => &mangamir::DESCRIPTOR,
             #[cfg(debug_assertions)]
@@ -67,6 +71,7 @@ impl SourceKind {
     ) -> Result<SearchPage, SourceError> {
         match self {
             Self::Remanga(source) => source.search(request, auth).await,
+            Self::Exmanga(source) => source.search(request, auth).await,
             Self::Rumix(source) => source.search(request, auth).await,
             Self::Mangamir(source) => source.search(request, auth).await,
             #[cfg(debug_assertions)]
@@ -81,6 +86,7 @@ impl SourceKind {
     ) -> Result<SourceTitle, SourceError> {
         match self {
             Self::Remanga(source) => source.title(external_id, auth).await,
+            Self::Exmanga(source) => source.title(external_id, auth).await,
             Self::Rumix(source) => source.title(external_id, auth).await,
             Self::Mangamir(source) => source.title(external_id, auth).await,
             #[cfg(debug_assertions)]
@@ -95,6 +101,7 @@ impl SourceKind {
     ) -> Result<Vec<SourceChapter>, SourceError> {
         match self {
             Self::Remanga(source) => source.chapters(external_id, auth).await,
+            Self::Exmanga(source) => source.chapters(external_id, auth).await,
             Self::Rumix(source) => source.chapters(external_id, auth).await,
             Self::Mangamir(source) => source.chapters(external_id, auth).await,
             #[cfg(debug_assertions)]
@@ -109,6 +116,7 @@ impl SourceKind {
     ) -> Result<SourceContent, SourceError> {
         match self {
             Self::Remanga(source) => source.content(chapter, auth).await,
+            Self::Exmanga(source) => source.content(chapter, auth).await,
             Self::Rumix(source) => source.content(chapter, auth).await,
             Self::Mangamir(source) => source.content(chapter, auth).await,
             #[cfg(debug_assertions)]
@@ -125,6 +133,7 @@ impl SourceKind {
     ) -> Result<LoginOutcome, SourceError> {
         match self {
             Self::Remanga(source) => source.login(login, password).await,
+            Self::Exmanga(source) => source.login(login, password).await,
             Self::Rumix(_) | Self::Mangamir(_) => Err(SourceError::UnsupportedCapability),
             #[cfg(debug_assertions)]
             Self::Fixture(source) => source.login(login, password).await,
@@ -136,6 +145,7 @@ impl SourceKind {
     pub async fn verify(&self, auth: Option<&SourceAuth>) -> Result<(), SourceError> {
         match self {
             Self::Remanga(source) => source.verify(auth).await,
+            Self::Exmanga(source) => source.verify(auth).await,
             Self::Rumix(_) | Self::Mangamir(_) => Err(SourceError::UnsupportedCapability),
             #[cfg(debug_assertions)]
             Self::Fixture(_) => Err(SourceError::UnsupportedCapability),
@@ -149,6 +159,7 @@ impl SourceKind {
     ) -> Result<SourceText, SourceError> {
         match self {
             Self::Remanga(source) => source.text(chapter, auth).await,
+            Self::Exmanga(source) => source.text(chapter, auth).await,
             Self::Rumix(source) => source.text(chapter, auth).await,
             Self::Mangamir(source) => source.text(chapter, auth).await,
             #[cfg(debug_assertions)]
@@ -165,6 +176,7 @@ impl SourceKind {
     ) -> Vec<(&'static str, String)> {
         match self {
             Self::Remanga(source) => source.auth_headers(auth, url),
+            Self::Exmanga(source) => source.auth_headers(auth, url),
             Self::Rumix(source) => source.auth_headers(auth, url),
             Self::Mangamir(source) => source.auth_headers(auth, url),
             #[cfg(debug_assertions)]
@@ -175,6 +187,7 @@ impl SourceKind {
     pub fn resolve_image(&self, image_ref: &str) -> Result<Url, SourceError> {
         match self {
             Self::Remanga(source) => source.resolve_image(image_ref),
+            Self::Exmanga(source) => source.resolve_image(image_ref),
             Self::Rumix(source) => source.resolve_image(image_ref),
             Self::Mangamir(source) => source.resolve_image(image_ref),
             #[cfg(debug_assertions)]
@@ -185,6 +198,7 @@ impl SourceKind {
     pub fn resolve_cover(&self, cover_ref: &str) -> Result<Url, SourceError> {
         match self {
             Self::Remanga(source) => source.resolve_cover(cover_ref),
+            Self::Exmanga(source) => source.resolve_cover(cover_ref),
             Self::Rumix(source) => source.resolve_cover(cover_ref),
             Self::Mangamir(source) => source.resolve_cover(cover_ref),
             #[cfg(debug_assertions)]

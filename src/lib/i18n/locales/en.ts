@@ -49,11 +49,11 @@ export const en = {
       sourceLocked: "The chapter is locked at the source.",
       sourceUpstreamFailed: "The source is unavailable right now.",
       sourceAuthNotConfigured:
-        "This title requires a source account. Connect it in Settings → Sources.",
+        "This title requires a source account. Connect it in Settings → Authorizations.",
       sourceAuthInvalid:
-        "The source rejected the saved account. Check it in Settings → Sources.",
+        "The source rejected the saved account. Check it in Settings → Authorizations.",
       sourceAuthMaybeRequired:
-        "The title may require a source account — if it is 18+, connect Remanga in Settings → Sources.",
+        "The title may require a source account — if it is 18+, connect it in Settings → Authorizations.",
       sourceBlocked:
         "The source blocked the request (Cloudflare or region).",
       sourceDisabled: "The source is disabled.",
@@ -470,10 +470,10 @@ export const en = {
     },
     settingsPage: {
       title: "Settings",
-      description: "Account, sources, import and export.",
+      description: "Account, source authorizations, import and export.",
       tabs: {
         importExport: "Import/Export",
-        sources: "Sources",
+        sources: "Authorizations",
         account: "Account",
       },
       importExport: {
@@ -492,7 +492,7 @@ export const en = {
         hint: "Titles linked to Remanga are exported.",
       },
       sources: {
-        title: "Sources",
+        title: "Authorizations",
         description:
           "Personal source accounts. The password is used once and is not stored.",
         signInTitle: "Sign in to {{source}}",
@@ -500,7 +500,7 @@ export const en = {
         login: "Login or email",
         password: "Password",
         loginPlaceholder: "Login or email",
-        passwordPlaceholder: "Remanga password",
+        passwordPlaceholder: "Source password",
         signIn: "Sign in",
         account: "Account",
         verify: "Check",

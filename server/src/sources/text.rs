@@ -26,6 +26,23 @@ pub fn dedupe(values: &mut Vec<String>) {
     values.retain(|value| seen.insert(value.to_lowercase()));
 }
 
+/// RFC3339-время источника в unix seconds. Время без смещения считаем UTC:
+/// часть API отдаёт метку без зоны.
+pub fn parse_rfc3339(raw: &str) -> Option<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let with_zone = if trimmed.ends_with('Z') || trimmed.contains('+') {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}Z")
+    };
+    time::OffsetDateTime::parse(&with_zone, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|value| value.unix_timestamp())
+}
+
 /// Вид главы по подписи источника. Общий для HTML-адаптеров: ключевые
 /// слова не зависят от сайта.
 pub fn detect_chapter_kind(text: &str) -> ChapterKind {

@@ -152,6 +152,85 @@ fn remanga_passes_contract() {
 }
 
 #[test]
+fn exmanga_passes_contract() {
+    descriptor_is_sane(&crate::sources::exmanga::DESCRIPTOR);
+
+    let search = super::exmanga::parse::parse_search(include_str!("exmanga/fixtures/search.json"))
+        .expect("search fixture");
+    assert!(!search.items.is_empty());
+    let mut external_ids = HashSet::new();
+    for item in &search.items {
+        assert!(!item.name.is_empty());
+        assert!(
+            external_ids.insert(item.external_id.clone()),
+            "duplicate external id"
+        );
+    }
+
+    let title = super::exmanga::parse::parse_title(
+        include_str!("exmanga/fixtures/title.json"),
+        "fixture-dir",
+    )
+    .expect("title fixture")
+    .expect("title present");
+    assert_eq!(title.kind, TitleKind::Manhua);
+    assert!(!title.name.is_empty());
+
+    let chapters =
+        super::exmanga::parse::parse_chapters(include_str!("exmanga/fixtures/chapters.json"), "ru")
+            .expect("chapters fixture");
+    assert!(!chapters.is_empty());
+
+    let mut keys = HashSet::new();
+    for chapter in &chapters {
+        assert!(!chapter.chapter_key.is_empty());
+        assert!(
+            keys.insert(chapter.chapter_key.clone()),
+            "duplicate chapter key"
+        );
+        assert_eq!(chapter.chapter_kind, ChapterKind::Normal);
+        assert!(
+            chapter
+                .number_text
+                .as_deref()
+                .is_none_or(|number| !number.contains(','))
+        );
+    }
+
+    let repeated =
+        super::exmanga::parse::parse_chapters(include_str!("exmanga/fixtures/chapters.json"), "ru")
+            .expect("chapters fixture");
+    let first_keys: Vec<&str> = chapters
+        .iter()
+        .map(|chapter| chapter.chapter_key.as_str())
+        .collect();
+    let repeated_keys: Vec<&str> = repeated
+        .iter()
+        .map(|chapter| chapter.chapter_key.as_str())
+        .collect();
+    assert_eq!(first_keys, repeated_keys, "chapter_key must be stable");
+
+    let content =
+        super::exmanga::parse::parse_content(include_str!("exmanga/fixtures/content.json"))
+            .expect("content fixture");
+    assert_eq!(content.kind(), ContentKind::Images);
+    let crate::sources::SourceContent::Images { pages } = content else {
+        panic!("expected images");
+    };
+    assert!(!pages.is_empty());
+    for (position, page) in pages.iter().enumerate() {
+        assert_eq!(page.index as usize, position);
+        assert!(!page.image_ref.is_empty());
+    }
+
+    for chapter in &chapters {
+        if let Some(expected) = chapter.content_kind {
+            assert_eq!(expected, ContentKind::Images);
+        }
+    }
+}
+
+#[test]
 fn mangamir_passes_contract() {
     descriptor_is_sane(&crate::sources::mangamir::DESCRIPTOR);
 

@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "statusCode": 200,
+  "data": {
+    "id": 2827338,
+    "is_paid": true,
+    "is_bought": true,
+    "links": [
+      "https://exmanga.org/storage/a/1.webp?sign=x",
+      "https://exmanga.org/storage/a/2.webp?sign=y"
+    ],
+    "pages": [
+      [
+        {
+          "link": "https://reimg.org/ignored.webp",
+          "width": 800,
+          "height": 1200
+        }
+      ]
+    ]
+  }
+}

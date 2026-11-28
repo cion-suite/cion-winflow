@@ -520,19 +520,8 @@ fn parse_rating(value: &Value) -> Option<f32> {
 }
 
 fn parse_published_at(raw: &str) -> Option<i64> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
     // Remanga отдаёт время без смещения; считаем его UTC.
-    let with_zone = if trimmed.ends_with('Z') || trimmed.contains('+') {
-        trimmed.to_owned()
-    } else {
-        format!("{trimmed}Z")
-    };
-    time::OffsetDateTime::parse(&with_zone, &time::format_description::well_known::Rfc3339)
-        .ok()
-        .map(|value| value.unix_timestamp())
+    crate::sources::text::parse_rfc3339(raw)
 }
 
 fn alt_names(secondary: &Option<String>, another: &Option<String>, main: &str) -> Vec<String> {

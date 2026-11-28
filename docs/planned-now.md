@@ -21,6 +21,7 @@
 |---|---|---|
 | 1–4 | Учётки, auth в запросах, high-water, discovery | `[done]` |
 | 5а | Вход в Remanga по логину/паролю | `[done]` |
+| — | ExManga как источник платных глав (вход по email/паролю) | `[done]` |
 | 6 | Прямые картинки с CDN | `[ ]` |
 | 7 | Egress к Remanga | `[ ]` условная: только если проверка целевого хоста дала 403 |
 | 5б, 5в, 8–11 | Отложенные (2FA, refresh, pairing, userscript, расширение, OAuth) | `—` не входят в очередь, см. [authorization.md](authorization.md) |
@@ -29,11 +30,12 @@
 
 | Фаза | Результат | Ключевые файлы |
 |---|---|---|
-| 1 | Учётки per-user, AEAD, API, вкладка «Источники» | `0014_user_source_credentials.sql`, `server/src/source_auth/`, `src/pages/settings/SourceCredentialsSettings.tsx` |
+| 1 | Учётки per-user, AEAD, API, вкладка «Авторизации» | `0014_user_source_credentials.sql`, `server/src/source_auth/`, `src/pages/settings/SourceCredentialsSettings.tsx` |
 | 2 | Учётка в `search/title/chapters/content`, auth-коды, гейтинг контента и картинок | `0015_source_auth_flags.sql`, `server/src/sources/http.rs`, `catalog/content.rs`, `images/` |
 | 3 | High-water `930/17`, автопометка, кламп экспорта | `0016_library_imported_progress.sql`, `server/src/library/progress.rs` |
 | 4 | Discovery при открытии, per-user кэш | `0017_title_source_checks.sql`, `server/src/source_discovery/` |
 | 5а | Вход по логину/паролю, токен как зашифрованная Bearer-учётка, 2FA-ошибка, лимит попыток | `server/src/source_auth/`, `server/src/sources/remanga/api.rs`, `server/tests/source_login.rs` |
+| — | ExManga: поиск/главы публично, контент по JWT, запрет Remanga-хостов | `server/src/sources/exmanga/`, `server/tests/exmanga.rs`, решение 0023 |
 
 ## Гейт после каждой фазы
 

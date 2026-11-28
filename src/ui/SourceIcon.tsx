@@ -12,6 +12,7 @@ const SOURCE_ICONS: Record<
   { src: string; monochrome?: boolean }
 > = {
   remanga: { src: "/sources/remanga.png", monochrome: true },
+  exmanga: { src: "/sources/exmanga.png" },
   rumix: { src: "/sources/rumix.png" },
   mangamir: { src: "/sources/mangamir.png", monochrome: true },
 };
